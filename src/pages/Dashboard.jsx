@@ -33,7 +33,7 @@ export default function Dashboard() {
           setError('Dashboard data returned unexpected format.');
         }
       })
-      .catch(() => setError('Could not load dashboard data — check n8n connection.'))
+      .catch(() => setError('Could not load dashboard data. Please try again.'))
       .finally(() => setLoading(false));
   }, []);
 

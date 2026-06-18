@@ -152,7 +152,7 @@ export default function ComplaintDetail() {
           }
         } else setError(res.message || 'Complaint not found.');
       })
-      .catch(() => setError('Could not load complaint details — check n8n connection.'))
+      .catch(() => setError('Could not load complaint details. Please try again.'))
       .finally(() => setLoading(false));
   }, [id]);
 
@@ -226,7 +226,7 @@ export default function ComplaintDetail() {
         showUpdMsg(res?.message || res?.error || 'Update failed', 'err');
       }
     } catch {
-      showUpdMsg('Connection error — check n8n', 'err');
+      showUpdMsg('Connection error. Please try again.', 'err');
     } finally {
       setUpdating(false);
     }

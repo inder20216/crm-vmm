@@ -165,7 +165,7 @@ export default function EmailComplaints() {
       setEmails(res.emails || []);
       if (!res.emails?.length) showToast(`No emails in ${folder === 'sent' ? 'Sent' : 'Inbox'}`, 'info');
     } catch {
-      showToast('Could not fetch emails — check n8n connection', 'err');
+      showToast('Could not fetch emails. Please try again.', 'err');
     } finally { setFetching(false); }
   };
 
@@ -295,7 +295,7 @@ export default function EmailComplaints() {
       setQuantity(Math.max(1, Math.min(20, Math.round(Number(res.quantity) || 1))));
       if (res.suggestedReply) setReplyBody(res.suggestedReply);
     } catch {
-      showToast('AI parsing failed — check n8n/OpenAI', 'err');
+      showToast('AI parsing failed. Please try again.', 'err');
     } finally { setParsing(false); }
   };
 

@@ -242,7 +242,7 @@ export default function FollowUp() {
         showToast(res?.message || res?.error || 'Update failed', 'err');
       }
     } catch {
-      showToast('Connection error — check n8n', 'err');
+      showToast('Connection error. Please try again.', 'err');
     } finally {
       setSubmitting(false);
     }

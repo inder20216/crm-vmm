@@ -68,7 +68,7 @@ export default function SearchComplaints() {
       setTotal(res.total ?? res.count ?? 0);
       setPage(pg);
     } catch {
-      setError('Could not reach server. Check n8n connection.');
+      setError('Could not reach server. Please try again.');
     } finally {
       setLoading(false);
     }
