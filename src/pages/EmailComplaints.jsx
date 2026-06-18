@@ -1118,10 +1118,15 @@ export default function EmailComplaints() {
                         </div>
                       );
                     })}
-                    {/* Vendor — read-only, auto from selected product */}
+                    {/* Vendor — auto-filled from selected product, but editable in case it's wrong */}
                     <div className={`ec-field ${parsedEdits.vendorName ? 'filled' : 'missing'}`}>
                       <span className="ec-field-label">Vendor</span>
-                      <span className="ec-field-val">{parsedEdits.vendorName || '— select product first'}</span>
+                      <input
+                        className="ec-field-input"
+                        placeholder="Enter vendor name…"
+                        value={parsedEdits.vendorName}
+                        onChange={e => setParsedEdits(prev => ({ ...prev, vendorName: e.target.value }))}
+                      />
                     </div>
                     {/* Nature of Problem — searchable fixed list */}
                     {(() => {
