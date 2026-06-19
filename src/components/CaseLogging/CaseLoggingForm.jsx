@@ -3,6 +3,39 @@ import { vmm } from '../../api/vmm';
 
 const ATTACHMENT_MANDATORY = ['Breakdown', 'Repair'];
 
+// Products whose AMC vendor varies by store — auto-fetched via the AC-AMC / Lift-AMC webhooks
+const AMC_LOOKUP_PRODUCTS = new Set(['ac', 'server room ac', 'lift', 'escalator']);
+
+// Products with one fixed, known vendor — no per-store lookup needed
+const FIXED_VENDOR_PRODUCTS = { sensormatic: 'Adtech' };
+const getFixedVendor = (name) => FIXED_VENDOR_PRODUCTS[norm(name)] || null;
+
+// Products routed straight to Facility Manager / HO Team — no vendor needed
+const HO_DIRECT_PRODUCTS = new Set([
+  'acp', 'baggage rack', 'carpet', 'cash drawer', 'cctv', 'chair', 'civil work',
+  'diesel motor', 'digital video recorder', 'door', 'drainage', 'drawer',
+  'electrical', 'emergency bulb', 'exhaust fan', 'fan', 'fire equipment', 'fire hydrant',
+  'fly catcher', 'genset battery', 'glass', 'glass door', 'glow sign board', 'lift battery',
+  'lights', 'lock', 'mirror', 'mobile', 'music system', 'paint work',
+  'queue manager', 'railing', 'ramp', 'shutter', 'speaker', 'submersible pump',
+  'table', 'tiles', 'transformer', 'trial room', 'trolley', 'washroom',
+  'water meter', 'water motor', 'water pipe', 'water tank', 'wooden work',
+]);
+
+// Products where vendor is optional — agent checks a sticker on the unit
+const FIRE_PRODUCTS = new Set([
+  'fire alarm', 'fire exit door', 'fire exit key box', 'fire extinguisher',
+  'fire hooter', 'fire panel', 'fire alarm panel', 'fire pump',
+  'fire sprinkler', 'sprinkler system', 'fire water motor', 'fire water tank',
+  'hose reel', 'smoke detector',
+]);
+
+function norm(s) { return (s || '').trim().toLowerCase(); }
+const isAmcLookupProduct = (name) => AMC_LOOKUP_PRODUCTS.has(norm(name));
+const isHoDirectProduct  = (name) => HO_DIRECT_PRODUCTS.has(norm(name));
+const isFireProductName  = (name) => FIRE_PRODUCTS.has(norm(name));
+const isGensetProduct    = (name) => norm(name) === 'genset';
+
 function bufStr(v) {
   if (v == null) return '';
   if (typeof v === 'string') return v;
@@ -17,12 +50,23 @@ function ProductSearch({ products, value, vendorName, onChange, error, disabled 
   const [focused,  setFocused]  = useState(false);
   const wrapRef = useRef(null);
 
-  const filtered = query.trim().length > 0
+  const matched = query.trim().length > 0
     ? products.filter(p =>
         p.name.toLowerCase().includes(query.toLowerCase()) ||
         (p.vendor || '').toLowerCase().includes(query.toLowerCase())
       )
     : products;
+
+  // AC/Lift/etc have one sheet row per vendor — their vendor now comes from the
+  // store-specific AMC lookup, not product selection, so collapse them to one entry
+  const seen = new Set();
+  const filtered = [];
+  for (const p of matched) {
+    const key = isAmcLookupProduct(p.name) ? `amc:${p.name.toLowerCase()}` : `${p.name.toLowerCase()}|${(p.vendor || '').toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    filtered.push(p);
+  }
 
   useEffect(() => {
     if (!focused) setQuery(value || '');
@@ -59,7 +103,7 @@ function ProductSearch({ products, value, vendorName, onChange, error, disabled 
           {filtered.slice(0, 30).map((p, i) => (
             <div key={i} className="product-option" onMouseDown={() => select(p)}>
               <span className="product-option-name">{p.name}</span>
-              <span className="product-option-vendor">{p.vendor || '—'}</span>
+              <span className="product-option-vendor">{isAmcLookupProduct(p.name) ? 'AMC vendor by store' : (p.vendor || '—')}</span>
             </div>
           ))}
         </div>
@@ -106,6 +150,7 @@ export default function CaseLoggingForm() {
   const [noImage,   setNoImage]   = useState(false);
   const [quantity,  setQuantity]  = useState(1);
   const [unitLocations,    setUnitLocations]    = useState([]);
+  const [unitNatures,      setUnitNatures]      = useState([]);
   const [results,          setResults]          = useState([]);
   const [polishing,        setPolishing]        = useState(false);
   const [recentComplaints, setRecentComplaints] = useState([]);
@@ -113,6 +158,9 @@ export default function CaseLoggingForm() {
   const [warrantyQty,      setWarrantyQty]      = useState(0);
   const [warrantyVendor,   setWarrantyVendor]   = useState('');
   const [showConfirm,      setShowConfirm]      = useState(false);
+  const [amcStatus,        setAmcStatus]        = useState('idle'); // idle|loading|found|not-found|error
+  const [gensetChoice,     setGensetChoice]     = useState('');
+  const amcLookupKeyRef = useRef('');
 
   const [products, setProducts]   = useState([]);
   const [natures, setNatures]     = useState([]);
@@ -132,6 +180,30 @@ export default function CaseLoggingForm() {
       .catch(() => {})
       .finally(() => setLoadingRef(false));
   }, []);
+
+  // Auto-fetch store-specific AMC vendor for AC/Lift/Escalator once both product + store are known
+  useEffect(() => {
+    const product   = form.productName;
+    const storeCode = form.storeCode;
+    if (!product || !storeCode || !isAmcLookupProduct(product)) {
+      setAmcStatus('idle');
+      return;
+    }
+    const key = `${storeCode}|${norm(product)}`;
+    if (amcLookupKeyRef.current === key) return;
+    amcLookupKeyRef.current = key;
+    setAmcStatus('loading');
+    vmm.getAmcVendor(storeCode, product)
+      .then(res => {
+        if (res.found && res.vendor) {
+          setForm(f => ({ ...f, vendorName: res.vendor }));
+          setAmcStatus('found');
+        } else {
+          setAmcStatus('not-found');
+        }
+      })
+      .catch(() => setAmcStatus('error'));
+  }, [form.productName, form.storeCode]);
 
   const fetchRecentComplaints = async (storeCode) => {
     setLoadingRecent(true);
@@ -328,29 +400,31 @@ export default function CaseLoggingForm() {
       const allResults  = [];
 
       const getUnitLoc = (i) => (unitLocations[i] && unitLocations[i].trim()) || form.productLocation;
+      const fallbackWarrantyNature = () =>
+        natures.find(n => /warranty/i.test(n.nature) && /hvac|ac/i.test(n.nature)) || { nature: 'AC - Warranty', type: 'Warranty', tatDays: 30 };
 
-      // Log regular complaints
-      for (let i = 0; i < regularQty; i++) {
-        const res = await vmm.logComplaint({ ...payload, productLocation: getUnitLoc(i) });
-        if (res.success) allResults.push({ ...res, _type: 'regular', productLocation: getUnitLoc(i), _vendorName: payload.vendorName });
-        else { setSubmitErr(`Failed on complaint ${i + 1}: ${res.message || 'Unknown error'}`); break; }
-      }
-      // Log warranty complaints with AC Warranty nature (if any)
-      if (allResults.length === regularQty && wQty > 0) {
-        const warrantyNature = natures.find(n => /warranty/i.test(n.nature) && /hvac|ac/i.test(n.nature)) || {};
-        const warrantyPayload = {
+      // Log one complaint per unit — nature can be overridden per unit, vendor follows the warranty/regular split
+      for (let i = 0; i < qty; i++) {
+        const isWarrantyUnit = i >= regularQty;
+        const loc            = getUnitLoc(i);
+        const overrideName   = (unitNatures[i] || '').trim();
+        const natureObj       = overrideName
+          ? (natures.find(n => n.nature === overrideName) || { nature: overrideName, type: 'Repair', tatDays: 7 })
+          : isWarrantyUnit
+            ? fallbackWarrantyNature()
+            : { nature: form.natureOfComplaint, type: form.complaintType, tatDays: form.tatDays };
+
+        const unitPayload = {
           ...payload,
-          vendorName:        warrantyVendor.trim() || payload.vendorName,
-          natureOfComplaint: warrantyNature.nature || 'AC - Warranty',
-          complaintType:     warrantyNature.type   || 'Warranty',
-          tatDays:           warrantyNature.tatDays || 30,
+          vendorName:        isWarrantyUnit ? (warrantyVendor.trim() || payload.vendorName) : payload.vendorName,
+          natureOfComplaint: natureObj.nature,
+          complaintType:     natureObj.type,
+          tatDays:           natureObj.tatDays,
+          productLocation:   loc,
         };
-        for (let i = 0; i < wQty; i++) {
-          const loc = getUnitLoc(regularQty + i);
-          const res = await vmm.logComplaint({ ...warrantyPayload, productLocation: loc });
-          if (res.success) allResults.push({ ...res, _type: 'warranty', productLocation: loc, _vendorName: warrantyPayload.vendorName });
-          else { setSubmitErr(`Failed on warranty complaint ${i + 1}: ${res.message || 'Unknown error'}`); break; }
-        }
+        const res = await vmm.logComplaint(unitPayload);
+        if (res.success) allResults.push({ ...res, _type: isWarrantyUnit ? 'warranty' : 'regular', productLocation: loc, _vendorName: unitPayload.vendorName, _nature: natureObj.nature });
+        else { setSubmitErr(`Failed on complaint ${i + 1}: ${res.message || 'Unknown error'}`); break; }
       }
 
       if (allResults.length === qty) {
@@ -395,12 +469,13 @@ export default function CaseLoggingForm() {
     setWarrantyQty(0);
     setWarrantyVendor('');
     setUnitLocations([]);
+    setUnitNatures([]);
     setPolishing(false);
     setRecentComplaints([]);
   };
 
   // AC/HVAC product detection — quantity and warranty only apply to these
-  const isAcProduct = /\bac\b/i.test(form.productName) || /hvac/i.test(form.productType) || /air.?con/i.test(form.productName);
+  const isAcProduct = norm(form.productName) === 'ac';
 
   // Duplicate warning — same product logged for this store within recent complaints
   const duplicateWarning = recentComplaints.find(c =>
@@ -426,6 +501,7 @@ export default function CaseLoggingForm() {
                     <span className="multi-id-val">{r.complaintno}</span>
                     {r._type === 'warranty' && <span className="multi-id-tag warranty">Warranty</span>}
                     {r._type === 'regular'  && warrantyQty > 0 && <span className="multi-id-tag regular">Regular</span>}
+                    {r._nature && <span className="multi-id-tag" style={{ background: '#f1f5f9', color: '#475569' }}>{r._nature}</span>}
                   </div>
                 ))}
               </div>
@@ -792,15 +868,74 @@ export default function CaseLoggingForm() {
                 products={products}
                 value={form.productName}
                 vendorName={form.vendorName}
-                onChange={p => setForm(f => ({ ...f, productName: p.name, vendorName: p.vendor || '', productType: p.category || '' }))}
+                onChange={p => {
+                  const hoDirect    = isHoDirectProduct(p.name);
+                  const fixedVendor = getFixedVendor(p.name);
+                  const amcLookup   = isAmcLookupProduct(p.name);
+                  amcLookupKeyRef.current = '';
+                  setGensetChoice('');
+                  setAmcStatus('idle');
+                  setForm(f => ({
+                    ...f,
+                    productName: p.name,
+                    // AMC-lookup products (AC/Lift/etc) start blank — only the store-specific
+                    // webhook result should fill them, not the generic product-sheet vendor
+                    vendorName:  fixedVendor || ((hoDirect || amcLookup) ? '' : (p.vendor || '')),
+                    productType: p.category || '',
+                  }));
+                }}
                 error={!!errors.productName}
                 disabled={loadingRef}
               />
               {errors.productName && <p className="err-msg">{errors.productName}</p>}
             </div>
             <div className="field">
-              <label>Vendor Name</label>
-              <input type="text" value={form.vendorName} readOnly placeholder="Auto-filled on product select" className="readonly" />
+              {isGensetProduct(form.productName) ? (
+                <>
+                  <label>Genset Brand</label>
+                  <div className="qty-row">
+                    <button
+                      type="button"
+                      className={`qty-btn ${gensetChoice === 'Kirloskar' ? 'active' : ''}`}
+                      onClick={() => { setGensetChoice('Kirloskar'); setForm(f => ({ ...f, vendorName: 'Kirloskar' })); }}
+                    >Kirloskar</button>
+                    <button
+                      type="button"
+                      className={`qty-btn ${gensetChoice === 'Other' ? 'active' : ''}`}
+                      onClick={() => { setGensetChoice('Other'); setForm(f => ({ ...f, vendorName: '' })); }}
+                    >Other Brand (HO Direct)</button>
+                  </div>
+                </>
+              ) : isHoDirectProduct(form.productName) ? (
+                <>
+                  <label>Vendor</label>
+                  <p className="hint">📋 Routed to Facility Manager / HO Team — no vendor selection needed for this product.</p>
+                </>
+              ) : (
+                <>
+                  <label>
+                    Vendor Name
+                    {isFireProductName(form.productName) && <span style={{ color: '#64748b', fontWeight: 400 }}> (optional — check sticker on unit)</span>}
+                    {amcStatus === 'loading'    && <span style={{ color: '#2563eb', fontWeight: 400 }}> · fetching store's AMC vendor…</span>}
+                    {amcStatus === 'found'      && <span style={{ color: '#16a34a', fontWeight: 400 }}> · auto-filled from store's AMC record</span>}
+                    {amcStatus === 'not-found'  && <span style={{ color: '#d97706', fontWeight: 400 }}> · no AMC vendor on record — enter manually</span>}
+                    {amcStatus === 'error'      && <span style={{ color: '#dc2626', fontWeight: 400 }}> · could not fetch AMC vendor — enter manually</span>}
+                    {amcStatus === 'idle' && isAmcLookupProduct(form.productName) && !form.storeCode && (
+                      <span style={{ color: '#94a3b8', fontWeight: 400 }}> · select a store to fetch this store's AMC vendor</span>
+                    )}
+                  </label>
+                  <input
+                    type="text"
+                    value={form.vendorName}
+                    placeholder={
+                      isFireProductName(form.productName) ? 'e.g. local vendor name, or leave blank'
+                      : isAmcLookupProduct(form.productName) ? 'Select a store to auto-fill — or enter manually'
+                      : 'Auto-filled on product select — editable'
+                    }
+                    onChange={e => setForm(f => ({ ...f, vendorName: e.target.value }))}
+                  />
+                </>
+              )}
             </div>
           </div>
           <div className="field-row">
@@ -988,12 +1123,12 @@ export default function CaseLoggingForm() {
               <p className="qty-note" style={{ marginTop: 8 }}>1 complaint will be logged.</p>
             )}
 
-            {/* Per-unit locations — shown when logging multiple units */}
+            {/* Per-unit locations + nature — shown when logging multiple units */}
             {quantity > 1 && (
               <div className="unit-locations">
                 <div className="unit-locations-title">
-                  Unit Locations
-                  <span className="unit-locations-hint">Specify where each AC is installed — shown in the escalation email</span>
+                  Unit Details
+                  <span className="unit-locations-hint">Set location and, if different from the main selection above, the nature of complaint for each unit — shown in the escalation email</span>
                 </div>
                 <div className="unit-locations-grid">
                   {Array.from({ length: quantity }, (_, i) => (
@@ -1015,6 +1150,23 @@ export default function CaseLoggingForm() {
                           setUnitLocations(updated);
                         }}
                       />
+                      <select
+                        className="unit-loc-input"
+                        style={{ marginTop: 6 }}
+                        value={unitNatures[i] !== undefined ? unitNatures[i] : ''}
+                        onChange={e => {
+                          const updated = Array.from({ length: quantity }, (_, j) =>
+                            unitNatures[j] !== undefined ? unitNatures[j] : ''
+                          );
+                          updated[i] = e.target.value;
+                          setUnitNatures(updated);
+                        }}
+                      >
+                        <option value="">— Same as main: {form.natureOfComplaint || 'none selected'} —</option>
+                        {natures.map(n => (
+                          <option key={n.nature} value={n.nature}>{n.nature}</option>
+                        ))}
+                      </select>
                     </div>
                   ))}
                 </div>

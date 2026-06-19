@@ -28,6 +28,19 @@ export const vmm = {
   lookupEmployee:    (code)   => get(BASE, 'vmm-sp-employee',        { code }),
   getProducts:       ()       => get(BASE, 'vmm-sp-products'),
   getNatures:        ()       => get(BASE, 'vmm-sp-natures'),
+  // Reuses the existing AC-AMC / Lift-AMC webhooks (same ones the Facility Complaint Portal calls)
+  getAmcVendor:      (storeCode, product) => {
+    const p = (product || '').trim().toLowerCase();
+    const path = (p === 'ac' || p === 'server room ac') ? 'AC-AMC'
+               : (p === 'lift' || p === 'escalator')     ? 'Lift-AMC'
+               : null;
+    if (!path) return Promise.resolve({ found: false });
+    return post(BASE, path, { store_id: storeCode }).then(data => {
+      const vendor = (data.vendor_name || '').trim();
+      if (!vendor || vendor.toLowerCase() === 'not applicable') return { found: false };
+      return { found: true, vendor };
+    });
+  },
   logComplaint:        (data)   => post(BASE, 'vmm-log-complaint',       data),
   sendEscalationEmail: (data)   => post(BASE, 'vmm-send-escalation-email', data),
   polishRemarks:       (text)   => post(BASE, 'vmm-ai-polish',           { text }),
