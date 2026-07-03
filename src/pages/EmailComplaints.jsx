@@ -105,12 +105,12 @@ export default function EmailComplaints() {
   const [updateForm,      setUpdateForm]      = useState({ complaintId: '', remarks: '', newStatus: '', newEdc: '' });
   const [attachmentData,  setAttachmentData]  = useState(null);
   const [loadingAttach,   setLoadingAttach]   = useState(false);
-  const [wipList,   setWipList]   = useState(() => JSON.parse(localStorage.getItem('vmm_wip_emails') || '[]'));
+  const [wipList,   setWipList]   = useState([]);
   const [templates,    setTemplates]    = useState([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
   const [products,     setProducts]     = useState([]);
   const [natures,      setNatures]      = useState([]);
-  const [parsedEdits,  setParsedEdits]  = useState({ storeCode: '', productName: '', vendorName: '', natureOfProblem: '', complaintType: '' });
+  const [parsedEdits,  setParsedEdits]  = useState({ storeCode: '', productName: '', vendorName: '', natureOfProblem: '', complaintType: '', employeeCode: '', contactNumber: '', productLocation: '', description: '' });
   const [replyTo,         setReplyTo]         = useState([]);
   const [replyCc,         setReplyCc]         = useState([]);
   const [toInput,         setToInput]         = useState('');
@@ -124,6 +124,13 @@ export default function EmailComplaints() {
   const [logSuccess,      setLogSuccess]      = useState(null); // { results, payload } after successful log
   const [emailTags,       setEmailTags]       = useState(() => JSON.parse(localStorage.getItem('vmm_email_tags') || '{}')); // { [emailId]: { type, label, time } }
   const [tagFilter,       setTagFilter]       = useState(null); // null | 'wip' | 'logged'
+  const [emailModal,      setEmailModal]      = useState(null); // email object shown in full-view popup
+  const [threadMessages,  setThreadMessages]  = useState([]);   // all messages in selected email's thread
+  const [threadLoading,   setThreadLoading]   = useState(false);
+  const [searchQuery,     setSearchQuery]     = useState('');
+  const [searchMode,      setSearchMode]      = useState(false); // true when showing search results
+  const [searching,       setSearching]       = useState(false);
+  const searchInputRef = useRef(null);
 
   // Stable session ID per browser tab — identifies this agent across renders
   const agentIdRef = useRef(null);
@@ -141,6 +148,7 @@ export default function EmailComplaints() {
   useEffect(() => {
     vmm.getProducts().then(r => setProducts(r.products || [])).catch(() => {});
     vmm.getNatures().then(r => setNatures(r.natures || [])).catch(() => {});
+    vmm.getOpenWips().then(res => setWipList(res.wips || [])).catch(() => {});
   }, []);
 
   const showToast = (msg, type = 'ok') => {
@@ -162,15 +170,91 @@ export default function EmailComplaints() {
     setParsed(null);
     try {
       const res = folder === 'sent' ? await vmm.fetchSent() : await vmm.fetchInbox();
-      setEmails(res.emails || []);
-      if (!res.emails?.length) showToast(`No emails in ${folder === 'sent' ? 'Sent' : 'Inbox'}`, 'info');
+      const fetched = res.emails || [];
+      setEmails(fetched);
+
+      if (!fetched.length) {
+        showToast(`No emails in ${folder === 'sent' ? 'Sent' : 'Inbox'}`, 'info');
+      } else if (folder !== 'sent') {
+        // Auto-pop WIP case if store replied on the same thread
+        const wipReply = fetched.find(e =>
+          e.conversationId && wipList.some(w => w.conversationId && w.conversationId === e.conversationId)
+        );
+        if (wipReply) {
+          const matchedWip = wipList.find(w => w.conversationId === wipReply.conversationId);
+          const wipSubject = matchedWip?.subject || wipReply.subject || '';
+          showToast(`↩ Store replied on: "${wipSubject}"`, 'ok');
+          selectEmail({ ...wipReply, parsed: matchedWip?.parsed || null, storeCode: wipReply.storeCode || matchedWip?.storeCode || '' });
+        }
+      }
     } catch {
       showToast('Could not fetch emails. Please try again.', 'err');
     } finally { setFetching(false); }
   };
 
+  const runSearch = async (q) => {
+    const query = (q || searchQuery).trim();
+    if (!query) return;
+    setSearching(true);
+    setSearchMode(true);
+    setEmails([]);
+    setSelected(null);
+    setParsed(null);
+    try {
+      const res = await vmm.searchEmails(query);
+      const found = res.emails || [];
+      setEmails(found);
+      if (!found.length) showToast('No emails found', 'info');
+    } catch {
+      showToast('Search failed. Please try again.', 'err');
+    } finally { setSearching(false); }
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setSearchMode(false);
+    fetchEmails('inbox');
+  };
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchEmails('inbox'); }, []);
+
+  // Close email popup on ESC
+  useEffect(() => {
+    const h = e => { if (e.key === 'Escape') setEmailModal(null); };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, []);
+
+  // Fetch full conversation thread whenever a new email is selected
+  useEffect(() => {
+    if (!selected?.conversationId) { setThreadMessages([]); return; }
+    setThreadLoading(true);
+    vmm.fetchThread(selected.conversationId)
+      .then(res => setThreadMessages(res.messages || []))
+      .catch(() => setThreadMessages([]))
+      .finally(() => setThreadLoading(false));
+  }, [selected?.conversationId]); // eslint-disable-line
+
+  // Re-run employee lookup whenever the employee code field is edited
+  useEffect(() => {
+    if (!parsed) return;
+    const code = (parsedEdits.employeeCode || '').trim().toUpperCase();
+    if (!code) { setEmpLookupStatus('idle'); setResolvedEmpName(''); return; }
+    setEmpLookupStatus('loading');
+    const t = setTimeout(async () => {
+      try {
+        const empRes = await vmm.lookupEmployee(code);
+        if (empRes.found && empRes.employee?.name) {
+          setResolvedEmpName(empRes.employee.name);
+          setEmpLookupStatus('found');
+          if (!parsedEdits.contactNumber && empRes.employee.mobile)
+            setParsedEdits(prev => ({ ...prev, contactNumber: empRes.employee.mobile }));
+        } else { setResolvedEmpName(''); setEmpLookupStatus('not-found'); }
+      } catch { setResolvedEmpName(''); setEmpLookupStatus('not-found'); }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [parsedEdits.employeeCode]); // eslint-disable-line
 
   const switchTab = (tab) => {
     if (tab === activeTab) return;
@@ -196,6 +280,7 @@ export default function EmailComplaints() {
     setCcInput('');
     setShowReplyEditor(false);
     setQuantity(1);
+    setThreadMessages([]);
 
     // WIP email — restore previously parsed fields so agent can edit and log directly
     if (email.parsed) {
@@ -210,6 +295,10 @@ export default function EmailComplaints() {
         vendorName:      matchedProduct?.vendor || p.vendorName      || '',
         natureOfProblem: matchedNature?.nature  || p.natureOfProblem || '',
         complaintType:   matchedNature?.type    || p.complaintType   || '',
+        employeeCode:    p.employeeCode    || '',
+        contactNumber:   p.contactNumber   || '',
+        productLocation: p.productLocation || '',
+        description:     p.description     || '',
       });
       if (p.employeeCode) {
         setEmpLookupStatus(p.employeeName ? 'found' : 'idle');
@@ -223,7 +312,7 @@ export default function EmailComplaints() {
     } else {
       setEmpLookupStatus('idle');
       setResolvedEmpName('');
-      setParsedEdits({ storeCode: email.storeCode || '', productName: '', vendorName: '', natureOfProblem: '', complaintType: '' });
+      setParsedEdits({ storeCode: email.storeCode || '', productName: '', vendorName: '', natureOfProblem: '', complaintType: '', employeeCode: '', contactNumber: '', productLocation: '', description: '' });
     }
   };
 
@@ -247,6 +336,7 @@ export default function EmailComplaints() {
         emailBody:  selected.body,
         storeCode:  selected.storeCode,
         templates,
+        natures:    natures.map(n => ({ nature: n.nature, type: n.type })),
       });
       // Employee — lookup from code if present; clear if not
       if (!res.employeeCode) {
@@ -289,6 +379,10 @@ export default function EmailComplaints() {
         vendorName:      matchedProduct?.vendor  || '',
         natureOfProblem: matchedNature?.nature   || '',
         complaintType:   matchedNature?.type     || '',
+        employeeCode:    res.employeeCode    || '',
+        contactNumber:   res.contactNumber   || '',
+        productLocation: res.productLocation || '',
+        description:     res.description     || '',
       });
       setParsed(res);
       setSelectedTemplateId(res.selectedTemplateId || null);
@@ -308,20 +402,26 @@ export default function EmailComplaints() {
         + '<hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0"/>'
         + '<p style="font-size:11px;color:#64748b">Open Mind Services Limited — VMM CRM</p></div>';
       await vmm.sendEmailReply({
-        messageId:    selected.id,
-        htmlBody:     html,
-        body:         replyBody,
-        toRecipients: replyTo.join(';'),
-        ccRecipients: replyCc.join(';'),
+        messageId:      selected.id,
+        conversationId: selected.conversationId || '',
+        subject:        selected.subject || '',
+        htmlBody:       html,
+        body:           replyBody,
+        toRecipients:   replyTo.join(';'),
+        ccRecipients:   replyCc.join(';'),
       });
       // Save as WIP
-      const wip = { id: selected.id, subject: selected.subject, fromAddr: selected.fromAddr,
+      const wip = { id: selected.id, conversationId: selected.conversationId || '', subject: selected.subject, fromAddr: selected.fromAddr,
         storeCode: selected.storeCode, receivedAt: selected.receivedAt,
         repliedAt: new Date().toISOString(), parsed, status: 'WIP',
         savedBy: `Agent ${agentId.slice(-4)}` };
-      const updated = [...wipList.filter(w => w.id !== selected.id), wip];
-      setWipList(updated);
-      localStorage.setItem('vmm_wip_emails', JSON.stringify(updated));
+      setWipList(prev => [...prev.filter(w => w.id !== selected.id), wip]);
+      vmm.saveWip({
+        emailId: selected.id, conversationId: selected.conversationId || '',
+        subject: selected.subject || '', fromAddr: selected.fromAddr || '',
+        storeCode: selected.storeCode || '', receivedAt: selected.receivedAt || '',
+        repliedAt: wip.repliedAt, parsed, savedBy: wip.savedBy,
+      }).catch(() => {});
       setEmails(prev => prev.filter(e => e.id !== selected.id));
       setSelected(null); setParsed(null); setReplyBody('');
       showToast('Reply sent — email saved as WIP', 'ok');
@@ -339,9 +439,10 @@ export default function EmailComplaints() {
     setLogging(true);
     try {
       const storeCode = parsedEdits.storeCode || parsed.storeCode || selected.storeCode || '';
+      const empCode = parsedEdits.employeeCode || parsed.employeeCode || '';
       const [storeRes, empRes] = await Promise.all([
         storeCode ? vmm.lookupStore(storeCode).catch(() => null) : Promise.resolve(null),
-        parsed.employeeCode ? vmm.lookupEmployee(parsed.employeeCode).catch(() => null) : Promise.resolve(null),
+        empCode ? vmm.lookupEmployee(empCode).catch(() => null) : Promise.resolve(null),
       ]);
 
       const store    = storeRes?.store    || {};
@@ -378,9 +479,9 @@ export default function EmailComplaints() {
         managerMobile:       store.managerMobile || '',
         asmName:             store.asmName || employee.asmName || '',
         asmMobile:           store.asmMobile || '',
-        employeeCode:        parsed.employeeCode || employee.code || '',
-        employeeName:        parsed.employeeName || employee.name || '',
-        contactNumber:       parsed.contactNumber || employee.mobile || '',
+        employeeCode:        parsedEdits.employeeCode || parsed.employeeCode || employee.code || '',
+        employeeName:        resolvedEmpName || parsed.employeeName || employee.name || '',
+        contactNumber:       parsedEdits.contactNumber || parsed.contactNumber || employee.mobile || '',
         designation:         employee.designation || '',
         productName:         product.name    || parsedEdits.productName    || parsed.productName    || '',
         vendorName:          parsedEdits.vendorName  || product.vendor || '',
@@ -388,8 +489,8 @@ export default function EmailComplaints() {
         natureOfComplaint:   nature.nature   || parsedEdits.natureOfProblem || parsed.natureOfProblem || '',
         complaintType:       parsedEdits.complaintType || nature.type || 'Repair',
         tatDays:             nature.tatDays  || 7,
-        productLocation:     parsed.productLocation || 'See email',
-        remarks:             `${parsed.description || ''}${providedText}${attachmentText}`.trim(),
+        productLocation:     parsedEdits.productLocation || parsed.productLocation || 'See email',
+        remarks:             `${parsedEdits.description || parsed.description || ''}${providedText}${attachmentText}`.trim(),
         source:              'E-mail',
         emailSubject:        selected.subject,
         callTxnId:           '',
@@ -415,7 +516,11 @@ export default function EmailComplaints() {
         const confirmBody = qty > 1
           ? `Dear Store Team,\n\nYour complaints (${qty} units) have been registered successfully.\n\nComplaint Nos: ${nos}\nProduct: ${payload.productName}\nExpected Closure: ${allResults[0].edcDate}\n\nOur team will follow up within the expected closure date.\n\nRegards,\nOpen Mind Services`
           : `Dear Store Team,\n\nYour complaint has been registered successfully.\n\nComplaint No: ${allResults[0].complaintno}\nProduct: ${payload.productName}\nExpected Closure: ${allResults[0].edcDate}\n\nOur team will follow up within the expected closure date.\n\nRegards,\nOpen Mind Services`;
-        await vmm.sendEmailReply({ messageId: selected.id, body: confirmBody }).catch(() => {});
+        const confirmHtml = '<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7">'
+          + confirmBody.split('\n').map(l => l.trim() ? `<p style="margin:0 0 8px">${l}</p>` : '<br/>').join('')
+          + '<hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0"/>'
+          + '<p style="font-size:11px;color:#64748b">Open Mind Services Limited — VMM CRM</p></div>';
+        await vmm.sendEmailReply({ messageId: selected.id, conversationId: selected.conversationId || '', subject: selected.subject || '', htmlBody: confirmHtml, body: confirmBody }).catch(() => {});
         // Send consolidated escalation email (one email for all units)
         vmm.sendEscalationEmail({
           storeEmail:  payload.storeEmail  || '',
@@ -432,7 +537,8 @@ export default function EmailComplaints() {
         }).catch(() => {});
         claimEmail(selected.id, 'release');
         tagEmail(selected.id, 'logged', `Logged • ${nos} • Agent ${agentId.slice(-4)}`);
-        setWipList(prev => { const u = prev.filter(w => w.id !== selected.id); localStorage.setItem('vmm_wip_emails', JSON.stringify(u)); return u; });
+        setWipList(prev => prev.filter(w => w.id !== selected.id));
+        vmm.resolveWip(selected.id).catch(() => {});
         // Keep the email visible in the list with its logged tag (restore if it was previously in WIP)
         setEmails(prev => prev.find(e => e.id === selected.id) ? prev : [{ ...selected, hasStoreCode: !!selected.storeCode }, ...prev]);
         setLogSuccess({ results: allResults, payload });
@@ -469,9 +575,10 @@ export default function EmailComplaints() {
   const missingRequired = parsed ? (parsed.missingFromTemplate || []) : [];
   const productInList   = products.some(p => p.name.toLowerCase() === parsedEdits.productName.trim().toLowerCase());
   // Can log if: store code present + employee verified (if code was given). Missing template fields are advisory only.
-  const storeOk    = !!(parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode);
-  const employeeOk = !parsed?.employeeCode || empLookupStatus === 'found';
-  const canLog     = parsed && storeOk && employeeOk;
+  const storeOk      = !!(parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode);
+  const employeeOk   = !parsed?.employeeCode || empLookupStatus === 'found';
+  const typeOk       = !!parsedEdits.complaintType;
+  const canLog       = parsed && storeOk && employeeOk && typeOk;
 
   const handleTemplateChange = (newId) => {
     setSelectedTemplateId(newId);
@@ -488,6 +595,88 @@ export default function EmailComplaints() {
     <div className="ec-page">
       {toast && <div className={`ec-toast ec-toast-${toast.type}`}>{toast.msg}</div>}
 
+      {/* Full Email / Thread Popup */}
+      {emailModal && (
+        <div className="ec-modal-overlay" onClick={() => setEmailModal(null)}>
+          <div className="ec-modal" onClick={e => e.stopPropagation()}>
+            <div className="ec-modal-header">
+              <div className="ec-modal-subject">{emailModal.subject}</div>
+              <button className="ec-modal-close" onClick={() => setEmailModal(null)} title="Close (ESC)">✕</button>
+            </div>
+
+            {threadLoading ? (
+              <div className="ec-thread-loading">Loading conversation…</div>
+            ) : threadMessages.length > 0 ? (
+              <div className="ec-thread-messages">
+                {threadMessages.length > 1 && (
+                  <div className="ec-thread-count-bar">
+                    {threadMessages.length} messages in this thread
+                  </div>
+                )}
+                {threadMessages.map((msg, i) => {
+                  const isOutbound = msg.from.toLowerCase() !== (emailModal.fromAddr || '').toLowerCase();
+                  const initial = (msg.fromName || msg.from || '?')[0].toUpperCase();
+                  return (
+                    <div key={msg.id || i} className={`ec-thread-msg ${isOutbound ? 'outbound' : 'inbound'}`}>
+                      <div className="ec-thread-msg-avatar">{initial}</div>
+                      <div className="ec-thread-msg-content">
+                        <div className="ec-thread-msg-header">
+                          <div className="ec-thread-msg-sender">
+                            <span className="ec-thread-msg-from">{msg.fromName || msg.from}</span>
+                            {msg.fromName && msg.from && msg.from !== msg.fromName && (
+                              <span className="ec-thread-msg-email">&lt;{msg.from}&gt;</span>
+                            )}
+                            {i === threadMessages.length - 1 && <span className="ec-thread-latest">Latest</span>}
+                            {isOutbound && <span className="ec-thread-sent-tag">Sent by us</span>}
+                          </div>
+                          <span className="ec-thread-msg-time">
+                            {new Date(msg.receivedAt).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })}
+                          </span>
+                        </div>
+                        {msg.to && (
+                          <div className="ec-thread-recip-row">
+                            <span className="ec-thread-recip-label">To:</span>
+                            <span className="ec-thread-recip-val">{msg.to}</span>
+                          </div>
+                        )}
+                        {msg.cc && (
+                          <div className="ec-thread-recip-row">
+                            <span className="ec-thread-recip-label">CC:</span>
+                            <span className="ec-thread-recip-val">{msg.cc}</span>
+                          </div>
+                        )}
+                        <div
+                          className="ec-thread-msg-body"
+                          dangerouslySetInnerHTML={{
+                            __html: (msg.bodyHtml || msg.body || '(No content)')
+                              .replace(/<script[\s\S]*?<\/script>/gi, '')
+                              .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+                              .replace(/on\w+="[^"]*"/gi, '')
+                              .replace(/on\w+='[^']*'/gi, '')
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div
+                className="ec-modal-body"
+                dangerouslySetInnerHTML={{
+                  __html: (emailModal.bodyHtml || emailModal.body || '(No content)')
+                    .replace(/<script[\s\S]*?<\/script>/gi, '')
+                    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+                    .replace(/<object[\s\S]*?<\/object>/gi, '')
+                    .replace(/on\w+="[^"]*"/gi, '')
+                    .replace(/on\w+='[^']*'/gi, '')
+                }}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Confirmation modal */}
       {confirmModal && (
         <div className="ec-confirm-overlay" onClick={() => setConfirmModal(false)}>
@@ -497,9 +686,9 @@ export default function EmailComplaints() {
             <div className="ec-confirm-grid">
               {[
                 { label: 'Store Code',        val: parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode, req: true  },
-                { label: 'Employee Code',     val: parsed?.employeeCode,                     req: false },
-                { label: 'Employee Name',     val: resolvedEmpName || parsed?.employeeName,  req: false },
-                { label: 'Contact Number',    val: parsed?.contactNumber,                    req: false },
+                { label: 'Employee Code',     val: parsedEdits.employeeCode || parsed?.employeeCode,  req: false },
+                { label: 'Employee Name',     val: resolvedEmpName || parsed?.employeeName,            req: false },
+                { label: 'Contact Number',    val: parsedEdits.contactNumber || parsed?.contactNumber, req: false },
                 { label: 'Product',           val: parsedEdits.productName || parsed?.productName, req: true  },
                 { label: 'Vendor',            val: parsedEdits.vendorName,                   req: false },
                 { label: 'Nature of Problem', val: parsedEdits.natureOfProblem || parsed?.natureOfProblem, req: true  },
@@ -574,8 +763,41 @@ export default function EmailComplaints() {
             }
           </div>
 
+          {/* Search bar */}
+          <div className="ec-search-bar">
+            <div className="ec-search-input-wrap">
+              <span className="ec-search-icon">🔍</span>
+              <input
+                ref={searchInputRef}
+                type="text"
+                className="ec-search-input"
+                placeholder="Search subject, sender, store…"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') runSearch(); }}
+              />
+              {searchQuery && (
+                <button className="ec-search-clear" onClick={clearSearch} title="Clear search">✕</button>
+              )}
+            </div>
+            <button
+              className="ec-search-btn"
+              disabled={!searchQuery.trim() || searching}
+              onClick={() => runSearch()}
+            >
+              {searching ? '…' : 'Go'}
+            </button>
+          </div>
+
+          {searchMode && (
+            <div className="ec-search-result-bar">
+              <span>Results for: <strong>"{searchQuery}"</strong> ({emails.length})</span>
+              <button onClick={clearSearch}>← Back to Inbox</button>
+            </div>
+          )}
+
           {/* Tag filter bar */}
-          {(wipList.length > 0 || emails.some(e => emailTags[e.id]?.type === 'logged')) && (
+          {!searchMode && (wipList.length > 0 || emails.some(e => emailTags[e.id]?.type === 'logged')) && (
             <div className="ec-tag-filter-bar">
               <button className={`ec-tag-filter-btn ${tagFilter === null ? 'active' : ''}`} onClick={() => setTagFilter(null)}>All</button>
               {wipList.length > 0 && (
@@ -590,6 +812,7 @@ export default function EmailComplaints() {
               )}
             </div>
           )}
+
 
           <div className="ec-email-list">
             {tagFilter !== 'logged' && wipList.length > 0 && (
@@ -609,7 +832,8 @@ export default function EmailComplaints() {
                     onClick={e => {
                       e.stopPropagation();
                       if (!window.confirm(`Dismiss WIP for "${w.subject}"?\n\nThis will remove the saved partial data. Only confirm if this case is no longer pending.`)) return;
-                      setWipList(prev => { const u = prev.filter(x => x.id !== w.id); localStorage.setItem('vmm_wip_emails', JSON.stringify(u)); return u; });
+                      setWipList(prev => prev.filter(x => x.id !== w.id));
+                      vmm.resolveWip(w.id).catch(() => {});
                       if (selected?.id === w.id) { setSelected(null); setParsed(null); }
                       showToast('WIP dismissed', 'info');
                     }}
@@ -649,14 +873,19 @@ export default function EmailComplaints() {
               const claim          = activeClaims[e.id];
               const claimedByOther = claim && claim.agentId !== agentId;
               const tag            = emailTags[e.id];
+              const wipReplyFor    = wipList.find(w =>
+                w.conversationId && e.conversationId && w.conversationId === e.conversationId
+              );
               return (
-                <div key={e.id} className={`ec-email-row ${selected?.id === e.id ? 'active' : ''} ${!e.hasStoreCode ? 'no-store' : ''} ${claimedByOther ? 'claimed' : ''} ${tag ? `tagged-${tag.type}` : ''}`}
+                <div key={e.id} className={`ec-email-row ${selected?.id === e.id ? 'active' : ''} ${!e.hasStoreCode ? 'no-store' : ''} ${claimedByOther ? 'claimed' : ''} ${tag ? `tagged-${tag.type}` : ''} ${wipReplyFor ? 'wip-reply' : ''}`}
                   onClick={() => selectEmail(e)}>
                   <div className="ec-email-store">
                     {e.storeCode
                       ? <span className="ec-store-code">{e.storeCode}</span>
                       : <span className="ec-unknown">? Unknown</span>}
-                    <span className={typeLabel.cls}>{typeLabel.label}</span>
+                    {wipReplyFor
+                      ? <span className="ec-wip-reply-tag">↩ WIP Reply</span>
+                      : <span className={typeLabel.cls}>{typeLabel.label}</span>}
                     {claimedByOther && <span className="ec-in-use-tag" title={`${claim.agentLabel} is working on this`}>In use</span>}
                     <span className="ec-email-time">{fmtTime(e.receivedAt)}</span>
                   </div>
@@ -751,7 +980,12 @@ export default function EmailComplaints() {
             <>
               {/* Email Header */}
               <div className="ec-email-header">
-                <div className="ec-email-header-subject">{selected.subject}</div>
+                <div className="ec-email-header-top">
+                  <div className="ec-email-header-subject">{selected.subject}</div>
+                  <button className="ec-fullview-btn" onClick={() => setEmailModal(selected)} title="Open full email in popup">
+                    ⤢ Full View
+                  </button>
+                </div>
                 <div className="ec-email-header-meta">
                   <span>From: <strong>{selected.fromDisplay || selected.fromAddr}</strong></span>
                   {selected.storeCode && <span className="ec-store-pill">{selected.storeCode}</span>}
@@ -845,8 +1079,9 @@ export default function EmailComplaints() {
               {/* ── Action Buttons ── */}
               {(() => {
                 const wipMatch = wipList.find(w =>
-                  w.subject === selected.subject ||
                   w.id === selected.id ||
+                  (selected.conversationId && w.conversationId && selected.conversationId === w.conversationId) ||
+                  w.subject === selected.subject ||
                   (selected.complaintId && w.subject?.includes(selected.complaintId))
                 );
                 const detectedId = selected.complaintId || (wipMatch?.complaintNo) || '';
@@ -856,8 +1091,11 @@ export default function EmailComplaints() {
                     {/* WIP Match Notice */}
                     {wipMatch && (
                       <div className="ec-wip-match">
-                        <span className="ec-wip-match-icon">WIP</span>
-                        <span>This email thread has a pending WIP case — reply was sent earlier awaiting store response.</span>
+                        <span className="ec-wip-match-icon">↩ WIP</span>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 12 }}>Store replied to your pending case</div>
+                          <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>"{wipMatch.subject}"</div>
+                        </div>
                       </div>
                     )}
 
@@ -974,12 +1212,12 @@ export default function EmailComplaints() {
                 </div>
               )}
 
-              {/* Email Body */}
-              {selected.body && (
+              {/* Email Body — uses HTML body if available (shows full thread structure) */}
+              {(selected.bodyHtml || selected.body) && (
                 <div
                   className="ec-email-body"
                   dangerouslySetInnerHTML={{
-                    __html: selected.body
+                    __html: (selected.bodyHtml || selected.body)
                       .replace(/<script[\s\S]*?<\/script>/gi, '')
                       .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
                       .replace(/<object[\s\S]*?<\/object>/gi, '')
@@ -1107,7 +1345,70 @@ export default function EmailComplaints() {
                           </div>
                         );
                       }
-                      // All other fields
+                      // Employee Code — editable; changing triggers auto-lookup
+                      if (key === 'employeeCode') {
+                        const val = parsedEdits.employeeCode;
+                        return (
+                          <div key={key} className={`ec-field ${val ? 'filled' : 'missing'}`}>
+                            <span className="ec-field-label">Employee Code</span>
+                            <input
+                              className="ec-field-input"
+                              placeholder="Enter employee code…"
+                              value={val}
+                              onChange={e => setParsedEdits(prev => ({ ...prev, employeeCode: e.target.value.toUpperCase() }))}
+                            />
+                          </div>
+                        );
+                      }
+                      // Contact Number — editable
+                      if (key === 'contactNumber') {
+                        const val = parsedEdits.contactNumber;
+                        return (
+                          <div key={key} className={`ec-field ${val ? 'filled' : 'missing'}`}>
+                            <span className="ec-field-label">Contact Number</span>
+                            <input
+                              className="ec-field-input"
+                              placeholder="Enter contact number…"
+                              value={val}
+                              onChange={e => setParsedEdits(prev => ({ ...prev, contactNumber: e.target.value }))}
+                            />
+                          </div>
+                        );
+                      }
+                      // Product Location — editable
+                      if (key === 'productLocation') {
+                        const val = parsedEdits.productLocation;
+                        return (
+                          <div key={key} className={`ec-field ${val ? 'filled' : 'missing'}`}>
+                            <span className="ec-field-label">Product Location</span>
+                            <input
+                              className="ec-field-input"
+                              placeholder="Enter product location…"
+                              value={val}
+                              onChange={e => setParsedEdits(prev => ({ ...prev, productLocation: e.target.value }))}
+                            />
+                          </div>
+                        );
+                      }
+                      // Description — editable textarea
+                      if (key === 'description') {
+                        const val = parsedEdits.description;
+                        const isReq = REQUIRED_FIELDS.includes(key);
+                        return (
+                          <div key={key} className={`ec-field ec-field-full ${val ? 'filled' : (isReq ? 'missing-req' : 'missing')}`}>
+                            <span className="ec-field-label">Description{isReq && <span className="req"> *</span>}</span>
+                            <textarea
+                              className="ec-field-input"
+                              rows={3}
+                              placeholder="Enter complaint description…"
+                              value={val}
+                              onChange={e => setParsedEdits(prev => ({ ...prev, description: e.target.value }))}
+                              style={{ resize: 'vertical' }}
+                            />
+                          </div>
+                        );
+                      }
+                      // Fallback (shouldn't hit with current FIELD_LABELS)
                       const val    = parsed[key];
                       const isMiss = !val;
                       const isReq  = REQUIRED_FIELDS.includes(key);
@@ -1145,13 +1446,24 @@ export default function EmailComplaints() {
                         </div>
                       );
                     })()}
-                    {/* Complaint Type — auto from nature */}
-                    {parsedEdits.complaintType && (
-                      <div className="ec-field filled">
-                        <span className="ec-field-label">Complaint Type</span>
-                        <span className="ec-field-val">{parsedEdits.complaintType}</span>
-                      </div>
-                    )}
+                    {/* Complaint Type — auto from nature, but overridable */}
+                    {(() => {
+                      const types = [...new Set(natures.map(n => n.type).filter(Boolean))];
+                      return (
+                        <div className={`ec-field ${parsedEdits.complaintType ? 'filled' : 'missing-req'}`}>
+                          <span className="ec-field-label">Complaint Type<span className="req"> *</span></span>
+                          <select
+                            className="ec-field-input"
+                            value={parsedEdits.complaintType}
+                            onChange={e => setParsedEdits(prev => ({ ...prev, complaintType: e.target.value }))}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <option value="">— Select type —</option>
+                            {types.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                        </div>
+                      );
+                    })()}
                     {/* Number of Units — editable, sits in the grid like other fields */}
                     <div className="ec-field filled">
                       <span className="ec-field-label">Number of Units</span>

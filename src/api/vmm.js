@@ -52,14 +52,21 @@ export const vmm = {
   getReports:        ()       => get(BASE, 'vmm-reports'),
 
   // ── Cloud n8n — Email ────────────────────────────────
-  fetchInbox:         ()        => get(CLOUD,  'vmm-fetch-inbox'),
+  fetchInbox:         ()        => get(CLOUD,  'vmm-inbox'),
+  searchEmails:       (q)       => get(CLOUD,  'vmm-search-emails', { q }),
   fetchSent:          ()        => get(CLOUD,  'vmm-fetch-sent'),
   fetchAttachments:   (msgId)   => get(CLOUD,  'vmm-fetch-attachments', { messageId: msgId }),
   getEmailTemplates:  ()        => get(CLOUD,  'vmm-email-templates'),
-  parseEmail:        (data)   => post(CLOUD, 'vmm-parse-email',      data),
-  sendEmailReply:    (data)   => post(CLOUD, 'vmm-send-email-reply', data),
+  parseEmail:        (data)   => post(BASE,  'vmm-parse-email',      data),
+  sendEmailReply:    (data)   => post(CLOUD, 'vmm-reply-new',        data),
+  fetchThread:       (conversationId) => post(CLOUD, 'vmm-fetch-thread', { conversationId }),
   // Self-hosted — log email activity on existing complaint
   logEmailActivity:  (data)   => post(BASE,  'vmm-email-log-activity', data),
+
+  // ── WIP Emails ──────────────────────────────────────
+  saveWip:        (data) => post(BASE, 'vmm-wip-save',    data),
+  getOpenWips:    ()     => get(BASE,  'vmm-wip-list'),
+  resolveWip:     (emailId) => post(BASE, 'vmm-wip-resolve', { emailId }),
 
   // ── Follow-up ────────────────────────────────────────
   getFollowUpComplaints: ()     => get(BASE,  'vmm-followup-complaints'),
