@@ -330,10 +330,16 @@ export default function EmailComplaints() {
     // Mark this email as "being worked on" by this agent
     claimEmail(selected.id, 'claim');
     try {
+      // If direct body is empty (e.g. WIP sidebar click), build from thread messages
+      const threadBodyText = threadMessages.length > 0
+        ? threadMessages.map(m => `[From: ${m.fromName || m.from}]\n${m.body}`).join('\n\n---\n\n')
+        : '';
+      const emailBody = selected.body || threadBodyText;
+
       const res = await vmm.parseEmail({
         fromEmail:  selected.fromAddr,
         subject:    selected.subject,
-        emailBody:  selected.body,
+        emailBody,
         storeCode:  selected.storeCode,
         templates,
         natures:    natures.map(n => ({ nature: n.nature, type: n.type })),
@@ -1244,7 +1250,7 @@ export default function EmailComplaints() {
                       <div className="ec-wip-banner-body">
                         <span className="ec-wip-banner-title">Editing saved WIP — fields restored from earlier parse.</span>
                         <span className="ec-wip-banner-sub">
-                          If a follow-up email arrived with the missing info, open that email, parse it, and log from there.
+                          If the store has replied with the missing info, click <strong>Re-parse</strong> above — it will read the full thread and extract the new details automatically.
                           {selected.savedBy && <> &nbsp;·&nbsp; Saved by <strong>{selected.savedBy}</strong></>}
                         </span>
                         {(selected.parsed?.missingFromTemplate || []).length > 0 && (
