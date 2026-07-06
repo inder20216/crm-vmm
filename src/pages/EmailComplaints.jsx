@@ -261,8 +261,19 @@ export default function EmailComplaints() {
     setActiveTab(tab);
     setSelected(null);
     setParsed(null);
-    fetchEmails(tab);
+    if (tab !== 'wip') fetchEmails(tab);
+    // Silently refresh inbox in background when switching to WIP so reply counts are fresh
+    else fetchEmails('inbox');
   };
+
+  // Reply counts: how many inbox emails match each WIP's conversationId
+  const wipReplyCounts = {};
+  emails.forEach(e => {
+    if (!e.conversationId) return;
+    const match = wipList.find(w => w.conversationId && w.conversationId === e.conversationId);
+    if (match) wipReplyCounts[match.id] = (wipReplyCounts[match.id] || 0) + 1;
+  });
+  const totalWipReplies = Object.values(wipReplyCounts).reduce((s, n) => s + n, 0);
 
   const selectEmail = (email) => {
     setSelected(email);
@@ -728,8 +739,20 @@ export default function EmailComplaints() {
               onClick={() => switchTab('inbox')}
             >
               ✉ Inbox
-              {activeTab === 'inbox' && emails.length > 0 && (
-                <span className="ec-tab-count">{emails.length}</span>
+              {emails.length > 0 && activeTab !== 'sent' && (
+                <span className="ec-tab-count">{activeTab === 'wip' ? emails.length : emails.length}</span>
+              )}
+            </button>
+            <button
+              className={`ec-tab ${activeTab === 'wip' ? 'active' : ''}`}
+              onClick={() => switchTab('wip')}
+            >
+              ⏳ WIP
+              {wipList.length > 0 && (
+                <span className="ec-tab-count">{wipList.length}</span>
+              )}
+              {totalWipReplies > 0 && (
+                <span className="ec-tab-reply-badge">↩ {totalWipReplies}</span>
               )}
             </button>
             <button
@@ -759,13 +782,15 @@ export default function EmailComplaints() {
         <div className="ec-left">
           <div className="ec-left-head">
             <span className="ec-folder-label">
-              {activeTab === 'sent' ? '↑ Sent Items' : '✉ Inbox'}
+              {activeTab === 'sent' ? '↑ Sent Items' : activeTab === 'wip' ? '⏳ WIP Cases' : '✉ Inbox'}
             </span>
-            {fetching
-              ? <span className="ec-loading-dot">Loading…</span>
-              : emails.length > 0 && (
-                  <span className="ec-count">{emails.length} {activeTab === 'sent' ? 'emails' : 'unread'}</span>
-                )
+            {activeTab === 'wip'
+              ? <span className="ec-count">{wipList.length} pending</span>
+              : fetching
+                ? <span className="ec-loading-dot">Loading…</span>
+                : emails.length > 0 && (
+                    <span className="ec-count">{emails.length} {activeTab === 'sent' ? 'emails' : 'unread'}</span>
+                  )
             }
           </div>
 
@@ -821,43 +846,91 @@ export default function EmailComplaints() {
 
 
           <div className="ec-email-list">
-            {tagFilter !== 'logged' && wipList.length > 0 && (
+
+            {/* ── WIP TAB: dedicated WIP panel ── */}
+            {activeTab === 'wip' && (
+              <>
+                {wipList.length === 0 && (
+                  <div className="ec-empty">No WIP cases — all caught up!</div>
+                )}
+                {wipList.map(w => {
+                  const replyCount = wipReplyCounts[w.id] || 0;
+                  return (
+                    <div key={w.id} className={`ec-email-row wip ${selected?.id === w.id ? 'active' : ''} ${replyCount > 0 ? 'has-reply' : ''}`}
+                      onClick={() => selectEmail({ ...w, body: '' })}>
+                      <div className="ec-email-store">
+                        {w.storeCode ? <span className="ec-store-code">{w.storeCode}</span> : <span className="ec-unknown">?</span>}
+                        <span className="ec-wip-tag">WIP</span>
+                        {w.savedBy && <span className="ec-wip-agent-tag">{w.savedBy}</span>}
+                        {replyCount > 0 && <span className="ec-wip-reply-count">↩ {replyCount} {replyCount === 1 ? 'reply' : 'replies'}</span>}
+                        <span className="ec-email-time">{fmtTime(w.repliedAt)}</span>
+                        <button className="ec-wip-dismiss-x"
+                          title="Dismiss WIP"
+                          onClick={e => {
+                            e.stopPropagation();
+                            if (!window.confirm(`Dismiss WIP for "${w.subject}"?\n\nOnly confirm if this case is no longer pending.`)) return;
+                            setWipList(prev => prev.filter(x => x.id !== w.id));
+                            vmm.resolveWip(w.id).catch(() => {});
+                            if (selected?.id === w.id) { setSelected(null); setParsed(null); }
+                            showToast('WIP dismissed', 'info');
+                          }}>×</button>
+                      </div>
+                      <div className="ec-email-subject">{w.subject}</div>
+                      <div className="ec-email-meta ec-wip-meta">
+                        {w.parsed?.employeeCode && <span className="ec-wip-detail">Emp: {w.parsed.employeeCode}</span>}
+                        {w.parsed?.productName  && <span className="ec-wip-detail">{w.parsed.productName}</span>}
+                        {!w.parsed?.employeeCode && !w.parsed?.productName && <span>{w.fromAddr}</span>}
+                        {(w.parsed?.missingFromTemplate || []).length > 0 && (
+                          <span className="ec-wip-missing">Missing: {w.parsed.missingFromTemplate.slice(0, 2).map(f => camelToLabel(f)).join(', ')}{w.parsed.missingFromTemplate.length > 2 ? ` +${w.parsed.missingFromTemplate.length - 2}` : ''}</span>
+                        )}
+                      </div>
+                      {replyCount > 0 && (
+                        <div className="ec-wip-reply-hint">Store replied — click Re-parse to extract new info</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+
+            {/* ── INBOX / SENT: WIP strip at top ── */}
+            {activeTab !== 'wip' && tagFilter !== 'logged' && wipList.length > 0 && (
               <div className="ec-section-label">WIP — Awaiting Reply</div>
             )}
-            {tagFilter !== 'logged' && wipList.map(w => (
-              <div key={w.id} className={`ec-email-row wip ${selected?.id === w.id ? 'active' : ''}`}
-                onClick={() => selectEmail({ ...w, body: '' })}>
-                <div className="ec-email-store">
-                  {w.storeCode ? <span className="ec-store-code">{w.storeCode}</span> : '?'}
-                  <span className="ec-wip-tag">WIP</span>
-                  {w.savedBy && <span className="ec-wip-agent-tag">{w.savedBy}</span>}
-                  <span className="ec-email-time">{fmtTime(w.repliedAt)}</span>
-                  <button
-                    className="ec-wip-dismiss-x"
-                    title="Dismiss WIP — removes this WIP entry. Only do this if the case is resolved or no longer needed."
-                    onClick={e => {
-                      e.stopPropagation();
-                      if (!window.confirm(`Dismiss WIP for "${w.subject}"?\n\nThis will remove the saved partial data. Only confirm if this case is no longer pending.`)) return;
-                      setWipList(prev => prev.filter(x => x.id !== w.id));
-                      vmm.resolveWip(w.id).catch(() => {});
-                      if (selected?.id === w.id) { setSelected(null); setParsed(null); }
-                      showToast('WIP dismissed', 'info');
-                    }}
-                  >×</button>
+            {activeTab !== 'wip' && tagFilter !== 'logged' && wipList.map(w => {
+              const replyCount = wipReplyCounts[w.id] || 0;
+              return (
+                <div key={w.id} className={`ec-email-row wip ${selected?.id === w.id ? 'active' : ''} ${replyCount > 0 ? 'has-reply' : ''}`}
+                  onClick={() => selectEmail({ ...w, body: '' })}>
+                  <div className="ec-email-store">
+                    {w.storeCode ? <span className="ec-store-code">{w.storeCode}</span> : '?'}
+                    <span className="ec-wip-tag">WIP</span>
+                    {w.savedBy && <span className="ec-wip-agent-tag">{w.savedBy}</span>}
+                    {replyCount > 0 && <span className="ec-wip-reply-count">↩ {replyCount}</span>}
+                    <span className="ec-email-time">{fmtTime(w.repliedAt)}</span>
+                    <button className="ec-wip-dismiss-x"
+                      title="Dismiss WIP"
+                      onClick={e => {
+                        e.stopPropagation();
+                        if (!window.confirm(`Dismiss WIP for "${w.subject}"?\n\nOnly confirm if this case is no longer pending.`)) return;
+                        setWipList(prev => prev.filter(x => x.id !== w.id));
+                        vmm.resolveWip(w.id).catch(() => {});
+                        if (selected?.id === w.id) { setSelected(null); setParsed(null); }
+                        showToast('WIP dismissed', 'info');
+                      }}>×</button>
+                  </div>
+                  <div className="ec-email-subject">{w.subject}</div>
+                  <div className="ec-email-meta ec-wip-meta">
+                    {w.parsed?.employeeCode && <span className="ec-wip-detail">Emp: {w.parsed.employeeCode}</span>}
+                    {w.parsed?.productName  && <span className="ec-wip-detail">{w.parsed.productName}</span>}
+                    {!w.parsed?.employeeCode && !w.parsed?.productName && <span>{w.fromAddr}</span>}
+                    {(w.parsed?.missingFromTemplate || []).length > 0 && (
+                      <span className="ec-wip-missing">Missing: {w.parsed.missingFromTemplate.slice(0, 2).map(f => camelToLabel(f)).join(', ')}{w.parsed.missingFromTemplate.length > 2 ? ` +${w.parsed.missingFromTemplate.length - 2}` : ''}</span>
+                    )}
+                  </div>
                 </div>
-                <div className="ec-email-subject">{w.subject}</div>
-                <div className="ec-email-meta ec-wip-meta">
-                  {w.parsed?.employeeCode && <span className="ec-wip-detail">Emp: {w.parsed.employeeCode}</span>}
-                  {w.parsed?.productName  && <span className="ec-wip-detail">{w.parsed.productName}</span>}
-                  {!w.parsed?.employeeCode && !w.parsed?.productName && (
-                    <span>{w.fromAddr}</span>
-                  )}
-                  {(w.parsed?.missingFromTemplate || []).length > 0 && (
-                    <span className="ec-wip-missing">Missing: {(w.parsed.missingFromTemplate).slice(0, 2).map(f => camelToLabel(f)).join(', ')}{w.parsed.missingFromTemplate.length > 2 ? ` +${w.parsed.missingFromTemplate.length - 2}` : ''}</span>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
 
             {tagFilter !== 'wip' && emails.length > 0 && (() => {
               const filtered = tagFilter === 'logged' ? emails.filter(e => emailTags[e.id]?.type === 'logged') : emails;
@@ -867,12 +940,12 @@ export default function EmailComplaints() {
                 </div>
               ) : null;
             })()}
-            {emails.length === 0 && wipList.length === 0 && (
+            {activeTab !== 'wip' && emails.length === 0 && wipList.length === 0 && (
               <div className="ec-empty">
-                Click "Fetch {activeTab === 'sent' ? 'Sent' : 'Inbox'}" to load emails from VMM2.
+                Click Refresh to load emails from VMM2.
               </div>
             )}
-            {tagFilter !== 'wip' && (tagFilter === 'logged' ? emails.filter(e => emailTags[e.id]?.type === 'logged') : emails).map(e => {
+            {activeTab !== 'wip' && tagFilter !== 'wip' && (tagFilter === 'logged' ? emails.filter(e => emailTags[e.id]?.type === 'logged') : emails).map(e => {
               const typeLabel = e.emailType === 'complaint-reply' ? { label: `#${e.complaintId}`, cls: 'ec-complaint-badge' }
                 : e.emailType === 'new-complaint'    ? { label: 'New', cls: 'ec-new-badge' }
                 : { label: 'Other', cls: 'ec-reply-badge' };
