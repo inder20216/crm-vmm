@@ -68,6 +68,10 @@ export const vmm = {
   getOpenWips:    ()     => get(BASE,  'vmm-wip-list'),
   resolveWip:     (emailId) => post(BASE, 'vmm-wip-resolve', { emailId }),
 
+  // ── Non-Trading Requests ─────────────────────────────
+  listNtr:     ()    => get(BASE,  'vmm-ntr-list'),
+  getNtrItems: (id)  => get(BASE,  'vmm-ntr-items', { requestId: id }),
+
   // ── Follow-up ────────────────────────────────────────
   getFollowUpComplaints: ()     => get(BASE,  'vmm-followup-complaints'),
   closeComplaint:   (data)      => post(BASE, 'vmm-close-complaint',   data),

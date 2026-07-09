@@ -17,6 +17,11 @@ const NAV = [
     ],
   },
   {
+    label: 'NTR Requests',
+    icon: '📦',
+    to: '/ntr',
+  },
+  {
     label: 'Follow-up',
     icon: '🔁',
     to: '/followup',

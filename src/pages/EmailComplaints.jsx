@@ -130,6 +130,8 @@ export default function EmailComplaints() {
   const [searchQuery,     setSearchQuery]     = useState('');
   const [searchMode,      setSearchMode]      = useState(false); // true when showing search results
   const [searching,       setSearching]       = useState(false);
+  const [readFilter,      setReadFilter]      = useState('all');    // 'all' | 'unread' | 'read'
+  const [sortOrder,       setSortOrder]       = useState('newest'); // 'newest' | 'oldest'
   const searchInputRef = useRef(null);
 
   // Stable session ID per browser tab — identifies this agent across renders
@@ -608,6 +610,15 @@ export default function EmailComplaints() {
     }
   };
 
+  const baseEmails = (() => {
+    if (activeTab !== 'inbox') return emails;
+    let list = [...emails];
+    if (readFilter === 'unread') list = list.filter(e => !e.isRead);
+    if (readFilter === 'read')   list = list.filter(e =>  e.isRead);
+    if (sortOrder  === 'oldest') list.sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt));
+    return list;
+  })();
+
   return (
     <div className="ec-page">
       {toast && <div className={`ec-toast ec-toast-${toast.type}`}>{toast.msg}</div>}
@@ -827,6 +838,22 @@ export default function EmailComplaints() {
             </div>
           )}
 
+          {/* Read / Sort controls */}
+          {!searchMode && activeTab === 'inbox' && (
+            <div className="ec-inbox-controls">
+              <div className="ec-ictl-group">
+                {[['all','All'],['unread','Unread'],['read','Read']].map(([v,l]) => (
+                  <button key={v} className={`ec-tag-filter-btn${readFilter === v ? ' active' : ''}`} onClick={() => setReadFilter(v)}>{l}</button>
+                ))}
+              </div>
+              <div className="ec-ictl-sep" />
+              <div className="ec-ictl-group">
+                <button className={`ec-tag-filter-btn${sortOrder === 'newest' ? ' active' : ''}`} onClick={() => setSortOrder('newest')}>↓ Newest</button>
+                <button className={`ec-tag-filter-btn${sortOrder === 'oldest' ? ' active' : ''}`} onClick={() => setSortOrder('oldest')}>↑ Oldest</button>
+              </div>
+            </div>
+          )}
+
           {/* Tag filter bar */}
           {!searchMode && (wipList.length > 0 || emails.some(e => emailTags[e.id]?.type === 'logged')) && (
             <div className="ec-tag-filter-bar">
@@ -932,11 +959,11 @@ export default function EmailComplaints() {
               );
             })}
 
-            {tagFilter !== 'wip' && emails.length > 0 && (() => {
-              const filtered = tagFilter === 'logged' ? emails.filter(e => emailTags[e.id]?.type === 'logged') : emails;
+            {tagFilter !== 'wip' && baseEmails.length > 0 && (() => {
+              const filtered = tagFilter === 'logged' ? baseEmails.filter(e => emailTags[e.id]?.type === 'logged') : baseEmails;
               return filtered.length > 0 ? (
                 <div className="ec-section-label">
-                  {tagFilter === 'logged' ? `Logged (${filtered.length})` : activeTab === 'sent' ? `Sent Items (${filtered.length})` : `Unread Inbox (${filtered.length})`}
+                  {tagFilter === 'logged' ? `Logged (${filtered.length})` : activeTab === 'sent' ? `Sent Items (${filtered.length})` : `${readFilter === 'unread' ? 'Unread' : readFilter === 'read' ? 'Read' : 'All'} Inbox (${filtered.length})`}
                 </div>
               ) : null;
             })()}
@@ -945,7 +972,7 @@ export default function EmailComplaints() {
                 Click Refresh to load emails from VMM2.
               </div>
             )}
-            {activeTab !== 'wip' && tagFilter !== 'wip' && (tagFilter === 'logged' ? emails.filter(e => emailTags[e.id]?.type === 'logged') : emails).map(e => {
+            {activeTab !== 'wip' && tagFilter !== 'wip' && (tagFilter === 'logged' ? baseEmails.filter(e => emailTags[e.id]?.type === 'logged') : baseEmails).map(e => {
               const typeLabel = e.emailType === 'complaint-reply' ? { label: `#${e.complaintId}`, cls: 'ec-complaint-badge' }
                 : e.emailType === 'new-complaint'    ? { label: 'New', cls: 'ec-new-badge' }
                 : { label: 'Other', cls: 'ec-reply-badge' };

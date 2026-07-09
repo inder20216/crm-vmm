@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard';
 import CaseLoggingForm from './components/CaseLogging/CaseLoggingForm';
 import SearchComplaints from './pages/SearchComplaints';
 import EmailComplaints    from './pages/EmailComplaints';
+import NtrRequests        from './pages/NtrRequests';
 import ComplaintDetail    from './pages/ComplaintDetail';
 import Reports             from './pages/Reports';
 import FollowUp            from './pages/FollowUp';
@@ -31,6 +32,7 @@ export default function App() {
               <Route path="/complaints/add"    element={<div className="main"><CaseLoggingForm /></div>} />
               <Route path="/complaints/search" element={<SearchComplaints />} />
               <Route path="/complaints/email"  element={<EmailComplaints />} />
+              <Route path="/ntr"              element={<NtrRequests />} />
               <Route path="/complaints/:id"   element={<ComplaintDetail />} />
               <Route path="/followup"         element={<FollowUp />} />
               <Route path="/reports"          element={<Reports />} />
