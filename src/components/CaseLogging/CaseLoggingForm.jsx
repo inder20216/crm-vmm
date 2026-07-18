@@ -128,7 +128,7 @@ function formatDate(date) {
 }
 
 const emptyForm = {
-  storeCode: '', storeName: '', storeEmail: '', fmEmail: '', city: '', region: '', state: '', zone: '',
+  storeCode: '', storeName: '', storeEmail: '', smEmail: '', fmEmail: '', hoEmail: '', vendorEmail: '', contractType: '', city: '', region: '', state: '', zone: '',
   fmName: '', managerName: '', managerMobile: '',
   asmName: '', asmMobile: '',
   employeeCode: '', employeeName: '', contactNumber: '', designation: '',
@@ -236,6 +236,7 @@ export default function CaseLoggingForm() {
           storeCode:     s.code,
           storeName:     s.name,
           storeEmail:    s.email          || '',
+          smEmail:       s.smEmail        || s.email || '',
           fmEmail:       s.fmEmail        || '',
           city:          s.city           || '',
           region:        s.region         || '',
@@ -430,18 +431,21 @@ export default function CaseLoggingForm() {
       if (allResults.length === qty) {
         // Send ONE consolidated escalation email for all units
         vmm.sendEscalationEmail({
-          storeEmail:   form.storeEmail,
-          fmEmail:      form.fmEmail,
-          storeName:    form.storeName,
-          storeCode:    form.storeCode,
-          vendorName:   form.vendorName,
-          productName:  form.productName,
-          complaints:   allResults.map(r => ({
+          escalationType:  form.fmEmail && !form.vendorName ? 'fm' : 'vendor',
+          storeCode:       form.storeCode,
+          storeName:       form.storeName,
+          smEmail:         form.smEmail      || form.storeEmail || '',
+          fmEmail:         form.fmEmail      || '',
+          hoEmail:         form.hoEmail      || '',
+          vendorEmail:     form.vendorEmail  || '',
+          vendorName:      form.vendorName   || '',
+          productName:     form.productName  || '',
+          contractType:    form.contractType || '',
+          complaints: allResults.map(r => ({
             complaintno:     r.complaintno,
             productLocation: r.productLocation,
+            natureOfProblem: r._nature        || '',
             edcDate:         r.edcDate,
-            type:            r._type,
-            vendorName:      r._vendorName,
           })),
         }).catch(() => {});
         setResults(allResults);

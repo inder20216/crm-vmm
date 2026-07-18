@@ -224,6 +224,20 @@ export default function FollowUp() {
       if (res?.success !== false && !res?.error) {
         showToast(`${selected.complaintno} updated — ${action}`, 'ok');
         if (action === 'Closed' || action === 'Resolved') {
+          // Send closure notification email
+          vmm.sendClosureEmail({
+            storeCode:     selected.store_code   || '',
+            storeName:     bufStr(selected.store_name) || '',
+            storeEmail:    selected.email_from   || selected.storeemail || '',
+            fmEmail:       selected.fm_email     || '',
+            fmName:        selected.fm_name      || '',
+            vendorName:    selected.vendorname   || '',
+            productName:   bufStr(selected.productname) || '',
+            complaintno:   selected.complaintno  || '',
+            closureStatus: action,
+            closureDate:   newEdc || new Date().toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }),
+            remarks,
+          }).catch(() => {});
           setComplaints(prev => prev.filter(c => c.id !== selected.id));
           setSelected(null);
         } else {

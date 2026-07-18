@@ -1,40 +1,35 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import './Sidebar.css';
 
-const NAV = [
+const ADMIN_NAV = [
+  { label: 'Dashboard',  icon: '⊞', to: '/' },
   {
-    label: 'Dashboard',
-    icon: '⊞',
-    to: '/',
-  },
-  {
-    label: 'Complaints',
-    icon: '📋',
+    label: 'Complaints', icon: '📋',
     children: [
-      { label: 'Log New Case',  to: '/complaints/add' },
-      { label: 'Search',        to: '/complaints/search' },
-      { label: 'Email Inbox',   to: '/complaints/email' },
+      { label: 'Log New Case', to: '/complaints/add'    },
+      { label: 'Search',       to: '/complaints/search' },
+      { label: 'Email Inbox',  to: '/complaints/email'  },
     ],
   },
+  { label: 'NTR Requests',    icon: '📦', to: '/ntr'      },
+  { label: 'Follow-up',       icon: '🔁', to: '/followup' },
+  { label: 'Reports',         icon: '📊', to: '/reports'  },
+  { label: 'User Management', icon: '👥', to: '/users'    },
+];
+
+const USER_NAV = [
   {
-    label: 'NTR Requests',
-    icon: '📦',
-    to: '/ntr',
-  },
-  {
-    label: 'Follow-up',
-    icon: '🔁',
-    to: '/followup',
-  },
-  {
-    label: 'Reports',
-    icon: '📊',
-    to: '/reports',
+    label: 'Complaints', icon: '📋',
+    children: [
+      { label: 'Email Inbox', to: '/complaints/email'  },
+      { label: 'Search',      to: '/complaints/search' },
+    ],
   },
 ];
 
-export default function Sidebar({ collapsed, onToggle }) {
+export default function Sidebar({ collapsed, onToggle, role }) {
   const location = useLocation();
+  const NAV = role === 'admin' ? ADMIN_NAV : USER_NAV;
 
   const isParentActive = (children) =>
     children?.some(c => location.pathname.startsWith(c.to));

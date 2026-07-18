@@ -109,6 +109,7 @@ export default function ComplaintDetail() {
 
   // Add Update form
   const [showUpdate, setShowUpdate]   = useState(false);
+  const [updAction,  setUpdAction]    = useState(null); // 'update' | 'escalate' | 'close'
   const [updSrc,     setUpdSrc]       = useState('Call');
   const [updTxnId,   setUpdTxnId]     = useState('');
   const [updMobile,  setUpdMobile]    = useState('');
@@ -173,7 +174,12 @@ export default function ComplaintDetail() {
 
   const handleUpdate = async () => {
     if (!updRemarks.trim()) { showUpdMsg('Remarks are required', 'err'); return; }
-    if ((updStatus === 'Partially Closed' || updStatus === 'Escalated' || updStatus === 'Closed') && !updEdc) { showUpdMsg('Date of closure is required', 'err'); return; }
+    // Derive status from action
+    const effectiveStatus = updAction === 'escalate'      ? 'Escalated'
+      : updAction === 'not-connected' ? 'Not Connected'
+      : updAction === 'close'         ? updStatus  // updStatus holds Closed / Partially Closed
+      : 'Open';
+    if ((effectiveStatus === 'Partially Closed' || effectiveStatus === 'Escalated' || effectiveStatus === 'Closed') && !updEdc) { showUpdMsg('Date of closure is required', 'err'); return; }
 
     setUpdating(true);
     try {
@@ -181,7 +187,7 @@ export default function ComplaintDetail() {
       const nextLevel = parseInt(c.escalationlevel || 0) + 1;
       let res;
 
-      if (updStatus === 'Not Connected') {
+      if (updAction === 'not-connected') {
         res = await vmm.notConnected({
           complaintId: c.id,
           complaintno: c.complaintno,
@@ -189,34 +195,37 @@ export default function ComplaintDetail() {
           uid: 1,
           txnId: updTxnId,
           mobileCalled: updMobile,
-          newClosureDate: updEdc || '',
+          newClosureDate: updEdc,
           escalationLevel: nextLevel,
-        });
-      } else {
-        const followupMethod = updSrc === 'Email Reply' ? 'Email Reply'
-                              : updSrc === 'Vendor Update' ? 'Vendor Update'
-                              : 'Call';
-        res = await vmm.closeComplaint({
-          complaintId: c.id,
-          closureStatus: updStatus,
-          followupMethod,
-          txnId: updSrc === 'Call' ? updTxnId : '',
-          mobileCalled: updSrc === 'Call' ? updMobile : '',
-          emailSubject: updSrc === 'Email Reply' ? updEmailRef : '',
-          vendorTicketNo: updSrc === 'Vendor Update' ? updVendorTicket : '',
           delayMain: updDelayMain,
           delaySub: updDelaySub,
-          remarks: updRemarks,
-          uid: 1,
-          escalationLevel: nextLevel,
-          newClosureDate: (updStatus === 'Partially Closed' || updStatus === 'Escalated') ? updEdc : '',
-          closureDate: updStatus === 'Closed' ? updEdc : '',
-          closedBy: updStatus === 'Closed' ? updClosedBy : '',
         });
-      }
+      } else {
+      const followupMethod = updSrc === 'Email Reply' ? 'Email Reply'
+                            : updSrc === 'Vendor Update' ? 'Vendor Update'
+                            : 'Call';
+      res = await vmm.closeComplaint({
+        complaintId: c.id,
+        closureStatus: effectiveStatus,
+        followupMethod,
+        txnId: updSrc === 'Call' ? updTxnId : '',
+        mobileCalled: updSrc === 'Call' ? updMobile : '',
+        emailSubject: updSrc === 'Email Reply' ? updEmailRef : '',
+        vendorTicketNo: updSrc === 'Vendor Update' ? updVendorTicket : '',
+        delayMain: updDelayMain,
+        delaySub: updDelaySub,
+        remarks: updRemarks,
+        uid: 1,
+        escalationLevel: nextLevel,
+        newClosureDate: (effectiveStatus === 'Partially Closed' || effectiveStatus === 'Escalated') ? updEdc : '',
+        closureDate: effectiveStatus === 'Closed' ? updEdc : '',
+        closedBy: effectiveStatus === 'Closed' ? updClosedBy : '',
+      });
+      } // end else (not-connected branch)
 
       if (res?.success !== false && !res?.error) {
         showUpdMsg('Update saved successfully', 'ok');
+        setUpdAction(null);
         setUpdTxnId(''); setUpdMobile('');
         setUpdEmailRef(isEmailSourced(c) ? emailRefDefault(c) : '');
         setUpdVendorTicket(''); setUpdDelayMain(''); setUpdDelaySub('');
@@ -410,151 +419,154 @@ export default function ComplaintDetail() {
           {showUpdate && (
             <div className="cd-uf">
 
-              <div className="cd-uf-row">
-                <span className="cd-uf-label">Update Source</span>
-                <div className="cd-uf-src-btns">
-                  {['Call', 'Email Reply', 'Vendor Update'].map(s => (
-                    <button
-                      key={s}
-                      className={`cd-uf-src-btn${updSrc === s ? ' active' : ''}`}
-                      onClick={() => setUpdSrc(s)}
-                    >
-                      {s === 'Call' ? '📞' : s === 'Email Reply' ? '📧' : '🏭'} {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {updSrc === 'Call' && (
-                <div className="cd-uf-two-col">
-                  <div className="cd-uf-field">
-                    <label className="cd-uf-label">TXN / Call ID</label>
-                    <input className="cd-uf-input" placeholder="SparkTG TXN ID" value={updTxnId} onChange={e => setUpdTxnId(e.target.value)} />
-                  </div>
-                  <div className="cd-uf-field">
-                    <label className="cd-uf-label">Mobile Called</label>
-                    <input className="cd-uf-input" placeholder="Number dialled" value={updMobile} onChange={e => setUpdMobile(e.target.value)} />
-                  </div>
-                </div>
-              )}
-
-              {updSrc === 'Email Reply' && (
-                <div className="cd-uf-field">
-                  <label className="cd-uf-label">Email Subject / Reference</label>
-                  <input className="cd-uf-input" placeholder="Subject line of the email received" value={updEmailRef} onChange={e => setUpdEmailRef(e.target.value)} />
-                </div>
-              )}
-
-              {updSrc === 'Vendor Update' && (
-                <div className="cd-uf-field">
-                  <label className="cd-uf-label">Vendor Ticket No</label>
-                  <input className="cd-uf-input" placeholder="Vendor's ticket / reference number" value={updVendorTicket} onChange={e => setUpdVendorTicket(e.target.value)} />
-                </div>
-              )}
-
-              <div className="cd-uf-two-col">
-                <div className="cd-uf-field">
-                  <label className="cd-uf-label">Update Status</label>
-                  <select className="cd-uf-select" value={updStatus} onChange={e => {
-                    const s = e.target.value;
-                    setUpdStatus(s);
-                    if (s === 'Closed') {
-                      setUpdEdc(new Date().toISOString().split('T')[0]);
-                    } else if (s === 'Not Connected') {
-                      const d = new Date(); d.setDate(d.getDate() + 3);
-                      setUpdEdc(d.toISOString().split('T')[0]);
-                      setUpdSrc('Call');
-                    } else {
-                      setUpdEdc('');
-                    }
-                    setUpdDelayMain(''); setUpdDelaySub(''); setUpdClosedBy('');
-                  }}>
-                    <option value="Open">Open — No change</option>
-                    <option value="Escalated">Escalated</option>
-                    <option value="Partially Closed">Partially Closed</option>
-                    <option value="Not Connected">Not Connected</option>
-                    <option value="Closed">Closed / Resolved</option>
-                  </select>
-                </div>
-              </div>
-
-              {(updStatus === 'Partially Closed' || updStatus === 'Escalated' || updStatus === 'Closed') && (
-                <div className="cd-uf-two-col">
-                  <div className="cd-uf-field">
-                    <label className="cd-uf-label">Delay Reason — Main</label>
-                    <select className="cd-uf-select" value={updDelayMain} onChange={e => { setUpdDelayMain(e.target.value); setUpdDelaySub(''); setUpdEdc(''); }}>
-                      <option value="">— Select —</option>
-                      {Object.keys(DELAY_REASONS).map(k => <option key={k} value={k}>{k}</option>)}
-                    </select>
-                  </div>
-                  <div className="cd-uf-field">
-                    <label className="cd-uf-label">Delay Reason — Sub</label>
-                    <select className="cd-uf-select" value={updDelaySub} disabled={!updDelayMain} onChange={e => {
-                      const sub = e.target.value;
-                      setUpdDelaySub(sub);
-                      const item = (DELAY_REASONS[updDelayMain] || []).find(r => r.label === sub);
-                      if (item?.tat) {
-                        const d = new Date();
-                        d.setDate(d.getDate() + item.tat);
+              {/* ── 4 Action Buttons ── */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+                {[
+                  { key: 'update',        label: '✏ Update',        color: '#475569' },
+                  { key: 'escalate',      label: '↑ Escalate',      color: '#d97706' },
+                  { key: 'not-connected', label: '📵 Not Connected', color: '#7c3aed' },
+                  { key: 'close',         label: '✓ Close',         color: '#16a34a' },
+                ].map(({ key, label, color }) => (
+                  <button key={key}
+                    onClick={() => {
+                      const next = updAction === key ? null : key;
+                      setUpdAction(next);
+                      setUpdDelayMain(''); setUpdDelaySub(''); setUpdClosedBy('');
+                      if (next === 'not-connected') {
+                        const d = new Date(); d.setDate(d.getDate() + 3);
                         setUpdEdc(d.toISOString().split('T')[0]);
+                        setUpdSrc('Call');
+                      } else {
+                        setUpdEdc('');
                       }
-                    }}>
-                      <option value="">— Select —</option>
-                      {(DELAY_REASONS[updDelayMain] || []).map(r => (
-                        <option key={r.label} value={r.label}>{r.tat ? `${r.label} (${r.tat}d)` : r.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
-
-              {updStatus === 'Not Connected' && (
-                <div style={{ padding: '10px 14px', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8, fontSize: 12, color: '#92400e', marginBottom: 4 }}>
-                  ⚡ EDC auto-set to <strong>today + 3 days ({updEdc})</strong>. A reminder email will be sent to the store automatically.
-                </div>
-              )}
-
-              {(updStatus === 'Partially Closed' || updStatus === 'Not Connected' || updStatus === 'Escalated' || updStatus === 'Closed') && (
-                <div className="cd-uf-field">
-                  <label className="cd-uf-label">
-                    {updStatus === 'Closed' ? 'Date of Closure (as per info received)'
-                      : updStatus === 'Not Connected' ? 'Revised EDC (Today + 3 Days)'
-                      : 'New Closure Date'}
-                    {(updStatus === 'Partially Closed' || updStatus === 'Escalated' || updStatus === 'Closed') && <span style={{ color: '#dc2626' }}>*</span>}
-                  </label>
-                  <input className="cd-uf-input" type="date" value={updEdc} onChange={e => setUpdEdc(e.target.value)} />
-                </div>
-              )}
-
-              {updStatus === 'Closed' && (
-                <div className="cd-uf-field">
-                  <label className="cd-uf-label">Case Closed By</label>
-                  <input className="cd-uf-input" placeholder="Name of person who confirmed closure" value={updClosedBy} onChange={e => setUpdClosedBy(e.target.value)} />
-                </div>
-              )}
-
-              <div className="cd-uf-field">
-                <label className="cd-uf-label">Remarks <span style={{ color: '#dc2626' }}>*</span></label>
-                <textarea
-                  className="cd-uf-textarea"
-                  rows={3}
-                  placeholder="Enter update details, vendor response, next steps…"
-                  value={updRemarks}
-                  onChange={e => setUpdRemarks(e.target.value)}
-                />
+                      setUpdStatus(key === 'close' ? 'Closed' : key === 'not-connected' ? 'Not Connected' : 'Open');
+                    }}
+                    style={{ background: color, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 20px', cursor: 'pointer', fontWeight: 700, fontSize: 13, opacity: updAction && updAction !== key ? 0.4 : 1 }}>
+                    {label}
+                  </button>
+                ))}
               </div>
 
-              {updateMsg && (
-                <div className={`cd-uf-msg cd-uf-msg-${updateMsg.type}`}>{updateMsg.text}</div>
-              )}
+              {updAction && (<>
 
-              <button
-                className={`cd-uf-submit cd-uf-submit-${updStatus.toLowerCase().replace(/\s+/g, '-')}`}
-                onClick={handleUpdate}
-                disabled={updating}
-              >
-                {updating ? 'Saving…' : `Save Update — ${updStatus}`}
-              </button>
+                {/* Update Source */}
+                <div className="cd-uf-row">
+                  <span className="cd-uf-label">Update Source</span>
+                  <div className="cd-uf-src-btns">
+                    {['Call', 'Email Reply', 'Vendor Update'].map(s => (
+                      <button key={s} className={`cd-uf-src-btn${updSrc === s ? ' active' : ''}`} onClick={() => setUpdSrc(s)}>
+                        {s === 'Call' ? '📞' : s === 'Email Reply' ? '📧' : '🏭'} {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {updSrc === 'Call' && (
+                  <div className="cd-uf-two-col">
+                    <div className="cd-uf-field">
+                      <label className="cd-uf-label">TXN / Call ID</label>
+                      <input className="cd-uf-input" placeholder="SparkTG TXN ID" value={updTxnId} onChange={e => setUpdTxnId(e.target.value)} />
+                    </div>
+                    <div className="cd-uf-field">
+                      <label className="cd-uf-label">Mobile Called</label>
+                      <input className="cd-uf-input" placeholder="Number dialled" value={updMobile} onChange={e => setUpdMobile(e.target.value)} />
+                    </div>
+                  </div>
+                )}
+                {updSrc === 'Email Reply' && (
+                  <div className="cd-uf-field">
+                    <label className="cd-uf-label">Email Subject / Reference</label>
+                    <input className="cd-uf-input" placeholder="Subject line of the email received" value={updEmailRef} onChange={e => setUpdEmailRef(e.target.value)} />
+                  </div>
+                )}
+                {updSrc === 'Vendor Update' && (
+                  <div className="cd-uf-field">
+                    <label className="cd-uf-label">Vendor Ticket No</label>
+                    <input className="cd-uf-input" placeholder="Vendor's ticket / reference number" value={updVendorTicket} onChange={e => setUpdVendorTicket(e.target.value)} />
+                  </div>
+                )}
+
+                {/* Escalate / Not Connected — delay reason fields */}
+                {(updAction === 'escalate' || updAction === 'not-connected') && (
+                  <div className="cd-uf-two-col">
+                    <div className="cd-uf-field">
+                      <label className="cd-uf-label">Delay Reason — Main</label>
+                      <select className="cd-uf-select" value={updDelayMain} onChange={e => {
+                        setUpdDelayMain(e.target.value); setUpdDelaySub('');
+                        if (updAction === 'not-connected') { const d = new Date(); d.setDate(d.getDate() + 3); setUpdEdc(d.toISOString().split('T')[0]); }
+                        else setUpdEdc('');
+                      }}>
+                        <option value="">— Select —</option>
+                        {Object.keys(DELAY_REASONS).map(k => <option key={k} value={k}>{k}</option>)}
+                      </select>
+                    </div>
+                    <div className="cd-uf-field">
+                      <label className="cd-uf-label">Delay Reason — Sub</label>
+                      <select className="cd-uf-select" value={updDelaySub} disabled={!updDelayMain} onChange={e => {
+                        const sub = e.target.value;
+                        setUpdDelaySub(sub);
+                        const item = (DELAY_REASONS[updDelayMain] || []).find(r => r.label === sub);
+                        if (item?.tat) { const d = new Date(); d.setDate(d.getDate() + item.tat); setUpdEdc(d.toISOString().split('T')[0]); }
+                      }}>
+                        <option value="">— Select —</option>
+                        {(DELAY_REASONS[updDelayMain] || []).map(r => (
+                          <option key={r.label} value={r.label}>{r.tat ? `${r.label} (${r.tat}d)` : r.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {/* Close sub-type */}
+                {updAction === 'close' && (
+                  <div className="cd-uf-field">
+                    <label className="cd-uf-label">Close Type</label>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {['Closed', 'Partially Closed'].map(s => (
+                        <button key={s} onClick={() => setUpdStatus(s)}
+                          style={{ padding: '6px 14px', borderRadius: 6, border: '2px solid', borderColor: updStatus === s ? '#16a34a' : '#e2e8f0', background: updStatus === s ? '#f0fdf4' : 'transparent', fontWeight: 600, fontSize: 12, cursor: 'pointer', color: updStatus === s ? '#15803d' : '#64748b' }}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* EDC — required for Escalate, Not Connected, and Close */}
+                {(updAction === 'escalate' || updAction === 'not-connected' || updAction === 'close') && (
+                  <div className="cd-uf-field">
+                    <label className="cd-uf-label">
+                      {updAction === 'close' && updStatus === 'Closed' ? 'Date of Closure' : updAction === 'not-connected' ? 'New EDC (auto +3d)' : 'New EDC'} <span style={{ color: '#dc2626' }}>*</span>
+                    </label>
+                    <input className="cd-uf-input" type="date" value={updEdc} onChange={e => setUpdEdc(e.target.value)} />
+                  </div>
+                )}
+
+                {/* Closed By — only for full close */}
+                {updAction === 'close' && updStatus === 'Closed' && (
+                  <div className="cd-uf-field">
+                    <label className="cd-uf-label">Case Closed By</label>
+                    <input className="cd-uf-input" placeholder="Name of person who confirmed closure" value={updClosedBy} onChange={e => setUpdClosedBy(e.target.value)} />
+                  </div>
+                )}
+
+                {/* Remarks — always */}
+                <div className="cd-uf-field">
+                  <label className="cd-uf-label">Remarks <span style={{ color: '#dc2626' }}>*</span></label>
+                  <textarea className="cd-uf-textarea" rows={3}
+                    placeholder={updAction === 'escalate' ? 'Reason for escalation, pending actions…' : updAction === 'close' ? 'Closure details, what was done…' : 'Update details, vendor response, next steps…'}
+                    value={updRemarks} onChange={e => setUpdRemarks(e.target.value)} />
+                </div>
+
+                {updateMsg && <div className={`cd-uf-msg cd-uf-msg-${updateMsg.type}`}>{updateMsg.text}</div>}
+
+                <button
+                  className={`cd-uf-submit cd-uf-submit-${updAction === 'escalate' ? 'escalated' : updAction === 'close' ? 'closed' : updAction === 'not-connected' ? 'escalated' : 'open'}`}
+                  onClick={handleUpdate} disabled={updating}>
+                  {updating ? 'Saving…' : updAction === 'escalate' ? '↑ Escalate Complaint' : updAction === 'close' ? '✓ Close Complaint' : updAction === 'not-connected' ? '📵 Log Not Connected' : '✏ Save Update'}
+                </button>
+
+              </>)}
             </div>
           )}
         </div>

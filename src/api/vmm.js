@@ -1,7 +1,9 @@
+import * as graph from '../auth/graphService';
+
 // Self-hosted n8n — CRM workflows
 const BASE = import.meta.env.VITE_API_BASE || '/webhook';
 
-// Cloud n8n — Email workflows
+// Cloud n8n — non-email workflows only
 const CLOUD = import.meta.env.VITE_CLOUD_API_BASE || '/cloud-webhook';
 
 async function get(base, path, params = {}) {
@@ -28,6 +30,7 @@ export const vmm = {
   lookupEmployee:    (code)   => get(BASE, 'vmm-sp-employee',        { code }),
   getProducts:       ()       => get(BASE, 'vmm-sp-products'),
   getNatures:        ()       => get(BASE, 'vmm-sp-natures'),
+  getVendors:        ()       => get(BASE, 'vmm-sp-vendors'),
   // Reuses the existing AC-AMC / Lift-AMC webhooks (same ones the Facility Complaint Portal calls)
   getAmcVendor:      (storeCode, product) => {
     const p = (product || '').trim().toLowerCase();
@@ -42,7 +45,8 @@ export const vmm = {
     });
   },
   logComplaint:        (data)   => post(BASE, 'vmm-log-complaint',       data),
-  sendEscalationEmail: (data)   => post(BASE, 'vmm-send-escalation-email', data),
+  sendEscalationEmail: (data)   => graph.sendEscalationEmailDirect(data),
+  sendClosureEmail:    (data)   => graph.sendClosureEmailDirect(data),
   polishRemarks:       (text)   => post(BASE, 'vmm-ai-polish',           { text }),
   getRecentComplaints: (code)   => get(BASE,  'vmm-recent-complaints',   { storeCode: code }),
   emailClaim:          (data)   => post(BASE, 'vmm-email-claim',         data),
@@ -51,15 +55,21 @@ export const vmm = {
   getComplaintDetail:(id)     => get(BASE, 'vmm-complaint-detail',   { id }),
   getReports:        ()       => get(BASE, 'vmm-reports'),
 
-  // ── Cloud n8n — Email ────────────────────────────────
-  fetchInbox:         ()        => get(CLOUD,  'vmm-inbox'),
-  searchEmails:       (q)       => get(CLOUD,  'vmm-search-emails', { q }),
-  fetchSent:          ()        => get(CLOUD,  'vmm-fetch-sent'),
+  // ── Email — direct Graph API (no n8n / Power Automate) ─────────────────────
+  fetchInbox:         (opts)    => graph.fetchInbox(opts),
+  resetInboxDelta:    ()        => graph.resetInboxDelta(),
+  searchEmails:       (q)       => graph.searchEmails(q),
+  fetchSent:          ()        => graph.fetchSent(),
+  fetchThread:        (convId)  => graph.fetchThread(convId),
+  sendEmailReply:     (data)    => graph.replyOnThread({ messageId: data.messageId, htmlBody: data.htmlBody, toEmail: data.toRecipients, ccEmails: data.ccRecipients }),
+  categorizeEmail:    (messageId, categories) => graph.categorizeEmail(messageId, categories),
+  markEmailRead:      (messageId) => graph.markAsRead(messageId),
+  sendNewEmail:       (data)    => graph.sendSharedMailboxEmail(data),
+
+  // Still via n8n (no Graph API equivalent needed)
   fetchAttachments:   (msgId)   => get(CLOUD,  'vmm-fetch-attachments', { messageId: msgId }),
   getEmailTemplates:  ()        => get(CLOUD,  'vmm-email-templates'),
-  parseEmail:        (data)   => post(BASE,  'vmm-parse-email',      data),
-  sendEmailReply:    (data)   => post(CLOUD, 'vmm-reply-new',        data),
-  fetchThread:       (conversationId) => post(CLOUD, 'vmm-fetch-thread', { conversationId }),
+  parseEmail:         (data)    => post(BASE,  'vmm-parse-email',       data),
   // Self-hosted — log email activity on existing complaint
   logEmailActivity:  (data)   => post(BASE,  'vmm-email-log-activity', data),
 
@@ -71,6 +81,13 @@ export const vmm = {
   // ── Non-Trading Requests ─────────────────────────────
   listNtr:     ()    => get(BASE,  'vmm-ntr-list'),
   getNtrItems: (id)  => get(BASE,  'vmm-ntr-items', { requestId: id }),
+
+  // ── User Management (MySQL-backed roles) ─────────────
+  getUserRole:  (email)  => get(BASE, 'vmm-user-role',   { email }),
+  listUsers:    ()       => get(BASE, 'vmm-users-list'),
+  createUser:   (data)   => post(BASE, 'vmm-user-create', data),
+  updateUser:   (data)   => post(BASE, 'vmm-user-update', data),
+  deleteUser:   (data)   => post(BASE, 'vmm-user-delete', data),
 
   // ── Follow-up ────────────────────────────────────────
   getFollowUpComplaints: ()     => get(BASE,  'vmm-followup-complaints'),

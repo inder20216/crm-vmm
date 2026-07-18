@@ -12,6 +12,14 @@ function fmtTime(dt) {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 }
 
+const HO_EMAIL = 'ho.vmm@openmind.in';
+
+// Products where an external vendor handles AMC & Warranty (auto-lookup for AMC, user picks for Warranty)
+const AMC_WARRANTY_PRODUCTS = new Set(['ac','server room ac','air curtain','electrical panel','fly catcher','genset','led light','lift','servo','track light']);
+// Products where vendor handles AMC only (user picks vendor; Warranty = FM/HO)
+const AMC_ONLY_PRODUCTS     = new Set(['civil work','weighing scale','pest control','shampoo dispenser machine','safe lock','sensormatic']);
+// Everything else → FM / HO Team (no external vendor)
+
 const REQUIRED_FIELDS = ['storeCode', 'productName', 'natureOfProblem', 'description'];
 const FIELD_LABELS = {
   storeCode: 'Store Code', employeeCode: 'Employee Code', employeeName: 'Employee Name',
@@ -19,9 +27,11 @@ const FIELD_LABELS = {
   productLocation: 'Product Location', description: 'Description',
 };
 
-function SearchableSelect({ options, value, onChange, placeholder, getLabel, getSub }) {
+// onFreeText fires on blur/Enter when the user typed a custom value (not picked from list)
+function SearchableSelect({ options, value, onChange, placeholder, getLabel, getSub, onFreeText }) {
   const [query,   setQuery]   = useState(value || '');
   const [open,    setOpen]    = useState(false);
+  const pickedRef = useRef(false);
   const ref = useRef(null);
 
   useEffect(() => { setQuery(value || ''); }, [value]);
@@ -36,6 +46,12 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
     ? options.filter(o => getLabel(o).toLowerCase().includes(query.toLowerCase()))
     : options;
 
+  const commitFreeText = () => {
+    if (onFreeText && !pickedRef.current) onFreeText(query.trim());
+    pickedRef.current = false;
+    setOpen(false);
+  };
+
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <input
@@ -43,14 +59,16 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
         className="ec-field-input"
         placeholder={placeholder}
         value={query}
-        onChange={e => { setQuery(e.target.value); setOpen(true); }}
+        onChange={e => { setQuery(e.target.value); setOpen(true); pickedRef.current = false; }}
         onFocus={() => setOpen(true)}
+        onBlur={commitFreeText}
+        onKeyDown={e => { if (e.key === 'Escape') setOpen(false); if (e.key === 'Enter') { e.preventDefault(); commitFreeText(); } }}
       />
       {open && filtered.length > 0 && (
         <div className="ec-picker-dropdown">
           {filtered.slice(0, 25).map((item, i) => (
             <div key={i} className="ec-picker-option"
-              onMouseDown={() => { onChange(item); setQuery(getLabel(item)); setOpen(false); }}>
+              onMouseDown={() => { pickedRef.current = true; onChange(item); setQuery(getLabel(item)); setOpen(false); }}>
               <span className="ec-picker-main">{getLabel(item)}</span>
               {getSub && getSub(item) && <span className="ec-picker-sub">{getSub(item)}</span>}
             </div>
@@ -90,8 +108,12 @@ function findBestByText(items, text, fields) {
 }
 
 export default function EmailComplaints() {
-  const [activeTab, setActiveTab] = useState('inbox'); // 'inbox' | 'sent'
-  const [emails,    setEmails]    = useState([]);
+  const [activeTab,    setActiveTab]    = useState('inbox'); // 'inbox' | 'sent'
+  const [inboxEmails,  setInboxEmails]  = useState(() => {
+    try { const c = sessionStorage.getItem('vmm_inbox_list'); return c ? JSON.parse(c) : []; } catch { return []; }
+  });
+  const [sentEmails,   setSentEmails]   = useState([]);
+  const emails = activeTab === 'sent' ? sentEmails : inboxEmails;
   const [fetching,  setFetching]  = useState(false);
   const [selected,  setSelected]  = useState(null);
   const [parsing,   setParsing]   = useState(false);
@@ -102,13 +124,16 @@ export default function EmailComplaints() {
   const [loggingActivity, setLoggingActivity] = useState(false);
   const [toast,         setToast]         = useState('');
   const [activeAction,    setActiveAction]    = useState(null);
-  const [updateForm,      setUpdateForm]      = useState({ complaintId: '', remarks: '', newStatus: '', newEdc: '' });
+  const [updateForm,      setUpdateForm]      = useState({ complaintId: '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' });
+  const [updateAction,    setUpdateAction]    = useState(null); // 'escalate' | 'close' | 'update'
+  const [searchingComplaint, setSearchingComplaint] = useState(false);
+  const [foundComplaint,     setFoundComplaint]     = useState(null); // complaint data from system
   const [attachmentData,  setAttachmentData]  = useState(null);
   const [loadingAttach,   setLoadingAttach]   = useState(false);
   const [wipList,   setWipList]   = useState([]);
   const [templates,    setTemplates]    = useState([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
-  const [products,     setProducts]     = useState([]);
+  const [products,     setProducts]     = useState([]);  // raw rows: each row = { name, vendor, category, hoName, hoEmail, vendorEmail }
   const [natures,      setNatures]      = useState([]);
   const [parsedEdits,  setParsedEdits]  = useState({ storeCode: '', productName: '', vendorName: '', natureOfProblem: '', complaintType: '', employeeCode: '', contactNumber: '', productLocation: '', description: '' });
   const [replyTo,         setReplyTo]         = useState([]);
@@ -119,6 +144,9 @@ export default function EmailComplaints() {
   const [resolvedEmpName, setResolvedEmpName] = useState('');
   const [showReplyEditor, setShowReplyEditor] = useState(false);
   const [quantity,        setQuantity]        = useState(1);
+  const [contractType,    setContractType]    = useState('');   // 'AMC' | 'Warranty' | 'NotApplicable'
+  const [vendorEmail,     setVendorEmail]     = useState('');   // For Warranty/NotApplicable — agent-entered vendor email (To)
+  const [amcLookup,       setAmcLookup]       = useState('idle'); // 'idle' | 'loading' | 'found' | 'not-found'
   const [confirmModal,    setConfirmModal]    = useState(false);
   const [activeClaims,    setActiveClaims]    = useState({});
   const [logSuccess,      setLogSuccess]      = useState(null); // { results, payload } after successful log
@@ -143,6 +171,7 @@ export default function EmailComplaints() {
   }
   const agentId = agentIdRef.current;
 
+
   // Load templates and products on mount
   useState(() => {
     vmm.getEmailTemplates().then(res => setTemplates(res.templates || [])).catch(() => {});
@@ -151,7 +180,8 @@ export default function EmailComplaints() {
     vmm.getProducts().then(r => setProducts(r.products || [])).catch(() => {});
     vmm.getNatures().then(r => setNatures(r.natures || [])).catch(() => {});
     vmm.getOpenWips().then(res => setWipList(res.wips || [])).catch(() => {});
-  }, []);
+    fetchEmails('inbox');
+  }, []); // eslint-disable-line
 
   const showToast = (msg, type = 'ok') => {
     setToast({ msg, type });
@@ -164,48 +194,73 @@ export default function EmailComplaints() {
     setEmailTags(updated);
   };
 
-  const fetchEmails = async (tab) => {
-    const folder = tab || activeTab;
-    setFetching(true);
-    setEmails([]);
-    setSelected(null);
-    setParsed(null);
-    try {
-      const res = folder === 'sent' ? await vmm.fetchSent() : await vmm.fetchInbox();
-      const fetched = res.emails || [];
-      setEmails(fetched);
+  const POLL_MS = 30000;
+  const pollRef = useRef(null);
 
-      if (!fetched.length) {
-        showToast(`No emails in ${folder === 'sent' ? 'Sent' : 'Inbox'}`, 'info');
-      } else if (folder !== 'sent') {
-        // Auto-pop WIP case if store replied on the same thread
-        const wipReply = fetched.find(e =>
-          e.conversationId && wipList.some(w => w.conversationId && w.conversationId === e.conversationId)
-        );
-        if (wipReply) {
-          const matchedWip = wipList.find(w => w.conversationId === wipReply.conversationId);
-          const wipSubject = matchedWip?.subject || wipReply.subject || '';
-          showToast(`↩ Store replied on: "${wipSubject}"`, 'ok');
-          selectEmail({ ...wipReply, parsed: matchedWip?.parsed || null, storeCode: wipReply.storeCode || matchedWip?.storeCode || '' });
+  const mergeInbox = (existing, incoming, isIncremental) => {
+    if (!isIncremental) return incoming;
+    const map = new Map(existing.map(e => [e.id, e]));
+    incoming.forEach(e => map.set(e.id, e));
+    return [...map.values()].sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt));
+  };
+
+  const fetchEmails = async (tab, { silent = false, delta = false } = {}) => {
+    const folder = tab || activeTab;
+    if (!silent) { setFetching(true); setSelected(null); setParsed(null); }
+    try {
+      const res = folder === 'sent'
+        ? await vmm.fetchSent()
+        : await vmm.fetchInbox({ deltaMode: delta });
+
+      const fetched = res.emails || [];
+      const isIncremental = !!res.isIncremental;
+
+      if (folder === 'sent') {
+        setSentEmails(fetched);
+      } else {
+        // Always keep prev visible during merge; on full refresh, replace with new set but keep prev until done
+        setInboxEmails(prev => {
+          const merged = mergeInbox(isIncremental ? prev : [], fetched, isIncremental);
+          try { sessionStorage.setItem('vmm_inbox_list', JSON.stringify(merged)); } catch {}
+          return merged;
+        });
+      }
+
+      if (!silent) {
+        if (!fetched.length && !isIncremental) showToast(`No emails in ${folder === 'sent' ? 'Sent' : 'Inbox'}`, 'info');
+        else if (folder !== 'sent') {
+          const wipReplyCount = fetched.filter(e =>
+            e.conversationId && wipList.some(w => w.conversationId && w.conversationId === e.conversationId)
+          ).length;
+          if (wipReplyCount > 0) showToast(`↩ ${wipReplyCount} WIP case${wipReplyCount > 1 ? 's' : ''} have new replies`, 'ok');
         }
       }
     } catch {
-      showToast('Could not fetch emails. Please try again.', 'err');
-    } finally { setFetching(false); }
+      if (!silent) showToast('Could not fetch emails. Please try again.', 'err');
+    } finally {
+      if (!silent) setFetching(false);
+    }
   };
+
+  // Live delta polling every 30s on inbox tab
+  useEffect(() => {
+    if (activeTab !== 'inbox') { clearInterval(pollRef.current); return; }
+    pollRef.current = setInterval(() => fetchEmails('inbox', { silent: true, delta: true }), POLL_MS);
+    return () => clearInterval(pollRef.current);
+  }, [activeTab, wipList]); // eslint-disable-line
 
   const runSearch = async (q) => {
     const query = (q || searchQuery).trim();
     if (!query) return;
     setSearching(true);
     setSearchMode(true);
-    setEmails([]);
+    setInboxEmails([]);
     setSelected(null);
     setParsed(null);
     try {
       const res = await vmm.searchEmails(query);
       const found = res.emails || [];
-      setEmails(found);
+      setInboxEmails(found);
       if (!found.length) showToast('No emails found', 'info');
     } catch {
       showToast('Search failed. Please try again.', 'err');
@@ -218,8 +273,6 @@ export default function EmailComplaints() {
     fetchEmails('inbox');
   };
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchEmails('inbox'); }, []);
 
   // Close email popup on ESC
   useEffect(() => {
@@ -228,12 +281,51 @@ export default function EmailComplaints() {
     return () => document.removeEventListener('keydown', h);
   }, []);
 
+  // Safety net: if Full View opens and thread isn't loaded yet, fetch it now
+  useEffect(() => {
+    if (!emailModal?.conversationId) return;
+    if (threadMessages.length > 0 || threadLoading) return;
+    setThreadLoading(true);
+    vmm.fetchThread(emailModal.conversationId)
+      .then(res => {
+        const msgs = res.messages || [];
+        setThreadMessages(msgs);
+        if (msgs.length === 0) return;
+        const OWN = 'vmm.helpdesk@openmind.in';
+        const sorted = [...msgs].sort((a, b) => new Date(a.receivedDateTime) - new Date(b.receivedDateTime));
+        const originalFrom = sorted[0]?.from;
+        if (originalFrom && originalFrom.toLowerCase() !== OWN) setReplyTo([originalFrom]);
+        const allCCs = new Set();
+        msgs.forEach(m => (m.cc || '').split(',').map(c => c.trim()).filter(Boolean).forEach(cc => {
+          if (cc.toLowerCase() !== OWN && cc.toLowerCase() !== (originalFrom || '').toLowerCase()) allCCs.add(cc);
+        }));
+        setReplyCc([...allCCs]);
+      })
+      .catch(() => {})
+      .finally(() => setThreadLoading(false));
+  }, [emailModal?.conversationId]); // eslint-disable-line
+
   // Fetch full conversation thread whenever a new email is selected
   useEffect(() => {
     if (!selected?.conversationId) { setThreadMessages([]); return; }
     setThreadLoading(true);
     vmm.fetchThread(selected.conversationId)
-      .then(res => setThreadMessages(res.messages || []))
+      .then(res => {
+        const msgs = res.messages || [];
+        setThreadMessages(msgs);
+        if (msgs.length === 0) return;
+        const OWN = 'vmm.helpdesk@openmind.in';
+        const sorted = [...msgs].sort((a, b) => new Date(a.receivedDateTime) - new Date(b.receivedDateTime));
+        // TO = original sender (first message FROM, excluding our own address)
+        const originalFrom = sorted[0]?.from;
+        if (originalFrom && originalFrom.toLowerCase() !== OWN) setReplyTo([originalFrom]);
+        // CC = all unique CCs across every message in thread (excluding our own address and original sender)
+        const allCCs = new Set();
+        msgs.forEach(m => (m.cc || []).forEach(cc => {
+          if (cc && cc.toLowerCase() !== OWN && cc.toLowerCase() !== (originalFrom || '').toLowerCase()) allCCs.add(cc);
+        }));
+        setReplyCc([...allCCs]);
+      })
       .catch(() => setThreadMessages([]))
       .finally(() => setThreadLoading(false));
   }, [selected?.conversationId]); // eslint-disable-line
@@ -258,21 +350,42 @@ export default function EmailComplaints() {
     return () => clearTimeout(t);
   }, [parsedEdits.employeeCode]); // eslint-disable-line
 
+  // AMC vendor lookup — fires when contractType switches to AMC and product + store are known
+  useEffect(() => {
+    if (contractType !== 'AMC' || !parsed) { return; }
+    const storeCode   = parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode || '';
+    const productName = parsedEdits.productName || '';
+    if (!storeCode || !productName) return;
+    setAmcLookup('loading');
+    vmm.getAmcVendor(storeCode, productName)
+      .then(res => {
+        if (res.found) {
+          setParsedEdits(prev => ({ ...prev, vendorName: res.vendor }));
+          setAmcLookup('found');
+        } else {
+          setAmcLookup('not-found');
+        }
+      })
+      .catch(() => setAmcLookup('not-found'));
+  }, [contractType]); // eslint-disable-line
+
   const switchTab = (tab) => {
     if (tab === activeTab) return;
     setActiveTab(tab);
     setSelected(null);
     setParsed(null);
-    if (tab !== 'wip') fetchEmails(tab);
-    // Silently refresh inbox in background when switching to WIP so reply counts are fresh
-    else fetchEmails('inbox');
+    if (tab === 'sent') fetchEmails('sent');
   };
 
-  // Reply counts: how many inbox emails match each WIP's conversationId
+  // Reply counts: inbox emails with the same conversationId as a WIP, but NOT the original email and NOT our own sent messages
+  const OWN_ADDR = 'vmm.helpdesk@openmind.in';
   const wipReplyCounts = {};
-  emails.forEach(e => {
+  inboxEmails.forEach(e => {
     if (!e.conversationId) return;
-    const match = wipList.find(w => w.conversationId && w.conversationId === e.conversationId);
+    if ((e.fromAddr || '').toLowerCase() === OWN_ADDR) return; // skip our own sent messages appearing in inbox
+    const match = wipList.find(w =>
+      w.conversationId && w.conversationId === e.conversationId && w.id !== e.id // exclude the original WIP email itself
+    );
     if (match) wipReplyCounts[match.id] = (wipReplyCounts[match.id] || 0) + 1;
   });
   const totalWipReplies = Object.values(wipReplyCounts).reduce((s, n) => s + n, 0);
@@ -282,17 +395,20 @@ export default function EmailComplaints() {
     setParsed(null);
     setReplyBody('');
     setActiveAction(null);
-    setUpdateForm({ complaintId: email.complaintId || '', remarks: '', newStatus: '', newEdc: '' });
+    setUpdateForm({ complaintId: email.complaintId || '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' }); setUpdateAction(null); setFoundComplaint(null);
     // Restore cached attachments so the Load button doesn't reappear after refresh
     const cached = email.id ? localStorage.getItem(`vmm_attach_${email.id}`) : null;
     setAttachmentData(cached ? JSON.parse(cached) : null);
-    // Default reply-to = the email sender; CC starts empty
+    // Default reply-to = sender; CC pre-filled from original email
     setReplyTo(email.fromAddr ? [email.fromAddr] : []);
-    setReplyCc([]);
+    setReplyCc(Array.isArray(email.cc) ? email.cc.filter(Boolean) : []);
     setToInput('');
     setCcInput('');
     setShowReplyEditor(false);
     setQuantity(1);
+    setContractType('');
+    setVendorEmail('');
+    setAmcLookup('idle');
     setThreadMessages([]);
 
     // WIP email — restore previously parsed fields so agent can edit and log directly
@@ -305,7 +421,7 @@ export default function EmailComplaints() {
       setParsedEdits({
         storeCode:       p.storeCode || email.storeCode || '',
         productName:     matchedProduct?.name   || p.productName     || '',
-        vendorName:      matchedProduct?.vendor || p.vendorName      || '',
+        vendorName:      p.vendorName      || '',
         natureOfProblem: matchedNature?.nature  || p.natureOfProblem || '',
         complaintType:   matchedNature?.type    || p.complaintType   || '',
         employeeCode:    p.employeeCode    || '',
@@ -356,6 +472,20 @@ export default function EmailComplaints() {
         storeCode:  selected.storeCode,
         templates,
         natures:    natures.map(n => ({ nature: n.nature, type: n.type })),
+        // Unique product names so AI picks from the real list (e.g. "Server room AC" → "AC")
+        productNames: [...new Set(products.map(p => p.name))],
+        // Pass currently confirmed values — backend will not overwrite these
+        // Employee code is only locked if it passes format validation (VMM+3 digits OR 5-7 digits)
+        lockedFields: parsedEdits ? {
+          storeCode:       parsedEdits.storeCode       || '',
+          employeeCode:    (/^VMM\d{3}$|^\d{5,7}$/.test(parsedEdits.employeeCode || '')) ? parsedEdits.employeeCode : '',
+          employeeName:    parsedEdits.employeeName     || '',
+          contactNumber:   parsedEdits.contactNumber    || '',
+          productLocation: parsedEdits.productLocation  || '',
+          productName:     parsedEdits.productName      || '',
+          natureOfProblem: parsedEdits.natureOfProblem  || '',
+          description:     parsedEdits.description      || '',
+        } : {},
       });
       // Employee — lookup from code if present; clear if not
       if (!res.employeeCode) {
@@ -392,17 +522,17 @@ export default function EmailComplaints() {
       const matchedProduct = findBestByText(products, res.productName || '', ['name']);
       // Nature — nearest match from real natures list
       const matchedNature  = findBestByText(natures,  res.natureOfProblem || '', ['nature']);
-      setParsedEdits({
-        storeCode:       res.storeCode || selected?.storeCode || '',
-        productName:     matchedProduct?.name    || '',
-        vendorName:      matchedProduct?.vendor  || '',
-        natureOfProblem: matchedNature?.nature   || '',
-        complaintType:   matchedNature?.type     || '',
-        employeeCode:    res.employeeCode    || '',
-        contactNumber:   res.contactNumber   || '',
-        productLocation: res.productLocation || '',
-        description:     res.description     || '',
-      });
+      setParsedEdits(prev => ({
+        storeCode:       res.storeCode       || selected?.storeCode    || prev?.storeCode       || '',
+        productName:     matchedProduct?.name || res.productName       || prev?.productName     || '',
+        vendorName:      res.vendorName      || prev?.vendorName      || '',
+        natureOfProblem: matchedNature?.nature  || res.natureOfProblem || prev?.natureOfProblem || '',
+        complaintType:   matchedNature?.type    || res.complaintType   || prev?.complaintType   || '',
+        employeeCode:    res.employeeCode    || prev?.employeeCode    || '',
+        contactNumber:   res.contactNumber   || prev?.contactNumber   || '',
+        productLocation: res.productLocation || prev?.productLocation || '',
+        description:     res.description     || prev?.description     || '',
+      }));
       setParsed(res);
       setSelectedTemplateId(res.selectedTemplateId || null);
       setQuantity(Math.max(1, Math.min(20, Math.round(Number(res.quantity) || 1))));
@@ -441,9 +571,34 @@ export default function EmailComplaints() {
         storeCode: selected.storeCode || '', receivedAt: selected.receivedAt || '',
         repliedAt: wip.repliedAt, parsed, savedBy: wip.savedBy,
       }).catch(() => {});
-      setEmails(prev => prev.filter(e => e.id !== selected.id));
+      vmm.categorizeEmail(selected.id, ['WIP', 'New CRM']).catch(() => {});
+      setInboxEmails(prev => prev.filter(e => e.id !== selected.id));
       setSelected(null); setParsed(null); setReplyBody('');
       showToast('Reply sent — email saved as WIP', 'ok');
+    } catch {
+      showToast('Failed to send reply', 'err');
+    } finally { setSending(false); }
+  };
+
+  const sendReplyOnly = async () => {
+    if (!replyBody.trim() || !selected) return;
+    setSending(true);
+    try {
+      const html = '<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7">'
+        + replyBody.split('\n').map(l => l.trim() ? `<p style="margin:0 0 8px">${l}</p>` : '<br/>').join('')
+        + '<hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0"/>'
+        + '<p style="font-size:11px;color:#64748b">Open Mind Services Limited — VMM CRM</p></div>';
+      await vmm.sendEmailReply({
+        messageId:      selected.id,
+        conversationId: selected.conversationId || '',
+        subject:        selected.subject || '',
+        htmlBody:       html,
+        body:           replyBody,
+        toRecipients:   replyTo.join(';'),
+        ccRecipients:   replyCc.join(';'),
+      });
+      setSelected(null); setParsed(null); setReplyBody('');
+      showToast('Reply sent', 'ok');
     } catch {
       showToast('Failed to send reply', 'err');
     } finally { setSending(false); }
@@ -491,6 +646,7 @@ export default function EmailComplaints() {
         state:               store.state || '',
         zone:                store.zone || '',
         storeEmail:          store.email || '',
+        smEmail:             store.smEmail || store.email || '',
         fmName:              store.fmName || employee.fmName || '',
         fmEmail:             store.fmEmail || '',
         fmMobile:            store.fmMobile || '',
@@ -507,6 +663,7 @@ export default function EmailComplaints() {
         productType:         product.category || '',
         natureOfComplaint:   nature.nature   || parsedEdits.natureOfProblem || parsed.natureOfProblem || '',
         complaintType:       parsedEdits.complaintType || nature.type || 'Repair',
+        contractType:        contractType || '',
         tatDays:             nature.tatDays  || 7,
         productLocation:     parsedEdits.productLocation || parsed.productLocation || 'See email',
         remarks:             `${parsedEdits.description || parsed.description || ''}${providedText}${attachmentText}`.trim(),
@@ -521,8 +678,9 @@ export default function EmailComplaints() {
         uid: 1,
       };
 
-      // Log one complaint per unit (e.g. 5 ACs = 5 separate complaint numbers)
-      const qty = Math.max(1, Math.min(quantity, 20));
+      // AC: always 1 complaint per store regardless of unit count; other products: one per unit
+      const isACProduct = /\bac\b|air.?cond/i.test((parsedEdits.productName || '').toLowerCase());
+      const qty = isACProduct ? 1 : Math.max(1, Math.min(quantity, 20));
       const allResults = [];
       for (let i = 0; i < qty; i++) {
         const res = await vmm.logComplaint(payload);
@@ -539,27 +697,51 @@ export default function EmailComplaints() {
           + confirmBody.split('\n').map(l => l.trim() ? `<p style="margin:0 0 8px">${l}</p>` : '<br/>').join('')
           + '<hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0"/>'
           + '<p style="font-size:11px;color:#64748b">Open Mind Services Limited — VMM CRM</p></div>';
-        await vmm.sendEmailReply({ messageId: selected.id, conversationId: selected.conversationId || '', subject: selected.subject || '', htmlBody: confirmHtml, body: confirmBody }).catch(() => {});
+        const OWN = 'vmm.helpdesk@openmind.in';
+        const threadCCs = [...new Set(threadMessages.flatMap(m => m.cc || []).filter(cc => cc && cc.toLowerCase() !== OWN))].join(';');
+        // Reply to latest message in thread, not the originally selected one
+        const sortedMsgs = [...threadMessages].sort((a, b) => new Date(b.receivedDateTime) - new Date(a.receivedDateTime));
+        const replyMsgId = sortedMsgs[0]?.id || selected.id;
+        await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, ccRecipients: threadCCs }).catch(() => {});
+        // Tag the reply email and original WIP email as Case Logged
+        vmm.categorizeEmail(replyMsgId, ['Case Logged', 'New CRM']).catch(() => {});
+        // Find WIP by direct id match or conversationId match
+        const wipMatch = wipList.find(w =>
+          w.id === selected.id ||
+          (w.conversationId && selected.conversationId && w.conversationId === selected.conversationId)
+        );
+        const wipIdToResolve = wipMatch?.id || selected.id;
+        if (wipMatch && wipMatch.id !== replyMsgId) {
+          vmm.categorizeEmail(wipMatch.id, ['Case Logged', 'New CRM']).catch(() => {});
+        }
         // Send consolidated escalation email (one email for all units)
         vmm.sendEscalationEmail({
-          storeEmail:  payload.storeEmail  || '',
-          storeName:   payload.storeName   || '',
-          storeCode:   payload.storeCode   || '',
-          vendorName:  payload.vendorName  || '',
-          productName: payload.productName || '',
-          complaints:  allResults.map(r => ({
+          escalationType:    isFMProduct ? 'fm' : 'vendor',
+          storeCode:         payload.storeCode   || '',
+          storeName:         payload.storeName   || '',
+          smEmail:           payload.smEmail     || payload.storeEmail || '',
+          fmEmail:           payload.fmEmail     || '',
+          hoEmail:           hoEmailForProduct,
+          vendorEmail:       vendorEmail         || '',
+          vendorName:        payload.vendorName  || '',
+          productName:       payload.productName || '',
+          contractType:      contractType        || '',
+          complaints: allResults.map(r => ({
             complaintno:     r.complaintno,
             productLocation: payload.productLocation,
+            natureOfProblem: parsedEdits.natureOfProblem || '',
             edcDate:         r.edcDate,
-            type:            'regular',
           })),
         }).catch(() => {});
         claimEmail(selected.id, 'release');
         tagEmail(selected.id, 'logged', `Logged • ${nos} • Agent ${agentId.slice(-4)}`);
-        setWipList(prev => prev.filter(w => w.id !== selected.id));
-        vmm.resolveWip(selected.id).catch(() => {});
+        setWipList(prev => prev.filter(w =>
+          w.id !== wipIdToResolve &&
+          !(selected.conversationId && w.conversationId && w.conversationId === selected.conversationId)
+        ));
+        vmm.resolveWip(wipIdToResolve).catch(() => {});
         // Keep the email visible in the list with its logged tag (restore if it was previously in WIP)
-        setEmails(prev => prev.find(e => e.id === selected.id) ? prev : [{ ...selected, hasStoreCode: !!selected.storeCode }, ...prev]);
+        setInboxEmails(prev => prev.find(e => e.id === selected.id) ? prev : [{ ...selected, hasStoreCode: !!selected.storeCode }, ...prev]);
         setLogSuccess({ results: allResults, payload });
         setSelected(null); setParsed(null); setReplyBody(''); setQuantity(1);
       }
@@ -593,11 +775,43 @@ export default function EmailComplaints() {
 
   const missingRequired = parsed ? (parsed.missingFromTemplate || []) : [];
   const productInList   = products.some(p => p.name.toLowerCase() === parsedEdits.productName.trim().toLowerCase());
+  const isAC = /\bac\b|air.?cond/i.test(parsedEdits.productName || '');
+
+  // Unique product names for dropdown (each row is product+vendor pair, deduplicate by name)
+  const uniqueProducts = [...new Map(products.map(p => [p.name.toLowerCase(), p])).values()];
+
+  // Vendors for the selected product — each products row where name matches = one vendor option
+  const filteredVendors = (() => {
+    const selProd = (parsedEdits.productName || '').toLowerCase().trim();
+    if (!selProd || !products.length) return [];
+    const exact = products.filter(p => p.name.toLowerCase() === selProd);
+    if (exact.length > 0) return exact.map(p => ({ name: p.vendor, email: p.vendorEmail || '' }));
+    // Fuzzy fallback: partial match (removes duplicates by vendor name)
+    const fuzzy = products.filter(p => p.name.toLowerCase().includes(selProd) || selProd.includes(p.name.toLowerCase()));
+    return [...new Map(fuzzy.map(p => [p.vendor.toLowerCase(), { name: p.vendor, email: p.vendorEmail || '' }])).values()];
+  })();
+
+  // HO email from the sheet row for the selected product (falls back to hardcoded constant)
+  const matchedProductRow = products.find(p => p.name.toLowerCase() === (parsedEdits.productName || '').toLowerCase());
+  const hoEmailForProduct = matchedProductRow?.hoEmail || HO_EMAIL;
+
+  // Derive vendor escalation type from product name
+  const prodKey           = (parsedEdits.productName || '').toLowerCase().trim();
+  const productVendorType = AMC_WARRANTY_PRODUCTS.has(prodKey) ? 'amc_warranty'
+    : AMC_ONLY_PRODUCTS.has(prodKey) ? 'amc_only'
+    : 'fm_ho';
+  // Vendor section shown for AMC&Warranty (all contracts) + AMC-Only (AMC contract only)
+  const showVendorSection = productVendorType === 'amc_warranty'
+    || (productVendorType === 'amc_only' && contractType === 'AMC');
+  // FM is the TO recipient when there is no vendor escalation
+  const isFMProduct = !showVendorSection;
+  const effectiveQty = isAC ? 1 : quantity;
   // Can log if: store code present + employee verified (if code was given). Missing template fields are advisory only.
   const storeOk      = !!(parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode);
   const employeeOk   = !parsed?.employeeCode || empLookupStatus === 'found';
   const typeOk       = !!parsedEdits.complaintType;
-  const canLog       = parsed && storeOk && employeeOk && typeOk;
+  const contractOk   = !!contractType;
+  const canLog       = parsed && storeOk && employeeOk && typeOk && contractOk;
 
   const handleTemplateChange = (newId) => {
     setSelectedTemplateId(newId);
@@ -613,6 +827,8 @@ export default function EmailComplaints() {
   const baseEmails = (() => {
     if (activeTab !== 'inbox') return emails;
     let list = [...emails];
+    // Hide emails belonging to open WIP conversations — they show in the WIP tab only
+    list = list.filter(e => !e.conversationId || !wipList.some(w => w.conversationId && w.conversationId === e.conversationId));
     if (readFilter === 'unread') list = list.filter(e => !e.isRead);
     if (readFilter === 'read')   list = list.filter(e =>  e.isRead);
     if (sortOrder  === 'oldest') list.sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt));
@@ -641,9 +857,11 @@ export default function EmailComplaints() {
                     {threadMessages.length} messages in this thread
                   </div>
                 )}
-                {threadMessages.map((msg, i) => {
-                  const isOutbound = msg.from.toLowerCase() !== (emailModal.fromAddr || '').toLowerCase();
+                {[...threadMessages].reverse().map((msg, i) => {
+                  const OWN_MAILBOX = 'vmm.helpdesk@openmind.in';
+                  const isOutbound = msg.from.toLowerCase() === OWN_MAILBOX;
                   const initial = (msg.fromName || msg.from || '?')[0].toUpperCase();
+                  const dt = msg.receivedDateTime || msg.sentDateTime;
                   return (
                     <div key={msg.id || i} className={`ec-thread-msg ${isOutbound ? 'outbound' : 'inbound'}`}>
                       <div className="ec-thread-msg-avatar">{initial}</div>
@@ -654,23 +872,23 @@ export default function EmailComplaints() {
                             {msg.fromName && msg.from && msg.from !== msg.fromName && (
                               <span className="ec-thread-msg-email">&lt;{msg.from}&gt;</span>
                             )}
-                            {i === threadMessages.length - 1 && <span className="ec-thread-latest">Latest</span>}
+                            {i === 0 && <span className="ec-thread-latest">Latest</span>}
                             {isOutbound && <span className="ec-thread-sent-tag">Sent by us</span>}
                           </div>
                           <span className="ec-thread-msg-time">
-                            {new Date(msg.receivedAt).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })}
+                            {dt ? new Date(dt).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}
                           </span>
                         </div>
-                        {msg.to && (
+                        {(msg.toFull || msg.to) && (
                           <div className="ec-thread-recip-row">
                             <span className="ec-thread-recip-label">To:</span>
-                            <span className="ec-thread-recip-val">{msg.to}</span>
+                            <span className="ec-thread-recip-val">{msg.toFull || msg.to}</span>
                           </div>
                         )}
-                        {msg.cc && (
+                        {(msg.ccFull || msg.cc) && (
                           <div className="ec-thread-recip-row">
                             <span className="ec-thread-recip-label">CC:</span>
-                            <span className="ec-thread-recip-val">{msg.cc}</span>
+                            <span className="ec-thread-recip-val">{msg.ccFull || msg.cc}</span>
                           </div>
                         )}
                         <div
@@ -718,9 +936,14 @@ export default function EmailComplaints() {
                 { label: 'Employee Name',     val: resolvedEmpName || parsed?.employeeName,            req: false },
                 { label: 'Contact Number',    val: parsedEdits.contactNumber || parsed?.contactNumber, req: false },
                 { label: 'Product',           val: parsedEdits.productName || parsed?.productName, req: true  },
-                { label: 'Vendor',            val: parsedEdits.vendorName,                   req: false },
+                { label: 'Service Contract',  val: contractType === 'AMC' ? 'Under AMC' : contractType === 'Warranty' ? 'Under Warranty' : contractType === 'NotApplicable' ? 'Not Applicable' : '', req: true },
+                { label: 'Vendor',             val: parsedEdits.vendorName, req: false },
+                ...(vendorEmail ? [
+                  { label: 'Escalation To',    val: vendorEmail, req: false },
+                  { label: 'Escalation CC',    val: isFMProduct ? 'Store Manager + HO + FM' : 'Store Manager + HO', req: false },
+                ] : []),
                 { label: 'Nature of Problem', val: parsedEdits.natureOfProblem || parsed?.natureOfProblem, req: true  },
-                { label: 'Number of Units',   val: quantity,                                 req: true  },
+                ...(!isAC ? [{ label: 'Number of Units', val: quantity, req: true }] : []),
               ].map(({ label, val, req }) => (
                 <div key={label} className={`ec-confirm-row${!val && req ? ' warn' : ''}`}>
                   <span className="ec-confirm-label">{label}</span>
@@ -731,7 +954,7 @@ export default function EmailComplaints() {
             <div className="ec-confirm-actions">
               <button className="ec-confirm-cancel" onClick={() => setConfirmModal(false)}>Go Back &amp; Edit</button>
               <button className="ec-confirm-ok" onClick={() => { setConfirmModal(false); logComplaint(); }}>
-                {quantity > 1 ? `Confirm — Log ${quantity} Complaints` : 'Confirm — Log Complaint'}
+                {effectiveQty > 1 ? `Confirm — Log ${effectiveQty} Complaints` : 'Confirm — Log Complaint'}
               </button>
             </div>
           </div>
@@ -854,20 +1077,13 @@ export default function EmailComplaints() {
             </div>
           )}
 
-          {/* Tag filter bar */}
-          {!searchMode && (wipList.length > 0 || emails.some(e => emailTags[e.id]?.type === 'logged')) && (
+          {/* Tag filter bar — Logged only */}
+          {!searchMode && emails.some(e => emailTags[e.id]?.type === 'logged') && (
             <div className="ec-tag-filter-bar">
               <button className={`ec-tag-filter-btn ${tagFilter === null ? 'active' : ''}`} onClick={() => setTagFilter(null)}>All</button>
-              {wipList.length > 0 && (
-                <button className={`ec-tag-filter-btn wip ${tagFilter === 'wip' ? 'active' : ''}`} onClick={() => setTagFilter(tagFilter === 'wip' ? null : 'wip')}>
-                  WIP<span className="ec-filter-count">{wipList.length}</span>
-                </button>
-              )}
-              {emails.some(e => emailTags[e.id]?.type === 'logged') && (
-                <button className={`ec-tag-filter-btn logged ${tagFilter === 'logged' ? 'active' : ''}`} onClick={() => setTagFilter(tagFilter === 'logged' ? null : 'logged')}>
-                  Logged<span className="ec-filter-count">{emails.filter(e => emailTags[e.id]?.type === 'logged').length}</span>
-                </button>
-              )}
+              <button className={`ec-tag-filter-btn logged ${tagFilter === 'logged' ? 'active' : ''}`} onClick={() => setTagFilter(tagFilter === 'logged' ? null : 'logged')}>
+                Logged<span className="ec-filter-count">{emails.filter(e => emailTags[e.id]?.type === 'logged').length}</span>
+              </button>
             </div>
           )}
 
@@ -920,44 +1136,6 @@ export default function EmailComplaints() {
               </>
             )}
 
-            {/* ── INBOX / SENT: WIP strip at top ── */}
-            {activeTab !== 'wip' && tagFilter !== 'logged' && wipList.length > 0 && (
-              <div className="ec-section-label">WIP — Awaiting Reply</div>
-            )}
-            {activeTab !== 'wip' && tagFilter !== 'logged' && wipList.map(w => {
-              const replyCount = wipReplyCounts[w.id] || 0;
-              return (
-                <div key={w.id} className={`ec-email-row wip ${selected?.id === w.id ? 'active' : ''} ${replyCount > 0 ? 'has-reply' : ''}`}
-                  onClick={() => selectEmail({ ...w, body: '' })}>
-                  <div className="ec-email-store">
-                    {w.storeCode ? <span className="ec-store-code">{w.storeCode}</span> : '?'}
-                    <span className="ec-wip-tag">WIP</span>
-                    {w.savedBy && <span className="ec-wip-agent-tag">{w.savedBy}</span>}
-                    {replyCount > 0 && <span className="ec-wip-reply-count">↩ {replyCount}</span>}
-                    <span className="ec-email-time">{fmtTime(w.repliedAt)}</span>
-                    <button className="ec-wip-dismiss-x"
-                      title="Dismiss WIP"
-                      onClick={e => {
-                        e.stopPropagation();
-                        if (!window.confirm(`Dismiss WIP for "${w.subject}"?\n\nOnly confirm if this case is no longer pending.`)) return;
-                        setWipList(prev => prev.filter(x => x.id !== w.id));
-                        vmm.resolveWip(w.id).catch(() => {});
-                        if (selected?.id === w.id) { setSelected(null); setParsed(null); }
-                        showToast('WIP dismissed', 'info');
-                      }}>×</button>
-                  </div>
-                  <div className="ec-email-subject">{w.subject}</div>
-                  <div className="ec-email-meta ec-wip-meta">
-                    {w.parsed?.employeeCode && <span className="ec-wip-detail">Emp: {w.parsed.employeeCode}</span>}
-                    {w.parsed?.productName  && <span className="ec-wip-detail">{w.parsed.productName}</span>}
-                    {!w.parsed?.employeeCode && !w.parsed?.productName && <span>{w.fromAddr}</span>}
-                    {(w.parsed?.missingFromTemplate || []).length > 0 && (
-                      <span className="ec-wip-missing">Missing: {w.parsed.missingFromTemplate.slice(0, 2).map(f => camelToLabel(f)).join(', ')}{w.parsed.missingFromTemplate.length > 2 ? ` +${w.parsed.missingFromTemplate.length - 2}` : ''}</span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
 
             {tagFilter !== 'wip' && baseEmails.length > 0 && (() => {
               const filtered = tagFilter === 'logged' ? baseEmails.filter(e => emailTags[e.id]?.type === 'logged') : baseEmails;
@@ -967,7 +1145,7 @@ export default function EmailComplaints() {
                 </div>
               ) : null;
             })()}
-            {activeTab !== 'wip' && emails.length === 0 && wipList.length === 0 && (
+            {activeTab !== 'wip' && emails.length === 0 && (
               <div className="ec-empty">
                 Click Refresh to load emails from VMM2.
               </div>
@@ -1248,90 +1426,186 @@ export default function EmailComplaints() {
               {/* ── Update Case Form ── */}
               {activeAction === 'update-case' && (
                 <div className="ec-update-form">
-                  <div className="ec-update-title">Log Activity on Existing Complaint</div>
+                  <div className="ec-update-title">Update Existing Complaint</div>
+
+                  {/* Complaint Number + Search */}
                   <div className="ec-update-row">
                     <label>Complaint Number</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. 26052317667 or EL-26042916099"
-                      value={updateForm.complaintId}
-                      onChange={e => setUpdateForm(f => ({ ...f, complaintId: e.target.value }))}
-                    />
-                  </div>
-                  <div className="ec-update-row">
-                    <label>Remarks / Update</label>
-                    <textarea
-                      rows={3}
-                      placeholder="Summarise the update from this email…"
-                      value={updateForm.remarks}
-                      onChange={e => setUpdateForm(f => ({ ...f, remarks: e.target.value }))}
-                    />
-                  </div>
-                  <div className="ec-update-row-2">
-                    <div>
-                      <label>Status</label>
-                      <select value={updateForm.newStatus} onChange={e => setUpdateForm(f => ({ ...f, newStatus: e.target.value }))}>
-                        <option value="">— No change —</option>
-                        <option>Open</option>
-                        <option>Escalated</option>
-                        <option>Not Connected</option>
-                        <option>Partially Closed</option>
-                        <option>Closed</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label>New EDC (optional)</label>
+                    <div style={{ display: 'flex', gap: 8 }}>
                       <input
-                        type="date"
-                        value={updateForm.newEdc}
-                        onChange={e => setUpdateForm(f => ({ ...f, newEdc: e.target.value }))}
+                        type="text"
+                        placeholder="e.g. 26052317667 or EL-26042916099"
+                        value={updateForm.complaintId}
+                        style={{ flex: 1 }}
+                        onChange={e => { setUpdateForm(f => ({ ...f, complaintId: e.target.value })); setUpdateAction(null); setFoundComplaint(null); }}
+                        onKeyDown={async e => {
+                          if (e.key !== 'Enter' || !updateForm.complaintId.trim()) return;
+                          setSearchingComplaint(true); setFoundComplaint(null); setUpdateAction(null);
+                          try {
+                            const res = await vmm.getComplaintDetail(updateForm.complaintId.trim());
+                            setFoundComplaint(res?.complaint ? res : { notFound: true });
+                          } catch { setFoundComplaint({ notFound: true }); }
+                          finally { setSearchingComplaint(false); }
+                        }}
+                      />
+                      <button
+                        style={{ padding: '0 14px', background: '#334155', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}
+                        disabled={searchingComplaint || !updateForm.complaintId.trim()}
+                        onClick={async () => {
+                          setSearchingComplaint(true); setFoundComplaint(null); setUpdateAction(null);
+                          try {
+                            const res = await vmm.getComplaintDetail(updateForm.complaintId.trim());
+                            setFoundComplaint(res?.complaint ? res : { notFound: true });
+                          } catch { setFoundComplaint({ notFound: true }); }
+                          finally { setSearchingComplaint(false); }
+                        }}>
+                        {searchingComplaint ? '…' : 'Search'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Search result */}
+                  {foundComplaint?.notFound && (
+                    <div style={{ padding: '8px 12px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, fontSize: 12, color: '#dc2626', marginBottom: 8 }}>
+                      Complaint not found — check the number and try again.
+                    </div>
+                  )}
+                  {foundComplaint?.complaint && (
+                    <div style={{ padding: '10px 12px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 6, fontSize: 12, marginBottom: 8 }}>
+                      <div style={{ fontWeight: 700, color: '#15803d', marginBottom: 4 }}>✓ Complaint Found</div>
+                      <div style={{ color: '#374151' }}><strong>Store:</strong> {foundComplaint.complaint.storecode} — {foundComplaint.complaint.storename}</div>
+                      <div style={{ color: '#374151' }}><strong>Product:</strong> {foundComplaint.complaint.productname}</div>
+                      <div style={{ color: '#374151' }}><strong>Status:</strong> {foundComplaint.complaint.status} &nbsp;|&nbsp; <strong>EDC:</strong> {foundComplaint.complaint.edcdate || '—'}</div>
+                    </div>
+                  )}
+
+                  {/* Action selector — only after complaint is confirmed found */}
+                  {foundComplaint?.complaint && (
+                    <div className="ec-update-actions" style={{ display: 'flex', gap: 8, margin: '10px 0' }}>
+                      {[
+                        { key: 'update',   label: '✏ Update',  style: { background: '#475569' } },
+                        { key: 'escalate', label: '↑ Escalate', style: { background: '#d97706' } },
+                        { key: 'close',    label: '✓ Close',   style: { background: '#16a34a' } },
+                      ].map(({ key, label, style }) => (
+                        <button key={key}
+                          onClick={() => setUpdateAction(updateAction === key ? null : key)}
+                          style={{ ...style, color: '#fff', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer', fontWeight: 600, fontSize: 13, opacity: updateAction && updateAction !== key ? 0.45 : 1 }}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Remarks — shown for all actions */}
+                  {updateAction && (
+                    <div className="ec-update-row">
+                      <label>Remarks</label>
+                      <textarea
+                        rows={3}
+                        placeholder="Summarise the update from this email…"
+                        value={updateForm.remarks}
+                        onChange={e => setUpdateForm(f => ({ ...f, remarks: e.target.value }))}
                       />
                     </div>
-                  </div>
-                  <button
-                    className="ec-submit-update-btn"
-                    disabled={loggingActivity || !updateForm.complaintId.trim()}
-                    onClick={async () => {
-                      setLoggingActivity(true);
-                      try {
-                        const res = await vmm.logEmailActivity({
-                          complaintNo: updateForm.complaintId.trim(),
-                          remarks:     updateForm.remarks,
-                          newStatus:   updateForm.newStatus,
-                          newEdc:      updateForm.newEdc,
-                          uid:         1,
-                        });
-                        if (res.found) {
-                          tagEmail(selected.id, 'updated', `Updated • ${updateForm.complaintId.trim()}`);
-                          showToast(`Activity logged on ${updateForm.complaintId}`, 'ok');
-                          setActiveAction(null);
-                          setUpdateForm({ complaintId: '', remarks: '', newStatus: '', newEdc: '' });
-                        } else {
-                          showToast(res.message || 'Complaint not found', 'err');
-                        }
-                      } catch { showToast('Could not log activity', 'err'); }
-                      finally { setLoggingActivity(false); }
-                    }}
-                  >
-                    {loggingActivity ? 'Saving…' : 'Save Activity Log'}
-                  </button>
+                  )}
+
+                  {/* Escalate fields */}
+                  {updateAction === 'escalate' && (
+                    <div className="ec-update-row-2">
+                      <div>
+                        <label>Escalation Level</label>
+                        <select value={updateForm.escalationLevel} onChange={e => setUpdateForm(f => ({ ...f, escalationLevel: e.target.value }))}>
+                          <option value="">— Select —</option>
+                          <option>Level 1</option>
+                          <option>Level 2</option>
+                          <option>Level 3</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label>New EDC</label>
+                        <input type="date" value={updateForm.newEdc} onChange={e => setUpdateForm(f => ({ ...f, newEdc: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label>Reason for Delay</label>
+                        <select value={updateForm.reasonForDelay} onChange={e => setUpdateForm(f => ({ ...f, reasonForDelay: e.target.value }))}>
+                          <option value="">— Select —</option>
+                          <option>Delay From Vendor Side</option>
+                          <option>Delay From HO Team</option>
+                          <option>Delay From Store Side</option>
+                          <option>Part Unavailable</option>
+                          <option>Other</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Submit */}
+                  {updateAction && (
+                    <button
+                      className="ec-submit-update-btn"
+                      disabled={loggingActivity || !updateForm.complaintId.trim() || !updateForm.remarks.trim()}
+                      onClick={async () => {
+                        setLoggingActivity(true);
+                        try {
+                          const payload = {
+                            complaintNo: updateForm.complaintId.trim(),
+                            remarks:     updateForm.remarks,
+                            uid:         1,
+                          };
+                          if (updateAction === 'escalate') {
+                            payload.newStatus       = 'Escalated';
+                            payload.newEdc          = updateForm.newEdc;
+                            payload.escalationLevel = updateForm.escalationLevel;
+                            payload.reasonForDelay  = updateForm.reasonForDelay;
+                          } else if (updateAction === 'close') {
+                            payload.newStatus = 'Closed';
+                          }
+                          const res = await vmm.logEmailActivity(payload);
+                          if (res.found) {
+                            tagEmail(selected.id, 'updated', `${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'} • ${updateForm.complaintId.trim()}`);
+                            showToast(`${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'}: ${updateForm.complaintId.trim()}`, 'ok');
+                            setActiveAction(null);
+                            setUpdateForm({ complaintId: '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' }); setUpdateAction(null);
+                          } else {
+                            showToast(res.message || 'Complaint not found', 'err');
+                          }
+                        } catch { showToast('Could not log activity', 'err'); }
+                        finally { setLoggingActivity(false); }
+                      }}
+                    >
+                      {loggingActivity ? 'Saving…'
+                        : updateAction === 'escalate' ? '↑ Escalate Complaint'
+                        : updateAction === 'close'    ? '✓ Close Complaint'
+                        : '✏ Save Update'}
+                    </button>
+                  )}
                 </div>
               )}
 
-              {/* Email Body — uses HTML body if available (shows full thread structure) */}
-              {(selected.bodyHtml || selected.body) && (
-                <div
-                  className="ec-email-body"
-                  dangerouslySetInnerHTML={{
-                    __html: (selected.bodyHtml || selected.body)
-                      .replace(/<script[\s\S]*?<\/script>/gi, '')
-                      .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
-                      .replace(/<object[\s\S]*?<\/object>/gi, '')
-                      .replace(/on\w+="[^"]*"/gi, '')
-                      .replace(/on\w+='[^']*'/gi, '')
-                  }}
-                />
-              )}
+              {/* Email Body — shows sanitised HTML body when available; falls back to plain preview + prompt to open Full View */}
+              <div className="ec-email-body">
+                {(selected.bodyHtml || selected.body) ? (
+                  <div
+                    dangerouslySetInnerHTML={{
+                      __html: (selected.bodyHtml || selected.body)
+                        .replace(/<script[\s\S]*?<\/script>/gi, '')
+                        .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+                        .replace(/<object[\s\S]*?<\/object>/gi, '')
+                        .replace(/on\w+="[^"]*"/gi, '')
+                        .replace(/on\w+='[^']*'/gi, '')
+                    }}
+                  />
+                ) : (
+                  <>
+                    <p style={{ whiteSpace: 'pre-wrap', margin: 0, color: '#374151', lineHeight: 1.7 }}>
+                      {selected.bodyPreview || '(No preview available)'}
+                    </p>
+                    <p style={{ marginTop: 12, fontSize: 12, color: '#94a3b8' }}>
+                      Click <strong>⤢ Full View</strong> above to read the complete email thread.
+                    </p>
+                  </>
+                )}
+              </div>
 
               {/* AI Parse — only when Log New Complaint is selected */}
               {activeAction === 'log-new' && !parsed && (
@@ -1418,12 +1692,15 @@ export default function EmailComplaints() {
                           <div key={key} className={`ec-field ${productInList ? 'filled' : 'missing-req'}`}>
                             <span className="ec-field-label">Product Name<span className="req"> *</span></span>
                             <SearchableSelect
-                              options={products}
+                              options={uniqueProducts}
                               value={parsedEdits.productName}
                               placeholder="Search product…"
                               getLabel={p => p.name}
-                              getSub={p => p.vendor || ''}
-                              onChange={p => setParsedEdits(prev => ({ ...prev, productName: p.name, vendorName: p.vendor || prev.vendorName }))}
+                              getSub={p => {
+                                const cnt = products.filter(r => r.name.toLowerCase() === p.name.toLowerCase()).length;
+                                return `${p.category || ''}${cnt > 1 ? ` · ${cnt} vendors` : ''}`;
+                              }}
+                              onChange={p => { setParsedEdits(prev => ({ ...prev, productName: p.name, vendorName: '' })); setContractType(''); setAmcLookup('idle'); setVendorEmail(''); }}
                             />
                             {parsedEdits.productName && !productInList && (
                               <span style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>⚠ Not in product list</span>
@@ -1525,16 +1802,134 @@ export default function EmailComplaints() {
                         </div>
                       );
                     })}
-                    {/* Vendor — auto-filled from selected product, but editable in case it's wrong */}
-                    <div className={`ec-field ${parsedEdits.vendorName ? 'filled' : 'missing'}`}>
-                      <span className="ec-field-label">Vendor</span>
-                      <input
+                    {/* Service Contract — AMC/Warranty/Not Applicable; AMC triggers live vendor lookup */}
+                    <div className={`ec-field ${contractType ? 'filled' : 'missing'}`}>
+                      <span className="ec-field-label">Service Contract<span className="req"> *</span></span>
+                      <select
                         className="ec-field-input"
-                        placeholder="Enter vendor name…"
-                        value={parsedEdits.vendorName}
-                        onChange={e => setParsedEdits(prev => ({ ...prev, vendorName: e.target.value }))}
-                      />
+                        value={contractType}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setContractType(val);
+                          setAmcLookup('idle');
+                          if (val !== 'AMC') setVendorEmail('');
+                          if (val !== 'AMC') setParsedEdits(prev => ({ ...prev, vendorName: '' }));
+                        }}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <option value="">— Select contract type —</option>
+                        <option value="AMC">Under AMC</option>
+                        {productVendorType === 'amc_warranty' && (
+                          <option value="Warranty">Under Warranty</option>
+                        )}
+                        <option value="NotApplicable">Not Applicable</option>
+                      </select>
+                      {productVendorType === 'fm_ho' && contractType && (
+                        <span style={{ fontSize: 10, color: '#7c3aed', marginTop: 3, display: 'block' }}>
+                          ⚡ This product escalates to FM &amp; HO Team
+                        </span>
+                      )}
+                      {contractType === 'AMC' && amcLookup === 'loading' && (
+                        <span style={{ fontSize: 10, color: '#7c3aed', marginTop: 2 }}>Looking up AMC vendor…</span>
+                      )}
+                      {contractType === 'AMC' && amcLookup === 'not-found' && (
+                        <span style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>⚠ No AMC vendor on record — enter manually below</span>
+                      )}
                     </div>
+                    {/* Vendor — only shown for products with vendor escalation */}
+                    {!showVendorSection && contractType && (
+                      <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f0fdf4', marginTop: 4, marginBottom: 4 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 8 }}>
+                          ⚡ Escalation — FM &amp; HO Team
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                          <div style={{ fontSize: 12, color: '#15803d', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ background: '#dcfce7', color: '#166534', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>TO</span>
+                            Facility Manager email (auto from store lookup)
+                          </div>
+                          {hoEmailForProduct && (
+                            <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
+                              {hoEmailForProduct} (HO)
+                            </div>
+                          )}
+                          <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
+                            Store Manager (auto)
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {showVendorSection && <div className={`ec-field ${parsedEdits.vendorName ? 'filled' : 'missing'}`}>
+                      <span className="ec-field-label">Vendor</span>
+                      <SearchableSelect
+                        options={filteredVendors}
+                        value={parsedEdits.vendorName}
+                        placeholder={filteredVendors.length ? 'Search vendor…' : 'Enter vendor name…'}
+                        getLabel={v => v.name}
+                        getSub={v => v.email ? `📧 ${v.email}` : (v.products?.length ? v.products.slice(0,2).join(', ') : '')}
+                        onChange={v => {
+                          setParsedEdits(prev => ({ ...prev, vendorName: v.name }));
+                          if (v.email) setVendorEmail(v.email); // auto-fill To for all contract types
+                        }}
+                        onFreeText={text => setParsedEdits(prev => ({ ...prev, vendorName: text }))}
+                      />
+                    </div>}
+                    {/* Escalation email — shown once a vendor is selected, for all contract types */}
+                    {showVendorSection && parsedEdits.vendorName && (
+                      <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f5f3ff', marginTop: 4 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 10 }}>
+                          ✉ Escalation Email
+                        </div>
+
+                        {/* To — vendor email, editable */}
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+                            To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(Vendor)</span>
+                          </div>
+                          <input
+                            className="ec-field-input"
+                            type="email"
+                            placeholder="vendor@email.com"
+                            value={vendorEmail}
+                            onChange={e => setVendorEmail(e.target.value.trim())}
+                            style={{ background: '#fff' }}
+                          />
+                          {!vendorEmail && (
+                            <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 3 }}>⚠ Enter vendor email to send escalation</div>
+                          )}
+                        </div>
+
+                        {/* CC — auto-filled, read-only preview */}
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
+                            CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(auto)</span>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>SM</span>
+                              Store Manager email (from store lookup)
+                            </div>
+                            {hoEmailForProduct && hoEmailForProduct !== HO_EMAIL && (
+                              <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>HO</span>
+                                {hoEmailForProduct}
+                              </div>
+                            )}
+                            {(!hoEmailForProduct || hoEmailForProduct === HO_EMAIL) && (
+                              <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>HO</span>
+                                HO email (from product data)
+                              </div>
+                            )}
+                            <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ background: '#dcfce7', color: '#166534', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>FM</span>
+                              Facility Manager email (from store lookup)
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     {/* Nature of Problem — searchable fixed list */}
                     {(() => {
                       const natureInList = natures.some(n => n.nature === parsedEdits.natureOfProblem);
@@ -1570,16 +1965,19 @@ export default function EmailComplaints() {
                         </div>
                       );
                     })()}
-                    {/* Number of Units — editable, sits in the grid like other fields */}
+                    {/* Number of Units — disabled for AC (1 complaint logs for entire store) */}
                     <div className="ec-field filled">
                       <span className="ec-field-label">Number of Units</span>
                       <input
                         type="number"
                         className="ec-field-qty-input"
                         min={1} max={20}
-                        value={quantity}
-                        onChange={e => setQuantity(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                        value={isAC ? 1 : quantity}
+                        disabled={isAC}
+                        onChange={e => !isAC && setQuantity(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                        style={isAC ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
                       />
+                      {isAC && <span style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>1 complaint per store for all AC units</span>}
                     </div>
                   </div>
 
@@ -1617,7 +2015,7 @@ export default function EmailComplaints() {
                   <div className="ec-parsed-actions">
                     {canLog && (
                       <button className="ec-log-btn" onClick={() => setConfirmModal(true)} disabled={logging}>
-                        {logging ? 'Logging…' : quantity > 1 ? `✓ Log ${quantity} Complaints` : '✓ Log Complaint'}
+                        {logging ? 'Logging…' : effectiveQty > 1 ? `✓ Log ${effectiveQty} Complaints` : '✓ Log Complaint'}
                       </button>
                     )}
                     <button
@@ -1695,9 +2093,15 @@ export default function EmailComplaints() {
                     placeholder="Edit the reply before sending…"
                     style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', lineHeight: '1.6' }}
                   />
-                  <button className="ec-send-btn" onClick={sendReply} disabled={sending || !replyBody.trim()}>
-                    {sending ? 'Sending…' : '✉ Send Reply & Save as WIP'}
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="ec-send-btn" onClick={sendReply} disabled={sending || !replyBody.trim()}>
+                      {sending ? 'Sending…' : '✉ Send & Save as WIP'}
+                    </button>
+                    <button className="ec-send-btn" onClick={sendReplyOnly} disabled={sending || !replyBody.trim()}
+                      style={{ background: '#475569' }} title="Send reply without saving to WIP">
+                      {sending ? 'Sending…' : '✉ Send Only'}
+                    </button>
+                  </div>
                 </div>
               )}
             </>
