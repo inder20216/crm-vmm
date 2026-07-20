@@ -1,0 +1,430 @@
+{
+  "name": "VMM Email - Auto Capture Complaints",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 5 }] }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 352],
+      "id": "email01-node-0001",
+      "name": "Every 5 Minutes"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 20,
+        "filters": {
+          "isRead": false,
+          "folderId": "inbox"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [460, 352],
+      "id": "email01-node-0002",
+      "name": "Get Unread Emails",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [680, 352],
+      "id": "email01-node-0003",
+      "name": "Has Emails?"
+    },
+    {
+      "parameters": { "batchSize": 1, "options": {} },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [900, 260],
+      "id": "email01-node-0004",
+      "name": "One Email at a Time"
+    },
+    {
+      "parameters": {
+        "jsCode": "const email = $input.first().json;\n\n// Extract store code from sender email\n// Pattern: SA06.sm@vishalretail.co.in → SA06\nconst from = email.from?.emailAddress?.address || email.from || '';\nconst storeMatch = from.match(/^([A-Z]{2}\\d{2,3})\\.sm@/i);\nconst storeCode = storeMatch ? storeMatch[1].toUpperCase() : null;\n\nconst subject = email.subject || '';\nconst body    = (email.body?.content || email.bodyPreview || '').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\nconst msgId   = email.id || '';\nconst conversationId = email.conversationId || '';\n\nif (!storeCode) {\n  return [{ json: { skip: true, reason: 'Could not extract store code from sender: ' + from, msgId, conversationId } }];\n}\n\nreturn [{ json: { storeCode, from, subject, body: body.slice(0, 1500), msgId, conversationId, skip: false } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 260],
+      "id": "email01-node-0005",
+      "name": "Extract Store Code"
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst cid = (d.conversationId || '').replace(/'/g, \"''\");\nif (!cid) {\n  return [{ json: { checkQuery: \"SELECT 0 as id, '' as complaintno\", ...d } }];\n}\nconst checkQuery = `SELECT COALESCE(MAX(id), 0) as id, COALESCE(MAX(complaintno), '') as complaintno FROM vmm_complaints WHERE conversationid IS NOT NULL AND conversationid != '' AND conversationid = '${cid}' AND is_deleted = 'No'`;\nreturn [{ json: { checkQuery, ...d } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 260],
+      "id": "email01-prep-query-001",
+      "name": "Prepare Thread Query"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.checkQuery }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1500, 260],
+      "id": "email01-check-db-001",
+      "name": "Check Thread DB",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const emailCtx = $('Extract Store Code').first().json;\nconst rows = $input.all();\nconst first = rows[0]?.json;\nconst existingId = (first?.id && parseInt(first.id) > 0) ? parseInt(first.id) : null;\n\nif (existingId) {\n  return [{ json: { isReply: true, existingComplaintId: existingId, complaintno: first.complaintno || '', ...emailCtx } }];\n}\nreturn [{ json: { isReply: false, ...emailCtx } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1700, 260],
+      "id": "email01-parse-t-001",
+      "name": "Parse Thread Result"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.isReply }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1900, 260],
+      "id": "email01-is-reply-001",
+      "name": "Is Reply Thread?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\nconst body = d.body ? d.body.slice(0, 500) : '(no body)';\nconst subj = d.subject || '';\nconst insertLog = `INSERT INTO vmm_complaintlogs (complaintid, remarks, status, uid, created, is_deleted) VALUES (${d.existingComplaintId}, '${esc(body)} | Source: Email Follow-up | Subject: ${esc(subj)}', 'In Progress', 1, NOW(), 'No')`;\nconst htmlBody = `<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:600px\"><p>Dear Store Team,</p><p>We have received your follow-up on complaint <strong>${d.complaintno}</strong>. Your message has been noted and our team is actively working on the resolution.</p><p>If you require immediate assistance, please contact our helpdesk.</p><hr style=\"margin:16px 0;border:none;border-top:1px solid #e2e8f0\"/><p style=\"font-size:11px;color:#64748b\">VMM CRM — Open Mind Services Limited</p></div>`;\nreturn [{ json: { ...d, insertLog, htmlBody } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2100, 440],
+      "id": "email01-rep-log-001",
+      "name": "Build Reply Log"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertLog }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [2300, 440],
+      "id": "email01-ins-rlog-001",
+      "name": "Insert Reply Log",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "reply",
+        "messageId": "={{ $('Build Reply Log').first().json.msgId }}",
+        "bodyContent": "={{ $('Build Reply Log').first().json.htmlBody }}",
+        "bodyContentType": "html",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2500, 440],
+      "id": "email01-rep-exist-001",
+      "name": "Reply to Existing Thread",
+      "credentials": { "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" } }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $('Build Reply Log').first().json.msgId }}",
+        "updateFields": { "isRead": true },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2700, 440],
+      "id": "email01-mar-exist-001",
+      "name": "Mark Existing as Read",
+      "credentials": { "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2100, 180],
+      "id": "email01-node-0006",
+      "name": "Store Code Found?"
+    },
+    {
+      "parameters": {
+        "url": "=https://automation.openmindhelpline.com/webhook/vmm-sp-store",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [{ "name": "code", "value": "={{ $json.storeCode }}" }]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2300, 100],
+      "id": "email01-node-0007",
+      "name": "Lookup Store"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OPENAI_API_KEY }}" },
+            { "name": "Content-Type",  "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"max_tokens\": 300,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an assistant that extracts facility complaint details from store emails. Extract the following and return ONLY valid JSON with these exact keys: productName (string, the equipment/product with the issue e.g. AC, Generator, Lift, CCTV, Fire Alarm, Electrical), natureOfProblem (string, brief nature e.g. Not Working, Breakdown, Maintenance Required, Noise Issue), description (string, 1-2 sentence professional summary of the complaint). If uncertain, make a reasonable guess based on context.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Subject: {{ $('Extract Store Code').first().json.subject }}\\n\\nBody: {{ $('Extract Store Code').first().json.body }}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2300, 260],
+      "id": "email01-node-0008",
+      "name": "OpenAI Extract Details"
+    },
+    {
+      "parameters": {
+        "jsCode": "const emailCtx  = $('Extract Store Code').first().json;\nconst storeRes  = $('Lookup Store').first().json;\nconst aiRes     = $('OpenAI Extract Details').first().json;\n\nconst store = storeRes.found ? storeRes.store : null;\nif (!store) return [{ json: { skip: true, reason: 'Store not found in sheet for code: ' + emailCtx.storeCode } }];\n\nlet extracted = {};\ntry {\n  const raw = aiRes?.choices?.[0]?.message?.content || '{}';\n  extracted = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch { extracted = {}; }\n\nconst productName     = (extracted.productName     || 'General Complaint').replace(/'/g, \"''\");\nconst natureOfProblem = (extracted.natureOfProblem || 'Not Specified').replace(/'/g, \"''\");\nconst description     = (extracted.description     || emailCtx.body.slice(0, 500)).replace(/'/g, \"''\");\n\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst tat = 7;\nconst edc = new Date();\nedc.setDate(edc.getDate() + tat);\nconst edcStr = edc.toISOString().split('T')[0];\n\nconst insertStore = `INSERT INTO vmm_complaintstores (storecode, storename, storecity, storeregion, statename, zone, fmname, managername, asmname, uid, created, is_deleted) VALUES ('${esc(store.code)}', '${esc(store.name)}', '${esc(store.city)}', '${esc(store.region)}', '${esc(store.state)}', '${esc(store.zone)}', '${esc(store.fmName)}', '${esc(store.managerName)}', '${esc(store.asmName)}', 1, NOW(), 'No')`;\n\nreturn [{ json: {\n  insertStore, productName, natureOfProblem, description, tat, edcStr,\n  storeCode: store.code, storeName: store.name, storeEmail: store.email || '',\n  emailSubject: emailCtx.subject, msgId: emailCtx.msgId, fromEmail: emailCtx.from,\n  conversationId: emailCtx.conversationId || '',\n  skip: false\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2500, 180],
+      "id": "email01-node-0009",
+      "name": "Build Store INSERT"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertStore }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [2700, 180],
+      "id": "email01-node-0010",
+      "name": "Insert Store",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev      = $('Build Store INSERT').first().json;\nconst storeRow  = $input.first().json;\nconst storeRefId = storeRow.insertId || (Array.isArray(storeRow) ? storeRow[0]?.insertId : null) || 0;\n\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst insertComplaint = `INSERT INTO vmm_complaints (storerefid, productname, producttype, vendorname, productlocation, natureofproblem, typeofcomplaint, tat, conversationid, uid, created, is_deleted) VALUES (${storeRefId}, '${esc(prev.productName)}', '', '', 'See email', '${esc(prev.natureOfProblem)}', 'Repair', ${prev.tat}, '${esc(prev.conversationId)}', 1, NOW(), 'No')`;\n\nreturn [{ json: { insertComplaint, storeRefId, prev } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2900, 180],
+      "id": "email01-node-0011",
+      "name": "Build Complaint INSERT"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertComplaint }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [3100, 180],
+      "id": "email01-node-0012",
+      "name": "Insert Complaint",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev        = $('Build Complaint INSERT').first().json;\nconst cRow        = $input.first().json;\nconst complaintId = cRow.insertId || (Array.isArray(cRow) ? cRow[0]?.insertId : null) || 0;\n\nconst now = new Date();\nconst yy  = String(now.getFullYear()).slice(-2);\nconst mm  = String(now.getMonth() + 1).padStart(2, '0');\nconst dd  = String(now.getDate()).padStart(2, '0');\nconst seq = String(complaintId).padStart(6, '0').slice(-6);\nconst complaintno = yy + mm + dd + seq;\n\nconst p = prev.prev;\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\nconst desc = esc(p.description);\nconst subj = esc(p.emailSubject);\n\nconst insertEsc = `INSERT INTO vmm_vendorescalations (complaintid, ticketno, escalationlevel, closuredate, uid, created, is_deleted) VALUES (${complaintId}, '', 1, '${p.edcStr}', 1, NOW(), 'No')`;\nconst insertLog = `INSERT INTO vmm_complaintlogs (complaintid, remarks, status, uid, created, is_deleted) VALUES (${complaintId}, '${desc} | Source: Email | Subject: ${subj}', 'Open', 1, NOW(), 'No')`;\nconst updateNo  = `UPDATE vmm_complaints SET complaintno = '${complaintno}' WHERE id = ${complaintId}`;\n\nreturn [{ json: { complaintId, complaintno, insertEsc, insertLog, updateNo, p } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3300, 180],
+      "id": "email01-node-0013",
+      "name": "Generate Complaint No"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.updateNo + '; ' + $json.insertEsc + '; ' + $json.insertLog }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [3500, 180],
+      "id": "email01-node-0014",
+      "name": "Finalise Records",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "reply",
+        "messageId": "={{ $('Generate Complaint No').first().json.p.msgId }}",
+        "bodyContent": "=<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:600px\">\n<p>Dear Store Team,</p>\n<p>Thank you for reaching out. Your complaint has been registered successfully. Please find the details below:</p>\n<table style=\"border-collapse:collapse;width:100%;margin:12px 0\">\n  <tr><td style=\"padding:8px 12px;background:#f8fafc;font-weight:700;width:40%\">Complaint No</td><td style=\"padding:8px 12px;border-bottom:1px solid #e2e8f0;font-weight:800;color:#1e1b4b\">{{ $('Generate Complaint No').first().json.complaintno }}</td></tr>\n  <tr><td style=\"padding:8px 12px;background:#f8fafc;font-weight:700\">Store</td><td style=\"padding:8px 12px;border-bottom:1px solid #e2e8f0\">{{ $('Generate Complaint No').first().json.p.storeName }} ({{ $('Generate Complaint No').first().json.p.storeCode }})</td></tr>\n  <tr><td style=\"padding:8px 12px;background:#f8fafc;font-weight:700\">Product</td><td style=\"padding:8px 12px;border-bottom:1px solid #e2e8f0\">{{ $('Generate Complaint No').first().json.p.productName }}</td></tr>\n  <tr><td style=\"padding:8px 12px;background:#f8fafc;font-weight:700\">Expected Closure</td><td style=\"padding:8px 12px;font-weight:700;color:#dc2626\">{{ $('Generate Complaint No').first().json.p.edcStr }}</td></tr>\n</table>\n<p>Our team will follow up within the expected closure date. Please reply to this email or call us if you need immediate assistance.</p>\n<hr style=\"margin:16px 0;border:none;border-top:1px solid #e2e8f0\"/>\n<p style=\"font-size:11px;color:#64748b\">Automated response from VMM CRM — Open Mind Services Limited.</p>\n</div>",
+        "bodyContentType": "html",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [3700, 60],
+      "id": "email01-node-0015",
+      "name": "Reply with Complaint No",
+      "credentials": { "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" } }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "capt-cfg-test-mode", "name": "TEST_MODE",  "value": true,  "type": "boolean" },
+            { "id": "capt-cfg-test-to",   "name": "TEST_TO",    "value": "inder@openmind.in", "type": "string" },
+            { "id": "capt-cfg-always-cc","name": "ALWAYS_CC",  "value": "VMM Team <54933595.openmindservices.onmicrosoft.com@in.teams.ms>", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [3700, 180],
+      "id": "capt-email-config-0001",
+      "name": "Email Config"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Email Config').first().json;\nconst d   = $('Generate Complaint No').first().json;\nconst p   = d.p;\n\nconst toAddress = cfg.TEST_MODE ? cfg.TEST_TO : (p.storeEmail || 'vmm@openmindserviceslimited.in');\nconst ccAddress = cfg.ALWAYS_CC || '';\n\nconst htmlBody =\n  '<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:600px\">'\n  + '<p>Dear Store Team,</p>'\n  + '<p>Thank you for reaching out. Your complaint has been registered successfully. Please find the details below:</p>'\n  + '<table style=\"border-collapse:collapse;width:100%;margin:12px 0\">'\n  + '<tr><td style=\"padding:8px 12px;background:#f8fafc;font-weight:700;width:40%\">Complaint No</td><td style=\"padding:8px 12px;border-bottom:1px solid #e2e8f0;font-weight:800;color:#1e1b4b\">' + d.complaintno + '</td></tr>'\n  + '<tr><td style=\"padding:8px 12px;background:#f8fafc;font-weight:700\">Store</td><td style=\"padding:8px 12px;border-bottom:1px solid #e2e8f0\">' + p.storeName + ' (' + p.storeCode + ')</td></tr>'\n  + '<tr><td style=\"padding:8px 12px;background:#f8fafc;font-weight:700\">Product</td><td style=\"padding:8px 12px;border-bottom:1px solid #e2e8f0\">' + p.productName + '</td></tr>'\n  + '<tr><td style=\"padding:8px 12px;background:#f8fafc;font-weight:700\">Expected Closure</td><td style=\"padding:8px 12px;font-weight:700;color:#dc2626\">' + p.edcStr + '</td></tr>'\n  + '</table>'\n  + '<p>Our team will follow up within the expected closure date. Please reply to this email or call us if you need immediate assistance.</p>'\n  + '<hr style=\"margin:16px 0;border:none;border-top:1px solid #e2e8f0\"/>'\n  + '<p style=\"font-size:11px;color:#64748b\">Automated response from VMM CRM — Open Mind Services Limited.</p>'\n  + (cfg.TEST_MODE\n      ? '<hr style=\"margin:12px 0;border:none;border-top:1px solid #fcd34d\"/><p style=\"font-size:11px;color:#92400e\"><strong>TEST MODE</strong> — Original recipient: ' + (p.storeEmail || '(none on record)') + '</p>'\n      : '')\n  + '</div>';\n\nreturn [{ json: { subject: 'VMM Complaint Confirmation' + (cfg.TEST_MODE ? ' [TEST MODE]' : '') + ' - ' + d.complaintno, htmlBody, toAddress, ccAddress } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3900, 180],
+      "id": "capt-build-confirm-0001",
+      "name": "Build Confirmation Copy"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.toAddress }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.htmlBody }}",
+        "options": {
+          "ccList": "={{ $json.ccAddress }}"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [4100, 180],
+      "id": "capt-send-confirm-0002",
+      "name": "Send Confirmation via Gmail",
+      "credentials": {
+        "gmailOAuth2": { "id": "REPLACE_WITH_GMAIL_CREDENTIAL_ID", "name": "Gmail — vmm.helpdesk" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $('Generate Complaint No').first().json.p.msgId }}",
+        "updateFields": { "isRead": true },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [3700, 340],
+      "id": "email01-node-0016",
+      "name": "Mark as Read",
+      "credentials": { "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" } }
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes":          { "main": [[{ "node": "Get Unread Emails",          "type": "main", "index": 0 }]] },
+    "Get Unread Emails":        { "main": [[{ "node": "Has Emails?",                 "type": "main", "index": 0 }]] },
+    "Has Emails?":              { "main": [[{ "node": "One Email at a Time",         "type": "main", "index": 0 }], []] },
+    "One Email at a Time":      { "main": [[{ "node": "Extract Store Code",          "type": "main", "index": 0 }]] },
+    "Extract Store Code":       { "main": [[{ "node": "Prepare Thread Query",        "type": "main", "index": 0 }]] },
+    "Prepare Thread Query":     { "main": [[{ "node": "Check Thread DB",             "type": "main", "index": 0 }]] },
+    "Check Thread DB":          { "main": [[{ "node": "Parse Thread Result",         "type": "main", "index": 0 }]] },
+    "Parse Thread Result":      { "main": [[{ "node": "Is Reply Thread?",            "type": "main", "index": 0 }]] },
+    "Is Reply Thread?": {
+      "main": [
+        [{ "node": "Build Reply Log",       "type": "main", "index": 0 }],
+        [{ "node": "Store Code Found?",     "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Reply Log":          { "main": [[{ "node": "Insert Reply Log",            "type": "main", "index": 0 }]] },
+    "Insert Reply Log":         { "main": [[{ "node": "Reply to Existing Thread",    "type": "main", "index": 0 }]] },
+    "Reply to Existing Thread": { "main": [[{ "node": "Mark Existing as Read",       "type": "main", "index": 0 }]] },
+    "Mark Existing as Read":    { "main": [[{ "node": "One Email at a Time",         "type": "main", "index": 0 }]] },
+    "Store Code Found?": {
+      "main": [
+        [{ "node": "Lookup Store",          "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Lookup Store":             { "main": [[{ "node": "OpenAI Extract Details",      "type": "main", "index": 0 }]] },
+    "OpenAI Extract Details":   { "main": [[{ "node": "Build Store INSERT",          "type": "main", "index": 0 }]] },
+    "Build Store INSERT":       { "main": [[{ "node": "Insert Store",                "type": "main", "index": 0 }]] },
+    "Insert Store":             { "main": [[{ "node": "Build Complaint INSERT",      "type": "main", "index": 0 }]] },
+    "Build Complaint INSERT":   { "main": [[{ "node": "Insert Complaint",            "type": "main", "index": 0 }]] },
+    "Insert Complaint":         { "main": [[{ "node": "Generate Complaint No",       "type": "main", "index": 0 }]] },
+    "Generate Complaint No":    { "main": [[{ "node": "Finalise Records",            "type": "main", "index": 0 }]] },
+    "Finalise Records":         { "main": [[
+      { "node": "Reply with Complaint No",    "type": "main", "index": 0 },
+      { "node": "Email Config",               "type": "main", "index": 0 },
+      { "node": "Mark as Read",               "type": "main", "index": 0 }
+    ]] },
+    "Reply with Complaint No":  { "main": [[]] },
+    "Email Config":             { "main": [[{ "node": "Build Confirmation Copy",     "type": "main", "index": 0 }]] },
+    "Build Confirmation Copy":  { "main": [[{ "node": "Send Confirmation via Gmail", "type": "main", "index": 0 }]] },
+    "Send Confirmation via Gmail": { "main": [[{ "node": "One Email at a Time",     "type": "main", "index": 0 }]] },
+    "Mark as Read":             { "main": [[{ "node": "One Email at a Time",         "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8442590b0e55dbd54e355747c7c925a75dfcef3563273e7cbd717163cbe23470"
+  }
+}

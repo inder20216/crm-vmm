@@ -1,0 +1,169 @@
+{
+  "name": "VMM NTR — Auto Process (scheduled, cloud)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 5 }] }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [160, 300],
+      "id": "ntr01-node-0001",
+      "name": "Schedule — Every 5 min"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.microsoft.com/v1.0/users/vmm.helpdesk@openmind.in/messages?$filter=isRead%20eq%20false%20and%20hasAttachments%20eq%20true&$select=id,subject,from,hasAttachments,isRead,receivedDateTime,conversationId&$top=50&$orderby=receivedDateTime%20asc",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [380, 300],
+      "id": "ntr01-node-0002",
+      "name": "Fetch Unread Inbox",
+      "credentials": { "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Find first unread email that looks like an NTR (Non-Trading Request).\n// Keywords checked in subject — adjust as needed.\nconst NTR_KEYWORDS = ['non trading', 'non-trading', 'ntr request', 'trading request'];\n\nconst emails = ($input.first().json.value || []);\n\nconst match = emails.find(e => {\n  const subj = (e.subject || '').toLowerCase();\n  return NTR_KEYWORDS.some(kw => subj.includes(kw));\n});\n\nif (!match) {\n  // No NTR email found — return empty to stop workflow gracefully\n  return [];\n}\n\n// Extract store code from subject (e.g. 'HV06')\nconst storeFromSubject = (match.subject.match(/\\b([A-Z]{2}\\d{2,3})\\b/i) || [])[1] || '';\n\nreturn [{ json: {\n  emailId:      match.id,\n  subject:      match.subject || '',\n  fromAddr:     match.from?.emailAddress?.address || '',\n  receivedAt:   match.receivedDateTime || '',\n  storeCode:    storeFromSubject.toUpperCase()\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 300],
+      "id": "ntr01-node-0003",
+      "name": "Find First NTR Email"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://graph.microsoft.com/v1.0/users/vmm.helpdesk@openmind.in/messages/{{ $json.emailId }}/attachments",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [820, 300],
+      "id": "ntr01-node-0004",
+      "name": "Get Attachments",
+      "credentials": { "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const emailMeta = $('Find First NTR Email').first().json;\nconst attachments = $input.first().json.value || [];\n\nconst xlsx = attachments.find(a =>\n  !a.isInline &&\n  a.contentBytes &&\n  a.name &&\n  a.name.toLowerCase().endsWith('.xlsx')\n);\n\nif (!xlsx) {\n  // Email has no .xlsx — mark as read and stop\n  throw new Error(`NTR email ${emailMeta.emailId} has no .xlsx attachment — skipping`);\n}\n\n// Try to get store code from the filename if not found in subject\nconst storeFromFile = (xlsx.name.match(/([A-Z]{2}\\d{2,3})/i) || [])[1] || '';\n\nreturn [{\n  json: {\n    emailId:         emailMeta.emailId,\n    subject:         emailMeta.subject,\n    fromAddr:        emailMeta.fromAddr,\n    receivedAt:      emailMeta.receivedAt,\n    storeCode:       (emailMeta.storeCode || storeFromFile).toUpperCase(),\n    fileName:        xlsx.name\n  },\n  binary: {\n    data: {\n      data:     xlsx.contentBytes,\n      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',\n      fileName: xlsx.name\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 300],
+      "id": "ntr01-node-0005",
+      "name": "Prepare XLSX Binary"
+    },
+    {
+      "parameters": {
+        "operation": "input",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 1,
+      "position": [1260, 300],
+      "id": "ntr01-node-0006",
+      "name": "Parse Excel Rows"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mode: runOnceForAllItems — aggregates all Excel rows into one payload.\nconst meta = $('Prepare XLSX Binary').first().json;\nconst allRows = $input.all().map(i => i.json);\n\nif (!allRows.length) throw new Error('Excel file has no data rows');\n\nconst first = allRows[0];\nconst storeCode   = meta.storeCode  || String(first['Store Code']  || '').trim().toUpperCase();\nconst storeName   = String(first['Store Name']        || '').trim();\nconst requestDate = String(first['Date of Request']   || '').trim();\n\nconst items = allRows\n  .map(row => ({\n    item_article_no:    String(row['Item Article No.']            || '').trim(),\n    item_name:          String(row['Item Name']                   || '').trim(),\n    last_received_date: String(row['Last Received Date to store'] || '').trim(),\n    last_received_qty:  String(row['Last Received Qty in store']  || '').trim(),\n    current_stock:      String(row['Current stock '] || row['Current stock'] || '').trim(),\n    stock_days:         String(row['Stock is for how many days']  || '').trim(),\n    store_requirement:  String(row['Store Requirement '] || row['Store Requirement'] || '').trim(),\n    ho_recommendation:  String(row['HO-Admin Recommendation']     || '').trim(),\n  }))\n  .filter(r => r.item_article_no || r.item_name);\n\nconst today = new Date().toISOString().split('T')[0];\n\nreturn [{ json: {\n  storeCode,\n  storeName,\n  requestDate,\n  receivedDate:   today,\n  emailFrom:      meta.fromAddr       || '',\n  emailSubject:   meta.subject        || '',\n  emailMessageId: meta.emailId        || '',\n  items,\n  totalItems:     items.length\n} }];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 300],
+      "id": "ntr01-node-0007",
+      "name": "Build Payload"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://automation.openmindhelpline.com/webhook/vmm-ntr-save",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1700, 300],
+      "id": "ntr01-node-0008",
+      "name": "Save to MySQL (self-hosted)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload   = $('Build Payload').first().json;\nconst dbRes     = $input.first().json;\nconst requestId = dbRes.requestId || 0;\n\nconst rows = payload.items.map((item, i) =>\n  `<tr style=\"background:${i%2?'#f8fafc':'#fff'}\">\n    <td style=\"padding:6px 10px;border:1px solid #e2e8f0;font-variant-numeric:tabular-nums\">${item.item_article_no}</td>\n    <td style=\"padding:6px 10px;border:1px solid #e2e8f0\">${item.item_name}</td>\n    <td style=\"padding:6px 10px;border:1px solid #e2e8f0;text-align:center\">${item.last_received_date}</td>\n    <td style=\"padding:6px 10px;border:1px solid #e2e8f0;text-align:center\">${item.last_received_qty || '—'}</td>\n    <td style=\"padding:6px 10px;border:1px solid #e2e8f0;text-align:center\">${item.current_stock}</td>\n    <td style=\"padding:6px 10px;border:1px solid #e2e8f0;text-align:center\">${item.stock_days}</td>\n    <td style=\"padding:6px 10px;border:1px solid #e2e8f0;text-align:center;font-weight:600;color:#0f766e\">${item.store_requirement}</td>\n    <td style=\"padding:6px 10px;border:1px solid #e2e8f0;color:#64748b\">—</td>\n  </tr>`\n).join('');\n\nconst html = `<div style=\"font-family:Arial,sans-serif;font-size:13px;line-height:1.6;color:#1e293b\">\n  <p>Dear HO Team,</p>\n  <p>The following <strong>Non-Trading Request</strong> has been automatically received from <strong>${payload.storeName} (${payload.storeCode})</strong> and logged in the VMM CRM.</p>\n  <table style=\"border-collapse:collapse;width:100%;margin:16px 0\">\n    <thead>\n      <tr style=\"background:#0d9488;color:#fff\">\n        <th style=\"padding:8px 10px;border:1px solid #0f766e;text-align:left\">Article No.</th>\n        <th style=\"padding:8px 10px;border:1px solid #0f766e;text-align:left\">Item Name</th>\n        <th style=\"padding:8px 10px;border:1px solid #0f766e\">Last Received</th>\n        <th style=\"padding:8px 10px;border:1px solid #0f766e\">Last Qty</th>\n        <th style=\"padding:8px 10px;border:1px solid #0f766e\">Current Stock</th>\n        <th style=\"padding:8px 10px;border:1px solid #0f766e\">Days</th>\n        <th style=\"padding:8px 10px;border:1px solid #0f766e\">Store Req.</th>\n        <th style=\"padding:8px 10px;border:1px solid #0f766e\">HO Recommendation</th>\n      </tr>\n    </thead>\n    <tbody>${rows}</tbody>\n  </table>\n  <p><strong>Request Date:</strong> ${payload.requestDate}&nbsp;&nbsp;|&nbsp;&nbsp;<strong>Received:</strong> ${payload.receivedDate}&nbsp;&nbsp;|&nbsp;&nbsp;<strong>Total Items:</strong> ${payload.totalItems}&nbsp;&nbsp;|&nbsp;&nbsp;<strong>CRM Ref:</strong> NTR-${requestId}</p>\n  <hr style=\"margin:16px 0;border:none;border-top:1px solid #e2e8f0\"/>\n  <p style=\"font-size:11px;color:#64748b\">Open Mind Services Limited — VMM CRM | Auto-processed from email: ${payload.emailFrom}</p>\n</div>`;\n\nreturn [{ json: { html, payload, requestId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, 300],
+      "id": "ntr01-node-0009",
+      "name": "Build Escalation Email"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.microsoft.com/v1.0/users/vmm.helpdesk@openmind.in/sendMail",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"message\": {\n    \"subject\": \"NTR — {{ $('Build Payload').first().json.storeCode }} — {{ $('Build Payload').first().json.requestDate }} ({{ $('Build Payload').first().json.totalItems }} items)\",\n    \"body\": { \"contentType\": \"HTML\", \"content\": {{ JSON.stringify($json.html) }} },\n    \"toRecipients\": [{ \"emailAddress\": { \"address\": \"inder@openmindserviceslimited.in\" } }],\n    \"from\": { \"emailAddress\": { \"address\": \"vmm.helpdesk@openmind.in\" } }\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2140, 300],
+      "id": "ntr01-node-0010",
+      "name": "Send Escalation Email to HO",
+      "credentials": { "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" } }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://graph.microsoft.com/v1.0/users/vmm.helpdesk@openmind.in/messages/{{ $('Find First NTR Email').first().json.emailId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"isRead\": true }",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2360, 300],
+      "id": "ntr01-node-0011",
+      "name": "Mark Email as Read",
+      "credentials": { "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" } }
+    }
+  ],
+  "connections": {
+    "Schedule — Every 5 min":       { "main": [[{ "node": "Fetch Unread Inbox",              "type": "main", "index": 0 }]] },
+    "Fetch Unread Inbox":           { "main": [[{ "node": "Find First NTR Email",             "type": "main", "index": 0 }]] },
+    "Find First NTR Email":         { "main": [[{ "node": "Get Attachments",                  "type": "main", "index": 0 }]] },
+    "Get Attachments":              { "main": [[{ "node": "Prepare XLSX Binary",               "type": "main", "index": 0 }]] },
+    "Prepare XLSX Binary":          { "main": [[{ "node": "Parse Excel Rows",                  "type": "main", "index": 0 }]] },
+    "Parse Excel Rows":             { "main": [[{ "node": "Build Payload",                     "type": "main", "index": 0 }]] },
+    "Build Payload":                { "main": [[{ "node": "Save to MySQL (self-hosted)",        "type": "main", "index": 0 }]] },
+    "Save to MySQL (self-hosted)":  { "main": [[{ "node": "Build Escalation Email",             "type": "main", "index": 0 }]] },
+    "Build Escalation Email":       { "main": [[{ "node": "Send Escalation Email to HO",       "type": "main", "index": 0 }]] },
+    "Send Escalation Email to HO":  { "main": [[{ "node": "Mark Email as Read",                "type": "main", "index": 0 }]] }
+  },
+  "meta": { "templateCredsSetupCompleted": false },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,64 @@
+{
+  "name": "VMM NTR — Get Items (self-hosted)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "vmm-ntr-items",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [160, 300],
+      "id": "ntr04-node-0001",
+      "name": "Webhook — GET /vmm-ntr-items",
+      "webhookId": "vmm-ntr-items"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM vmm_ntr_items WHERE request_id = {{ parseInt($json.query.requestId) || 0 }} ORDER BY id",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [380, 300],
+      "id": "ntr04-node-0002",
+      "name": "Query Items",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nreturn [{ json: { success: true, count: rows.length, items: rows } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 300],
+      "id": "ntr04-node-0003",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [820, 300],
+      "id": "ntr04-node-0004",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook — GET /vmm-ntr-items": { "main": [[{ "node": "Query Items",     "type": "main", "index": 0 }]] },
+    "Query Items":                  { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Format Response":              { "main": [[{ "node": "Respond",         "type": "main", "index": 0 }]] }
+  },
+  "meta": { "templateCredsSetupCompleted": false,
+    "instanceId": "8442590b0e55dbd54e355747c7c925a75dfcef3563273e7cbd717163cbe23470" }
+}

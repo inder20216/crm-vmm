@@ -1,0 +1,127 @@
+{
+  "name": "VMM CRM — Reports",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-reports",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "crm05-node-0001",
+      "name": "Webhook — GET /vmm-reports",
+      "webhookId": "vmm-reports"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT cl.status, COUNT(*) AS cnt FROM vmm_complaints c LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' GROUP BY cl.status ORDER BY cnt DESC",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 180],
+      "id": "crm05-node-0002",
+      "name": "Status Breakdown",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.typeofcomplaint, COUNT(*) AS cnt FROM vmm_complaints c LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND (cl.status IS NULL OR cl.status NOT IN ('Closed','Resolved')) GROUP BY c.typeofcomplaint ORDER BY cnt DESC",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 352],
+      "id": "crm05-node-0003",
+      "name": "Type Breakdown",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT SUM(CASE WHEN DATEDIFF(CURDATE(), ve.closuredate) > 7 THEN 1 ELSE 0 END) AS critical, SUM(CASE WHEN DATEDIFF(CURDATE(), ve.closuredate) BETWEEN 1 AND 7 THEN 1 ELSE 0 END) AS high, SUM(CASE WHEN DATEDIFF(CURDATE(), ve.closuredate) = 0 THEN 1 ELSE 0 END) AS due_today, SUM(CASE WHEN DATEDIFF(CURDATE(), ve.closuredate) < 0 THEN 1 ELSE 0 END) AS future, SUM(CASE WHEN ve.closuredate IS NULL THEN 1 ELSE 0 END) AS no_edc FROM vmm_complaints c LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) LEFT JOIN vmm_vendorescalations ve ON ve.id = (SELECT MAX(id) FROM vmm_vendorescalations WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND (cl.status IS NULL OR cl.status NOT IN ('Closed','Resolved'))",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 524],
+      "id": "crm05-node-0004",
+      "name": "Overdue Breakdown",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.id, c.complaintno, c.productname, c.typeofcomplaint, cs.storename AS store_name, cs.storecity AS city, ve.closuredate AS edc, DATEDIFF(CURDATE(), ve.closuredate) AS days_overdue, cl.status AS current_status FROM vmm_complaints c LEFT JOIN vmm_complaintstores cs ON cs.id = c.storerefid LEFT JOIN vmm_vendorescalations ve ON ve.id = (SELECT MAX(id) FROM vmm_vendorescalations WHERE complaintid = c.id) LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND (cl.status IS NULL OR cl.status NOT IN ('Closed','Resolved')) AND DATEDIFF(CURDATE(), ve.closuredate) > 0 ORDER BY days_overdue DESC LIMIT 15",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 696],
+      "id": "crm05-node-0005",
+      "name": "Top Overdue",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT cs.zone, COUNT(*) AS cnt FROM vmm_complaints c LEFT JOIN vmm_complaintstores cs ON cs.id = c.storerefid LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND (cl.status IS NULL OR cl.status NOT IN ('Closed','Resolved')) AND cs.zone IS NOT NULL AND cs.zone != '' GROUP BY cs.zone ORDER BY cnt DESC",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 868],
+      "id": "crm05-node-0006",
+      "name": "Zone Breakdown",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const statusRows  = $('Status Breakdown').all().map(i => i.json);\nconst typeRows    = $('Type Breakdown').all().map(i => i.json);\nconst overdueRow  = $('Overdue Breakdown').first().json;\nconst topOverdue  = $('Top Overdue').all().map(i => i.json);\nconst zoneRows    = $('Zone Breakdown').all().map(i => i.json);\n\nreturn [{ json: {\n  success: true,\n  statusBreakdown: statusRows.map(r => ({ status: r.status || 'Open', count: parseInt(r.cnt || 0) })),\n  typeBreakdown:   typeRows.map(r =>   ({ type: r.typeofcomplaint || 'Unknown', count: parseInt(r.cnt || 0) })),\n  overdueBreakdown: {\n    critical: parseInt(overdueRow.critical || 0),\n    high:     parseInt(overdueRow.high     || 0),\n    dueToday: parseInt(overdueRow.due_today || 0),\n    future:   parseInt(overdueRow.future   || 0),\n    noEdc:    parseInt(overdueRow.no_edc   || 0),\n  },\n  topOverdue,\n  zoneBreakdown: zoneRows.map(r => ({ zone: r.zone, count: parseInt(r.cnt || 0) })),\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 524],
+      "id": "crm05-node-0007",
+      "name": "Merge Reports"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] } }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [940, 524],
+      "id": "crm05-node-0008",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook — GET /vmm-reports": {
+      "main": [[
+        { "node": "Status Breakdown",  "type": "main", "index": 0 },
+        { "node": "Type Breakdown",    "type": "main", "index": 0 },
+        { "node": "Overdue Breakdown", "type": "main", "index": 0 },
+        { "node": "Top Overdue",       "type": "main", "index": 0 },
+        { "node": "Zone Breakdown",    "type": "main", "index": 0 }
+      ]]
+    },
+    "Status Breakdown":  { "main": [[{ "node": "Merge Reports", "type": "main", "index": 0 }]] },
+    "Type Breakdown":    { "main": [[{ "node": "Merge Reports", "type": "main", "index": 0 }]] },
+    "Overdue Breakdown": { "main": [[{ "node": "Merge Reports", "type": "main", "index": 0 }]] },
+    "Top Overdue":       { "main": [[{ "node": "Merge Reports", "type": "main", "index": 0 }]] },
+    "Zone Breakdown":    { "main": [[{ "node": "Merge Reports", "type": "main", "index": 0 }]] },
+    "Merge Reports":     { "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]] }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8442590b0e55dbd54e355747c7c925a75dfcef3563273e7cbd717163cbe23470"
+  }
+}

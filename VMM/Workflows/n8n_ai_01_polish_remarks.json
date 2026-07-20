@@ -1,0 +1,76 @@
+{
+  "name": "VMM AI - Polish Complaint Remarks",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-ai-polish",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "ai01-node-0001",
+      "name": "Webhook - POST /vmm-ai-polish",
+      "webhookId": "vmm-ai-polish"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"max_tokens\": 512,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a professional facility complaint management assistant for VMM retail stores. Your job is to rewrite complaint descriptions in clear, professional English. The user may write in Hinglish, informal English, or broken sentences. Keep all facts and details intact. Return ONLY the rewritten text — no prefix, no explanation, no quotes.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify($json.body.text) }}\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 352],
+      "id": "ai01-node-0002",
+      "name": "Call OpenAI API",
+      "credentials": {
+        "openAiApi": {
+          "id": "VMM_OPENAI_CRED_ID",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst polished = raw?.choices?.[0]?.message?.content || '';\nreturn [{ json: { success: true, polishedText: polished.trim() } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 352],
+      "id": "ai01-node-0003",
+      "name": "Extract Text"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 352],
+      "id": "ai01-node-0004",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-ai-polish": { "main": [[{ "node": "Call OpenAI API",    "type": "main", "index": 0 }]] },
+    "Call OpenAI API":               { "main": [[{ "node": "Extract Text",        "type": "main", "index": 0 }]] },
+    "Extract Text":                  { "main": [[{ "node": "Respond to Webhook",  "type": "main", "index": 0 }]] }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8442590b0e55dbd54e355747c7c925a75dfcef3563273e7cbd717163cbe23470"
+  }
+}

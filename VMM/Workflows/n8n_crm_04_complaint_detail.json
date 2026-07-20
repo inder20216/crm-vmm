@@ -1,0 +1,106 @@
+{
+  "name": "VMM CRM - Complaint Detail",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-complaint-detail",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "7f3a2b9c-1d4e-4f5a-8b6c-9d0e1f2a3b4c",
+      "name": "CmplDetail Webhook",
+      "webhookId": "vmm-complaint-detail"
+    },
+    {
+      "parameters": {
+        "jsCode": "const q   = $input.first().json.query || {};\nconst qid = (q.id  || '').toString().trim();\nconst id  = /^\\d+$/.test(qid) && qid.length < 8 ? parseInt(qid) : 0;\nconst no  = (q.no  || (!id ? qid : '')).replace(/'/g, \"''\").trim();\n\nif (!id && !no) return [{ json: { error: 'id or no required' } }];\n\nconst where = id ? `c.id = ${id}` : `c.complaintno = '${no}'`;\n\nconst sqlMain = `SELECT c.id, c.complaintno, c.productname, c.producttype, c.vendorname, c.contract_type, c.productlocation, c.natureofproblem, c.typeofcomplaint, c.tat, c.created, cs.storecode, cs.storename, cs.storecity AS city, cs.storeregion AS region, cs.statename AS state, cs.empcode, cs.empname, cs.empmobileno, cs.empdesignation, cs.managername, cs.managermobileno, cs.asmname, cs.asmmobileno, cs.fmname, cs.fmemail, cs.fmmobileno, cs.sourceofcomplaints, cs.sourceofctxnid, cs.sourceofcsubject, ve.closuredate AS edc, ve.escalationlevel, ve.ticketno AS vendor_ticketno, DATEDIFF(CURDATE(), ve.closuredate) AS days_overdue, cl.status AS current_status FROM vmm_complaints c LEFT JOIN vmm_complaintstores cs ON cs.id = c.storerefid LEFT JOIN vmm_vendorescalations ve ON ve.id = (SELECT MAX(id) FROM vmm_vendorescalations WHERE complaintid = c.id) LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE ${where} AND c.is_deleted = 'No' LIMIT 1`;\n\nconst sqlLogs = id\n  ? `SELECT id, remarks, status, uid, created FROM vmm_complaintlogs WHERE complaintid = ${id} AND is_deleted = 'No' ORDER BY created DESC`\n  : `SELECT l.id, l.remarks, l.status, l.uid, l.created FROM vmm_complaintlogs l INNER JOIN vmm_complaints c ON c.id = l.complaintid WHERE c.complaintno = '${no}' AND l.is_deleted = 'No' ORDER BY l.created DESC`;\n\nconst sqlEsc = id\n  ? `SELECT id, escalationlevel, ticketno, closuredate AS edc, created FROM vmm_vendorescalations WHERE complaintid = ${id} ORDER BY created ASC`\n  : `SELECT ve.id, ve.escalationlevel, ve.ticketno, ve.closuredate AS edc, ve.created FROM vmm_vendorescalations ve INNER JOIN vmm_complaints c ON c.id = ve.complaintid WHERE c.complaintno = '${no}' ORDER BY ve.created ASC`;\n\nreturn [{ json: { sqlMain, sqlLogs, sqlEsc } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 352],
+      "id": "8e4b3c0d-2e5f-5a6b-9c7d-0e1f2a3b4c5d",
+      "name": "CmplDetail Build SQL"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sqlMain }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [680, 352],
+      "id": "9d5c4e1f-3f6a-6b7c-0d8e-1f2a3b4c5d6e",
+      "name": "CmplDetail Fetch Main",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('CmplDetail Build SQL').first().json.sqlLogs }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [900, 352],
+      "id": "0e6d5f2a-4a7b-7c8d-1e9f-2a3b4c5d6e7f",
+      "name": "CmplDetail Fetch Logs",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('CmplDetail Build SQL').first().json.sqlEsc }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1120, 352],
+      "id": "1f7e6a3b-5b8c-8d9e-2f0a-3b4c5d6e7f8a",
+      "name": "CmplDetail Fetch Esc",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const main = $('CmplDetail Fetch Main').all().map(i => i.json);\nconst logs = $('CmplDetail Fetch Logs').all().map(i => i.json);\nconst escs = $('CmplDetail Fetch Esc').all().map(i => i.json);\n\nif (!main.length || !main[0].id) return [{ json: { success: false, message: 'Complaint not found' } }];\n\nconst c = main[0];\nconst callLogs  = logs.filter(l => (l.remarks || '').toLowerCase().includes('source: call'));\nconst emailLogs = logs.filter(l => (l.remarks || '').toLowerCase().includes('source: e-mail'));\n\nreturn [{ json: {\n  success: true,\n  complaint: c,\n  logs,\n  escalations: escs,\n  stats: {\n    total: logs.length,\n    calls: callLogs.length,\n    emails: emailLogs.length\n  }\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 352],
+      "id": "2a8f7b4c-6c9d-9e0f-3a1b-4c5d6e7f8a9b",
+      "name": "CmplDetail Merge"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1560, 352],
+      "id": "3b9a8c5d-7d0e-0f1a-4b2c-5d6e7f8a9b0c",
+      "name": "CmplDetail Respond"
+    }
+  ],
+  "connections": {
+    "CmplDetail Webhook":    { "main": [[{ "node": "CmplDetail Build SQL",  "type": "main", "index": 0 }]] },
+    "CmplDetail Build SQL":  { "main": [[{ "node": "CmplDetail Fetch Main", "type": "main", "index": 0 }]] },
+    "CmplDetail Fetch Main": { "main": [[{ "node": "CmplDetail Fetch Logs", "type": "main", "index": 0 }]] },
+    "CmplDetail Fetch Logs": { "main": [[{ "node": "CmplDetail Fetch Esc",  "type": "main", "index": 0 }]] },
+    "CmplDetail Fetch Esc":  { "main": [[{ "node": "CmplDetail Merge",      "type": "main", "index": 0 }]] },
+    "CmplDetail Merge":      { "main": [[{ "node": "CmplDetail Respond",    "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "name": "VMM CRM - Recent Complaints",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-recent-complaints",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "crm05-node-0001",
+      "name": "Webhook - GET /vmm-recent-complaints",
+      "webhookId": "vmm-recent-complaints"
+    },
+    {
+      "parameters": {
+        "jsCode": "const q = $input.first().json.query || {};\nconst storeCode = (q.storeCode || '').toString().replace(/'/g, \"''\").trim();\nif (!storeCode) return [{ json: { error: 'storeCode required' } }];\n\nconst sql = `\nSELECT\n  c.id          AS complaintid,\n  c.complaintno,\n  c.productname,\n  c.natureofproblem,\n  c.typeofcomplaint,\n  c.created,\n  cs.empcode,\n  cs.empname,\n  cs.empmobileno,\n  cs.sourceofcomplaints,\n  cl.status\nFROM vmm_complaints c\nJOIN vmm_complaintstores cs ON cs.id = c.storerefid\nLEFT JOIN vmm_complaintlogs cl\n  ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id)\nWHERE cs.storecode = '${storeCode}'\n  AND c.is_deleted = 'No'\nORDER BY c.created DESC\nLIMIT 10`;\n\nreturn [{ json: { sql, storeCode } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "id": "crm05-node-0002",
+      "name": "Build Query"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [680, 300],
+      "id": "crm05-node-0003",
+      "name": "Query Complaints",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nreturn [{ json: { success: true, complaints: rows, count: rows.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300],
+      "id": "crm05-node-0004",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 300],
+      "id": "crm05-node-0005",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook - GET /vmm-recent-complaints": { "main": [[{ "node": "Build Query",       "type": "main", "index": 0 }]] },
+    "Build Query":                          { "main": [[{ "node": "Query Complaints",  "type": "main", "index": 0 }]] },
+    "Query Complaints":                     { "main": [[{ "node": "Format Response",   "type": "main", "index": 0 }]] },
+    "Format Response":                      { "main": [[{ "node": "Respond",           "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

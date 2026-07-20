@@ -1,0 +1,150 @@
+{
+  "name": "VMM Email - NC Reminder Reply",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-nc-reminder",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-600, 300],
+      "id": "ncr-01",
+      "name": "Webhook",
+      "webhookId": "vmm-nc-reminder"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\nreturn [{ json: {\n  messageId:   b.messageId   || '',\n  rLevel:      parseInt(b.rLevel || 1),\n  complaintno: b.complaintno || '',\n  storeName:   b.storeName   || '',\n  storeCode:   b.storeCode   || '',\n  productName: b.productName || '',\n  newEdc:      b.newEdc      || '',\n  toEmail:     b.toEmail     || '',\n  ccEmails:    b.ccEmails    || '',\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-376, 300],
+      "id": "ncr-02",
+      "name": "Prepare"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "ncr-cond-01",
+              "leftValue": "={{ $json.messageId }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-152, 300],
+      "id": "ncr-03",
+      "name": "Has MessageId?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true, \"skipped\": true, \"reason\": \"No escalation messageId on file for this complaint\" }",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [72, 520],
+      "id": "ncr-04",
+      "name": "Respond — Skipped"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1-a7miRCetJSV6JhXuSAC2LPlCHbK0HHS8J1_qKPvvNE",
+          "mode": "list",
+          "cachedResultName": "Email _templates_vmm",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1-a7miRCetJSV6JhXuSAC2LPlCHbK0HHS8J1_qKPvvNE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1-a7miRCetJSV6JhXuSAC2LPlCHbK0HHS8J1_qKPvvNE/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [72, 300],
+      "id": "ncr-05",
+      "name": "Get Templates",
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "ltEEeRayxtB2S0lJ", "name": "Inder" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prep = $('Prepare').first().json;\nconst allTemplates = $input.all().map(i => ({\n  id:       parseInt(i.json['ID'] || 0),\n  name:     i.json['Template Name'] || '',\n  category: i.json['Category']      || '',\n  body:     i.json['Template Body'] || '',\n})).filter(t => t.id > 0 && t.name);\n\nconst rLevel = prep.rLevel || 1;\nconst levelStr = rLevel >= 3 ? '3' : String(rLevel);\n\n// Find by name or category containing 'Reminder N'\nlet template = allTemplates.find(t =>\n  t.name.toLowerCase().includes('reminder ' + levelStr) ||\n  t.category.toLowerCase().includes('reminder ' + levelStr)\n);\n// Fallback: any reminder template\nif (!template) template = allTemplates.find(t =>\n  t.name.toLowerCase().includes('reminder') ||\n  t.category.toLowerCase().includes('reminder')\n);\n\nconst attemptLabel = rLevel === 1 ? '1st Reminder' : rLevel === 2 ? '2nd Reminder' : 'Final Reminder';\nconst storeDisplay = prep.storeName + (prep.storeCode ? ' (' + prep.storeCode + ')' : '');\n\nconst fallback = '<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:700px\">'\n  + '<p>Dear Team,</p>'\n  + '<p>This is the <strong>' + attemptLabel + '</strong> for VMM Complaint <strong>' + prep.complaintno + '</strong> — <strong>' + prep.productName + '</strong> at <strong>' + storeDisplay + '</strong>.</p>'\n  + '<p>We attempted to contact you but were unable to connect. Please address this complaint at the earliest.</p>'\n  + '<table style=\"border-collapse:collapse;margin:12px 0\">'\n  + '<tr><td style=\"padding:6px 14px;background:#f8fafc;font-weight:700;border:1px solid #e2e8f0\">Complaint No</td><td style=\"padding:6px 14px;border:1px solid #e2e8f0;font-weight:800;color:#1e1b4b\">' + prep.complaintno + '</td></tr>'\n  + '<tr><td style=\"padding:6px 14px;background:#f8fafc;font-weight:700;border:1px solid #e2e8f0\">Product</td><td style=\"padding:6px 14px;border:1px solid #e2e8f0\">' + prep.productName + '</td></tr>'\n  + '<tr><td style=\"padding:6px 14px;background:#f8fafc;font-weight:700;border:1px solid #e2e8f0\">Revised EDC</td><td style=\"padding:6px 14px;border:1px solid #e2e8f0;font-weight:700;color:#dc2626\">' + prep.newEdc + '</td></tr>'\n  + '</table>'\n  + '<p>Regards,<br>VMM Helpdesk Team<br>Open Mind Services Limited</p>'\n  + '</div>';\n\nlet body = template ? template.body : fallback;\n\n// Replace template variables — supports {{var}}, {var}, [VAR] formats\nconst vars = [\n  ['{{complaintno}}',   prep.complaintno || ''],\n  ['{complaintno}',     prep.complaintno || ''],\n  ['[COMPLAINT_NO]',    prep.complaintno || ''],\n  ['{{storeName}}',     prep.storeName   || ''],\n  ['{storeName}',       prep.storeName   || ''],\n  ['[STORE_NAME]',      prep.storeName   || ''],\n  ['{{storeCode}}',     prep.storeCode   || ''],\n  ['{storeCode}',       prep.storeCode   || ''],\n  ['[STORE_CODE]',      prep.storeCode   || ''],\n  ['{{productName}}',   prep.productName || ''],\n  ['{productName}',     prep.productName || ''],\n  ['[PRODUCT_NAME]',    prep.productName || ''],\n  ['{{newEdc}}',        prep.newEdc      || ''],\n  ['{newEdc}',          prep.newEdc      || ''],\n  ['[NEW_EDC]',         prep.newEdc      || ''],\n  ['{{rLevel}}',        String(rLevel)],\n  ['{{attempt}}',       attemptLabel],\n  ['[ATTEMPT]',         attemptLabel],\n];\nfor (const [k, v] of vars) body = body.split(k).join(v);\n\nreturn [{ json: { ...prep, htmlBody: body } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [296, 300],
+      "id": "ncr-06",
+      "name": "Find & Fill Template"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "PASTE_POWER_AUTOMATE_REPLY_URL_HERE",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messageId: $json.messageId, htmlBody: $json.htmlBody, toEmail: $json.toEmail, ccEmails: $json.ccEmails }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300],
+      "id": "ncr-07",
+      "name": "Reply via Power Automate"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true, \"message\": \"Reminder reply sent\" }",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [744, 300],
+      "id": "ncr-08",
+      "name": "Respond — Sent"
+    }
+  ],
+  "connections": {
+    "Webhook":              { "main": [[{ "node": "Prepare",               "type": "main", "index": 0 }]] },
+    "Prepare":              { "main": [[{ "node": "Has MessageId?",        "type": "main", "index": 0 }]] },
+    "Has MessageId?":       {
+      "main": [
+        [{ "node": "Get Templates",          "type": "main", "index": 0 }],
+        [{ "node": "Respond — Skipped", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Templates":        { "main": [[{ "node": "Find & Fill Template",  "type": "main", "index": 0 }]] },
+    "Find & Fill Template": { "main": [[{ "node": "Reply via Power Automate", "type": "main", "index": 0 }]] },
+    "Reply via Power Automate": { "main": [[{ "node": "Respond — Sent", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

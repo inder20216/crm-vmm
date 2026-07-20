@@ -1,0 +1,49 @@
+{
+  "name": "VMM User — Create User",
+  "_setup": "Creates a new CRM user in vmm_users. Body: { name, email, type }",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-user-create",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "usr03-0001-0000-0000-000000000001",
+      "name": "Webhook — POST /vmm-user-create"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO vmm_users (name, email, type, gender, password, mobileno, alternateno, profile_pic, address, status, resetFlag, sipno, is_deleted, uid, uuid, pid, created, updated) VALUES ('{{ $('Webhook — POST /vmm-user-create').first().json.body.name }}', '{{ $('Webhook — POST /vmm-user-create').first().json.body.email }}', '{{ $('Webhook — POST /vmm-user-create').first().json.body.type || 'user' }}', '', '', '', '', '', '', '1', '0', 0, 'no', 0, 0, 0, NOW(), NOW())",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 352],
+      "id": "usr03-0002-0000-0000-000000000002",
+      "name": "Insert User",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true }",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] } }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 352],
+      "id": "usr03-0003-0000-0000-000000000003",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook — POST /vmm-user-create": { "main": [[{ "node": "Insert User", "type": "main", "index": 0 }]] },
+    "Insert User":                     { "main": [[{ "node": "Respond",     "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

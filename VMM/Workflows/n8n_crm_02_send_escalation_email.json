@@ -1,0 +1,113 @@
+{
+  "name": "VMM CRM - Send Escalation Email",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-send-escalation-email",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 400],
+      "id": "crm02-node-0001",
+      "name": "Webhook - POST /vmm-send-escalation-email",
+      "webhookId": "vmm-send-escalation-email"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "cfg-test-mode", "name": "TEST_MODE", "value": false,                "type": "boolean" },
+            { "id": "cfg-test-to",   "name": "TEST_TO",   "value": "inder@openmind.in", "type": "string"  },
+            { "id": "cfg-always-cc", "name": "ALWAYS_CC", "value": "VMM Team <54933595.openmindservices.onmicrosoft.com@in.teams.ms>", "type": "string" },
+            { "id": "cfg-cloud-url", "name": "CLOUD_URL", "value": "https://inder20216.app.n8n.cloud/webhook/vmm-escalation-outlook", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 400],
+      "id": "crm02-node-0005",
+      "name": "Email Config"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b   = $('Webhook - POST /vmm-send-escalation-email').first().json.body || {};\nconst cfg = $('Email Config').first().json;\n\n// ── Inputs from CRM app ──────────────────────────────────────────────\nconst escalationType = (b.escalationType || 'vendor').toLowerCase(); // 'vendor' | 'fm'\nconst vendorEmail    = (b.vendorEmail    || '').trim();\nconst vendorName     = (b.vendorName     || '').trim();\nconst smEmail        = (b.smEmail        || b.storeEmail || '').trim();\nconst fmEmail        = (b.fmEmail        || '').trim();\nconst hoEmail        = (b.hoEmail        || '').trim();\nconst storeName      = (b.storeName      || 'Store').trim();\nconst storeCode      = (b.storeCode      || '').trim();\nconst productName    = (b.productName    || 'Product').trim();\nconst contractType   = (b.contractType   || '').trim(); // 'AMC' | 'Warranty' | 'NotApplicable'\nconst complaints     = Array.isArray(b.complaints) ? b.complaints : [];\n\nif (!complaints.length) return [{ json: { skipped: true, message: 'No complaints provided' } }];\n\nconst totalUnits   = complaints.length;\nconst complaintnos = complaints.map(c => c.complaintno).filter(Boolean);\n\n// ── Resolve TO and CC based on escalation type ───────────────────────\n// vendor route: TO = vendor, CC = SM + HO + FM\n// fm route:     TO = FM,     CC = SM + HO\n\nlet primaryTo = '';\nconst ccList  = [];\n\nif (escalationType === 'vendor') {\n  primaryTo = vendorEmail;\n  if (smEmail) ccList.push(smEmail);\n  if (hoEmail && hoEmail !== smEmail) ccList.push(hoEmail);\n  if (fmEmail && !ccList.includes(fmEmail)) ccList.push(fmEmail);\n} else {\n  // fm / ho team route\n  primaryTo = fmEmail;\n  if (smEmail) ccList.push(smEmail);\n  if (hoEmail && hoEmail !== smEmail) ccList.push(hoEmail);\n}\n\n// Always add the Teams channel\nif (cfg.ALWAYS_CC) {\n  cfg.ALWAYS_CC.split(',').map(e => e.trim()).filter(Boolean).forEach(e => {\n    if (!ccList.includes(e) && e !== primaryTo) ccList.push(e);\n  });\n}\n\nconst toAddress = cfg.TEST_MODE ? cfg.TEST_TO : primaryTo;\nconst ccAddress = cfg.TEST_MODE ? '' : ccList.join(';');\n\n// ── Subject ──────────────────────────────────────────────────────────\nconst storeLabel = storeName + (storeCode ? ' (' + storeCode + ')' : '');\nconst typeLabel  = contractType === 'Warranty' ? 'Warranty' : 'AMC';\n\nconst subject = totalUnits > 1\n  ? 'VMM Escalation — ' + productName + ' [' + typeLabel + '] — ' + storeLabel\n  : 'VMM Complaint Escalation — ' + (complaints[0].complaintno || '') + ' — ' + storeLabel;\n\n// ── Table rows ───────────────────────────────────────────────────────\nconst rows = complaints.map((c, i) =>\n  '<tr>'\n  + '<td style=\"padding:9px 12px;background:#f8fafc;font-weight:700;text-align:center;border-bottom:1px solid #e2e8f0\">' + (i + 1) + '</td>'\n  + '<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;font-weight:800;color:#1e1b4b\">' + (c.complaintno || '—') + '</td>'\n  + '<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0\">' + (c.productLocation || '—') + '</td>'\n  + '<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;color:' + (contractType === 'Warranty' ? '#ea580c' : '#475569') + '\">' + (contractType || 'AMC') + '</td>'\n  + '<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0\">' + (c.natureOfProblem || '—') + '</td>'\n  + '<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#dc2626\">' + (c.edcDate || '—') + '</td>'\n  + '</tr>'\n).join('');\n\n// ── Greeting line based on escalation type ───────────────────────────\nconst greeting = escalationType === 'vendor'\n  ? 'Dear <strong>' + (vendorName || 'Vendor Team') + '</strong>,'\n  : 'Dear Facility Manager,';\n\nconst bodyIntro = escalationType === 'vendor'\n  ? (totalUnits > 1\n      ? '<strong>' + totalUnits + ' facility complaint(s)</strong> have been logged for <strong>' + productName + '</strong> at store <strong>' + storeLabel + '</strong>. Please attend to each unit and ensure resolution within the specified timelines.'\n      : 'A facility complaint has been logged for <strong>' + productName + '</strong> at <strong>' + storeLabel + '</strong>. Kindly attend to this and resolve within the committed timeline.')\n  : (totalUnits > 1\n      ? '<strong>' + totalUnits + ' facility complaint(s)</strong> regarding <strong>' + productName + '</strong> at store <strong>' + storeLabel + '</strong> require your attention. Please coordinate with the relevant vendor/team for resolution.'\n      : 'A facility complaint regarding <strong>' + productName + '</strong> at <strong>' + storeLabel + '</strong> requires your attention.');\n\nconst htmlBody =\n  '<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:700px\">'\n  + '<p>' + greeting + '</p>'\n  + '<p>' + bodyIntro + '</p>'\n  + '<table style=\"border-collapse:collapse;width:100%;margin:14px 0\">'\n  + '<thead><tr>'\n  + '<th style=\"padding:9px 12px;background:#1e1b4b;color:#fff;text-align:center;width:36px\">#</th>'\n  + '<th style=\"padding:9px 12px;background:#1e1b4b;color:#fff;text-align:left\">Complaint No</th>'\n  + '<th style=\"padding:9px 12px;background:#1e1b4b;color:#fff;text-align:left\">Unit Location</th>'\n  + '<th style=\"padding:9px 12px;background:#1e1b4b;color:#fff;text-align:left\">Contract</th>'\n  + '<th style=\"padding:9px 12px;background:#1e1b4b;color:#fff;text-align:left\">Nature of Problem</th>'\n  + '<th style=\"padding:9px 12px;background:#1e1b4b;color:#fff;text-align:left\">Expected Closure</th>'\n  + '</tr></thead>'\n  + '<tbody>' + rows + '</tbody>'\n  + '</table>'\n  + '<p>Please ensure timely resolution. Do not reply to this email — log updates through the CRM.</p>'\n  + '<hr style=\"margin:16px 0;border:none;border-top:1px solid #e2e8f0\"/>'\n  + '<p style=\"font-size:11px;color:#64748b\">Automated escalation from VMM CRM — Open Mind Services Limited.</p>'\n  + (cfg.TEST_MODE\n      ? '<hr style=\"margin:12px 0;border:none;border-top:1px solid #fcd34d\"/>'\n        + '<p style=\"font-size:11px;color:#92400e\"><strong>TEST MODE</strong> — '\n        + 'Type: ' + escalationType + ' | '\n        + 'Actual TO: ' + primaryTo + ' | '\n        + 'Actual CC: ' + ccList.join('; ') + '</p>'\n      : '')\n  + '</div>';\n\nreturn [{ json: { subject, htmlBody, toAddress, ccAddress, complaintnos, cloudUrl: cfg.CLOUD_URL } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400],
+      "id": "crm02-node-0002",
+      "name": "Build Email Content"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.cloudUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ toEmail: $json.toAddress, ccEmails: $json.ccAddress, subject: $json.subject, htmlBody: $json.htmlBody }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [904, 400],
+      "id": "crm02-node-0003",
+      "name": "Send via Cloud n8n"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cloudRes     = $input.first().json || {};\nconst buildData    = $('Build Email Content').first().json;\nconst messageId    = cloudRes.messageId    || '';\nconst complaintnos = buildData.complaintnos || [];\n\nlet updateSql = 'SELECT 1';\nif (messageId && complaintnos.length > 0) {\n  const safeId  = messageId.replace(/'/g, \"''\");\n  const nosStr  = complaintnos.map(n => `'${n.replace(/'/g, \"''\")}'`).join(',');\n  updateSql = `UPDATE vmm_complaints SET escalation_messageid = '${safeId}' WHERE complaintno IN (${nosStr})`;\n}\n\nreturn [{ json: { messageId, updateSql, success: !!messageId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1128, 400],
+      "id": "crm02-node-0006",
+      "name": "Extract MessageId"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.updateSql }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1352, 400],
+      "id": "crm02-node-0007",
+      "name": "Save Escalation MessageId",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true, \"message\": \"Escalation email sent\" }",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1576, 400],
+      "id": "crm02-node-0004",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-send-escalation-email": { "main": [[{ "node": "Email Config",              "type": "main", "index": 0 }]] },
+    "Email Config":                               { "main": [[{ "node": "Build Email Content",       "type": "main", "index": 0 }]] },
+    "Build Email Content":                        { "main": [[{ "node": "Send via Cloud n8n",        "type": "main", "index": 0 }]] },
+    "Send via Cloud n8n":                         { "main": [[{ "node": "Extract MessageId",         "type": "main", "index": 0 }]] },
+    "Extract MessageId":                          { "main": [[{ "node": "Save Escalation MessageId", "type": "main", "index": 0 }]] },
+    "Save Escalation MessageId":                  { "main": [[{ "node": "Respond to Webhook",        "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

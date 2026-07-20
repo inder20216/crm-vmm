@@ -1,0 +1,70 @@
+{
+  "name": "VMM Email - Categorize",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-categorize-email",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-400, 300],
+      "id": "cat-webhook",
+      "name": "Webhook - POST /vmm-categorize-email",
+      "webhookId": "vmm-categorize-email"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\nconst cats = Array.isArray(b.categories) ? b.categories : ['Complaint Logged'];\nreturn [{ json: {\n  messageId:  b.messageId || '',\n  categories: JSON.stringify(cats)\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-176, 300],
+      "id": "cat-prepare",
+      "name": "Prepare Data"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "PASTE_POWER_AUTOMATE_URL_HERE",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messageId: $json.messageId, categories: $json.categories }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [48, 300],
+      "id": "cat-pa",
+      "name": "Send via Power Automate"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true }",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [272, 300],
+      "id": "cat-respond",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-categorize-email": { "main": [[{ "node": "Prepare Data",           "type": "main", "index": 0 }]] },
+    "Prepare Data":                          { "main": [[{ "node": "Send via Power Automate", "type": "main", "index": 0 }]] },
+    "Send via Power Automate":               { "main": [[{ "node": "Respond",                "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

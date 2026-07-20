@@ -1,0 +1,105 @@
+{
+  "name": "VMM FU - Close Complaint",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-close-complaint",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "fu02-node-0001",
+      "name": "Webhook POST vmm-close-complaint",
+      "webhookId": "vmm-close-complaint"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst complaintId     = parseInt(body.complaintId);\nconst closureStatus   = (body.closureStatus  || 'Partially Closed');\nconst followupMethod  = (body.followupMethod || 'Call');\nconst txnId           = body.txnId          || '';\nconst mobileCalled    = body.mobileCalled   || '';\nconst emailSubject    = body.emailSubject   || '';\nconst vendorTicketNo  = (body.vendorTicketNo || '').trim();\nconst delayMain       = body.delayMain      || '';\nconst delaySub        = body.delaySub       || '';\nconst baseRemarks     = body.remarks        || '';\nconst uid             = parseInt(body.uid   || 1);\nconst escalationLevel = parseInt(body.escalationLevel || 1);\nconst newClosureDate  = body.newClosureDate || '';\nconst closureDate     = body.closureDate    || '';\nconst closedBy        = (body.closedBy      || '').trim();\n\nif (!complaintId) return [{ json: { success: false, error: 'complaintId required' } }];\n\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst parts = [baseRemarks];\nif (followupMethod === 'Call') {\n  if (txnId) parts.push('TXN: ' + txnId);\n  if (mobileCalled) parts.push('Mobile: ' + mobileCalled);\n} else if (followupMethod === 'Vendor Update') {\n  if (vendorTicketNo) parts.push('Vendor Ticket: ' + vendorTicketNo);\n} else {\n  if (emailSubject) parts.push('Subject: ' + emailSubject);\n}\nif (delayMain) parts.push('Delay: ' + delayMain + (delaySub ? ' - ' + delaySub : ''));\nif (closureDate) parts.push('Closure Date: ' + closureDate);\nif (closedBy) parts.push('Closed By: ' + closedBy);\nparts.push('Source: ' + followupMethod);\n\nconst fullRemarks = esc(parts.filter(Boolean).join(' | '));\n\nconst insertLog = `INSERT INTO vmm_complaintlogs (complaintid, remarks, status, uid, created, is_deleted) VALUES (${complaintId}, '${fullRemarks}', '${esc(closureStatus)}', ${uid}, NOW(), 'No')`;\n\nconst insertEsc = ((closureStatus === 'Partially Closed' || closureStatus === 'Escalated') && newClosureDate)\n  ? `INSERT INTO vmm_vendorescalations (complaintid, escalationlevel, ticketno, closuredate, uid, created, is_deleted) VALUES (${complaintId}, ${escalationLevel}, '${esc(vendorTicketNo)}', '${esc(newClosureDate)}', ${uid}, NOW(), 'No')`\n  : null;\n\nconst updateTicket = (vendorTicketNo && closureStatus !== 'Partially Closed' && closureStatus !== 'Escalated')\n  ? `UPDATE vmm_vendorescalations SET ticketno = '${esc(vendorTicketNo)}' WHERE id = (SELECT MAX(id) FROM vmm_vendorescalations WHERE complaintid = ${complaintId})`\n  : null;\n\nreturn [{ json: { insertLog, insertEsc, updateTicket, complaintId, closureStatus } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 352],
+      "id": "fu02-node-0002",
+      "name": "Build Queries"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertLog }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [680, 352],
+      "id": "fu02-node-0003",
+      "name": "Insert Log",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Build Queries').first().json.insertEsc || 'SELECT 1' }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [900, 352],
+      "id": "fu02-node-0004",
+      "name": "Insert Escalation",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Build Queries').first().json.updateTicket || 'SELECT 1' }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1120, 352],
+      "id": "fu02-node-0007",
+      "name": "Update Vendor Ticket",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Build Queries').first().json;\nreturn [{ json: { success: true, complaintId: d.complaintId, closureStatus: d.closureStatus, message: 'Complaint ' + d.closureStatus } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 352],
+      "id": "fu02-node-0005",
+      "name": "Build Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1560, 352],
+      "id": "fu02-node-0006",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook POST vmm-close-complaint": { "main": [[{ "node": "Build Queries",     "type": "main", "index": 0 }]] },
+    "Build Queries":                    { "main": [[{ "node": "Insert Log",         "type": "main", "index": 0 }]] },
+    "Insert Log":                       { "main": [[{ "node": "Insert Escalation",  "type": "main", "index": 0 }]] },
+    "Insert Escalation":                { "main": [[{ "node": "Update Vendor Ticket", "type": "main", "index": 0 }]] },
+    "Update Vendor Ticket":             { "main": [[{ "node": "Build Response",     "type": "main", "index": 0 }]] },
+    "Build Response":                   { "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]] }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

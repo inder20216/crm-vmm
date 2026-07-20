@@ -1,0 +1,84 @@
+{
+  "name": "VMM SP — Employee Lookup",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-sp-employee",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "b2c3d4e5-0001-0001-0001-000000000001",
+      "name": "Webhook — GET /vmm-sp-employee",
+      "webhookId": "vmm-sp-employee"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1uzfGESr8kpQ_JKgkSOww2s3WxsH8y1U-YMvM8is31yE",
+          "mode": "list",
+          "cachedResultName": "VMM Master Data"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Employees",
+          "mode": "list",
+          "cachedResultName": "Employees"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [460, 352],
+      "id": "b2c3d4e5-0001-0001-0001-000000000002",
+      "name": "Get Employees Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ltEEeRayxtB2S0lJ",
+          "name": "Inder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const query = $('Webhook — GET /vmm-sp-employee').first().json.query || {};\nconst code = (query.code || '').toString().trim();\n\nconst all = $input.all();\n\nconst mapEmp = (item) => {\n  const e = item.json;\n  return {\n    name:        e['Employee Name'] || '',\n    code:        e['Employee Code'] || '',\n    email:       e['E-mail'] || '',\n    mobile:      e['Mobile No.'] || '',\n    alternateNo: e['Alternative No.'] || '',\n    designation: e['Designation'] || '',\n    status:      e['Status'] || '',\n    storeCode:   e['Store Code'] || '',\n    storeName:   e['Store Name'] || '',\n    city:        e['City'] || '',\n    region:      e['Region'] || '',\n    state:       e['State'] || '',\n    zone:        e['Zone'] || '',\n    managerName: e['Manager Name'] || '',\n    asmName:     e['ASM name'] || '',\n    fmName:      e['FM Name'] || '',\n    fmEmail:     e['FM Email'] || '',\n  };\n};\n\n// No code param → return full list for autocomplete\nif (!code) {\n  const employees = all.map(mapEmp).filter(e => e.code !== '');\n  return [{ json: { found: true, employees, count: employees.length } }];\n}\n\n// Exact code lookup\nconst match = all.find(item =>\n  (item.json['Employee Code'] || '').toString().trim() === code\n);\n\nif (!match) {\n  return [{ json: { found: false, code, message: 'Employee not found' } }];\n}\n\nreturn [{ json: { found: true, employee: mapEmp(match) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 352],
+      "id": "b2c3d4e5-0001-0001-0001-000000000003",
+      "name": "Filter & Map Employee"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 352],
+      "id": "b2c3d4e5-0001-0001-0001-000000000004",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook — GET /vmm-sp-employee": {
+      "main": [[{ "node": "Get Employees Sheet", "type": "main", "index": 0 }]]
+    },
+    "Get Employees Sheet": {
+      "main": [[{ "node": "Filter & Map Employee", "type": "main", "index": 0 }]]
+    },
+    "Filter & Map Employee": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

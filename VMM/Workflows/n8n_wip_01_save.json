@@ -1,0 +1,156 @@
+{
+  "name": "VMM WIP - Save",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-wip-save",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-240, 400],
+      "id": "wip01-webhook",
+      "name": "Webhook - POST /vmm-wip-save",
+      "webhookId": "vmm-wip-save"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst b = raw.body || raw;\nreturn [{ json: {\n  email_id:        b.emailId        || '',\n  conversation_id: b.conversationId || '',\n  subject:         b.subject        || '',\n  from_addr:       b.fromAddr       || '',\n  store_code:      b.storeCode      || '',\n  received_at:     b.receivedAt     || '',\n  replied_at:      b.repliedAt      || '',\n  partial_fields:  typeof b.parsed === 'object' ? b.parsed : {},\n  saved_by:        b.savedBy        || '',\n  status:          'open'\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-16, 400],
+      "id": "wip01-code",
+      "name": "Prepare Fields"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "wip_emails",
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "email_id",        "fieldValue": "={{ $json.email_id }}" },
+            { "fieldId": "conversation_id", "fieldValue": "={{ $json.conversation_id }}" },
+            { "fieldId": "subject",         "fieldValue": "={{ $json.subject }}" },
+            { "fieldId": "from_addr",       "fieldValue": "={{ $json.from_addr }}" },
+            { "fieldId": "store_code",      "fieldValue": "={{ $json.store_code }}" },
+            { "fieldId": "received_at",     "fieldValue": "={{ $json.received_at }}" },
+            { "fieldId": "replied_at",      "fieldValue": "={{ $json.replied_at }}" },
+            { "fieldId": "partial_fields",  "fieldValue": "={{ JSON.stringify($json.partial_fields) }}" },
+            { "fieldId": "saved_by",        "fieldValue": "={{ $json.saved_by }}" },
+            { "fieldId": "status",          "fieldValue": "open" }
+          ]
+        }
+      },
+      "continueOnFail": true,
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [208, 400],
+      "id": "wip01-create",
+      "name": "Create WIP",
+      "credentials": {
+        "supabaseApi": { "id": "SUPABASE_CRED_ID", "name": "Supabase" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.error ?? '' }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [432, 400],
+      "id": "wip01-if",
+      "name": "Already Exists?"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $('Prepare Fields').first().json }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [656, 280],
+      "id": "wip01-relay",
+      "name": "Get Original Data"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "wip_emails",
+        "filters": {
+          "conditions": [
+            { "keyName": "email_id", "condition": "eq", "keyValue": "={{ $json.email_id }}" }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "conversation_id", "fieldValue": "={{ $json.conversation_id }}" },
+            { "fieldId": "subject",         "fieldValue": "={{ $json.subject }}" },
+            { "fieldId": "store_code",      "fieldValue": "={{ $json.store_code }}" },
+            { "fieldId": "replied_at",      "fieldValue": "={{ $json.replied_at }}" },
+            { "fieldId": "partial_fields",  "fieldValue": "={{ JSON.stringify($json.partial_fields) }}" },
+            { "fieldId": "saved_by",        "fieldValue": "={{ $json.saved_by }}" },
+            { "fieldId": "status",          "fieldValue": "open" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 280],
+      "id": "wip01-update",
+      "name": "Update WIP",
+      "credentials": {
+        "supabaseApi": { "id": "SUPABASE_CRED_ID", "name": "Supabase" }
+      }
+    },
+    {
+      "parameters": { "mode": "append" },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [1104, 400],
+      "id": "wip01-merge",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true }",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1328, 400],
+      "id": "wip01-respond",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-wip-save": { "main": [[{ "node": "Prepare Fields",    "type": "main", "index": 0 }]] },
+    "Prepare Fields":               { "main": [[{ "node": "Create WIP",        "type": "main", "index": 0 }]] },
+    "Create WIP":                   { "main": [[{ "node": "Already Exists?",   "type": "main", "index": 0 }]] },
+    "Already Exists?": {
+      "main": [
+        [{ "node": "Get Original Data", "type": "main", "index": 0 }],
+        [{ "node": "Merge",             "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Original Data": { "main": [[{ "node": "Update WIP", "type": "main", "index": 0 }]] },
+    "Update WIP":        { "main": [[{ "node": "Merge",      "type": "main", "index": 1 }]] },
+    "Merge":             { "main": [[{ "node": "Respond",    "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": true, "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c" }
+}

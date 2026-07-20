@@ -1,0 +1,233 @@
+{
+  "name": "VMM CRM - Log Complaint",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-log-complaint",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 400],
+      "id": "crm01-node-0001",
+      "name": "Webhook - POST /vmm-log-complaint",
+      "webhookId": "vmm-log-complaint"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst storeCode     = esc(b.storeCode);\nconst empCode       = esc(b.employeeCode);\nconst empName       = esc(b.employeeName);\nconst empMobile     = esc(b.contactNumber);\nconst empDesig      = esc(b.designation || '');\nconst storeCity     = esc(b.city);\nconst storeRegion   = esc(b.region);\nconst stateName     = esc(b.state);\nconst storeName     = esc(b.storeName);\nconst storeEmail    = esc(b.storeEmail || '');\nconst managerName   = esc(b.managerName || '');\nconst managerMobile = esc(b.managerMobile || '');\nconst asmName       = esc(b.asmName || '');\nconst asmMobile     = esc(b.asmMobile || '');\nconst fmName        = esc(b.fmName || '');\nconst fmEmail       = esc(b.fmEmail || '');\nconst fmMobile      = esc(b.fmMobile || '');\nconst productName   = esc(b.productName);\nconst productType   = esc(b.productType || '');\nconst vendorName    = esc(b.vendorName);\nconst contractType  = esc(b.contractType || '');\nconst productLoc    = esc(b.productLocation);\nconst nature        = esc(b.natureOfComplaint);\nconst type          = esc(b.complaintType);\nconst tat           = parseInt(b.tatDays || 0);\nconst uid           = parseInt(b.uid || 1);\nconst source        = esc(b.source || 'Manual');\nconst emailSubject  = esc(b.emailSubject || '');\nconst callTxnId     = esc(b.callTxnId || '');\nconst emailMsgId    = esc(b.emailMessageId || '');\nconst emailFrom     = esc(b.emailFrom || '');\nconst emailTo       = esc(b.emailTo || '');\nconst remarks       = esc(b.remarks || 'Complaint logged');\n\nconst attachmentLinks = Array.isArray(b.attachmentLinks) ? b.attachmentLinks : [];\nconst attachmentText  = attachmentLinks.length\n  ? '\\n\\nAttachments:\\n' + attachmentLinks.map(a => `- ${a.name}: ${a.viewLink}`).join('\\n')\n  : '';\n\nconst edc = new Date();\nedc.setDate(edc.getDate() + tat);\nconst edcStr = edc.toISOString().split('T')[0];\n\nconst txnId = callTxnId || emailMsgId;\n\nconst insertStore = `INSERT INTO vmm_complaintstores (empid, empcode, empname, sourceofcomplaints, empmobileno, empdesignation, storeid, storecode, storename, storeemail, storecity, storeregion, statename, managername, managermobileno, asmname, asmmobileno, fmid, fmname, fmemail, fmmobileno, sourceofctxnid, sourceofcsubject, uid, created, updated, is_deleted) VALUES (0, '${empCode}', '${empName}', '${source}', '${empMobile}', '${empDesig}', 0, '${storeCode}', '${storeName}', '${storeEmail}', '${storeCity}', '${storeRegion}', '${stateName}', '${managerName}', '${managerMobile}', '${asmName}', '${asmMobile}', 0, '${fmName}', '${fmEmail}', '${fmMobile}', '${txnId}', '${emailSubject}', ${uid}, NOW(), NOW(), 'No')`;\n\nreturn [{ json: {\n  insertStore,\n  storeCode: b.storeCode || '',\n  empCode: b.employeeCode || '',\n  productName, productType, vendorName, contractType, productLoc, nature, type, tat, uid, edcStr,\n  storeEmail: b.storeEmail || '',\n  storeName: b.storeName || '',\n  empName: b.employeeName || '',\n  source, emailSubject, emailFrom, emailTo,\n  remarks: remarks + attachmentText\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400],
+      "id": "crm01-node-0002",
+      "name": "Prepare Data"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertStore }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [680, 400],
+      "id": "crm01-node-0003",
+      "name": "Insert Store Record",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id FROM vmm_complaintstores WHERE storecode='{{ $('Prepare Data').first().json.storeCode }}' AND empcode='{{ $('Prepare Data').first().json.empCode }}' ORDER BY id DESC LIMIT 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [900, 400],
+      "id": "crm01-node-0011",
+      "name": "Get Store Ref ID",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev       = $('Prepare Data').first().json;\nconst storeRow   = $input.first().json;\nconst storeRefId = storeRow.id || 0;\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst insertComplaint = `INSERT INTO vmm_complaints (storerefid, productname, producttype, vendorname, contract_type, productlocation, natureofproblem, typeofcomplaint, tat, productid, vendorid, uid, created, updated, is_deleted) VALUES (${storeRefId}, '${esc(prev.productName)}', '${esc(prev.productType)}', '${esc(prev.vendorName)}', '${esc(prev.contractType)}', '${esc(prev.productLoc)}', '${esc(prev.nature)}', '${esc(prev.type)}', ${prev.tat}, 0, 0, ${prev.uid}, NOW(), NOW(), 'No')`;\n\nreturn [{ json: { insertComplaint, storeRefId, prev } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 400],
+      "id": "crm01-node-0004",
+      "name": "Build Complaint INSERT"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertComplaint }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1340, 400],
+      "id": "crm01-node-0005",
+      "name": "Insert Complaint",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id FROM vmm_complaints WHERE storerefid={{ $('Build Complaint INSERT').first().json.storeRefId }} ORDER BY id DESC LIMIT 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1560, 400],
+      "id": "crm01-node-0012",
+      "name": "Get Complaint ID",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE vmm_referenceno SET lastno = lastno + 1 WHERE id = 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1780, 400],
+      "id": "crm01-node-0016",
+      "name": "Increment Ref No",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT lastno FROM vmm_referenceno WHERE id = 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [2000, 400],
+      "id": "crm01-node-0017",
+      "name": "Get Ref No",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev        = $('Build Complaint INSERT').first().json;\nconst complaintId = $('Get Complaint ID').first().json.id || 0;\nconst lastno      = $input.first().json.lastno || 0;\n\nconst now = new Date();\nconst yy  = String(now.getFullYear()).slice(-2);\nconst mm  = String(now.getMonth() + 1).padStart(2, '0');\nconst dd  = String(now.getDate()).padStart(2, '0');\nconst complaintno = yy + mm + dd + String(lastno);\n\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\nconst p = prev.prev;\n\nconst sourceLines = [\n  `Source: ${p.source || 'Manual'}`,\n  p.emailSubject ? `Email Subject: ${p.emailSubject}` : '',\n  p.emailFrom    ? `From: ${p.emailFrom}` : '',\n  p.emailTo      ? `To: ${p.emailTo}` : '',\n  '',\n  p.remarks || 'Complaint logged'\n].filter(Boolean).join('\\n');\n\nconst updateNo  = `UPDATE vmm_complaints SET complaintno = '${complaintno}' WHERE id = ${complaintId}`;\nconst insertLog = `INSERT INTO vmm_complaintlogs (complaintid, remarks, status, uid, created, is_deleted) VALUES (${complaintId}, '${esc(sourceLines)}', 'Logged', ${p.uid}, NOW(), 'No')`;\n\nreturn [{ json: { complaintId, complaintno, updateNo, insertLog, p } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 400],
+      "id": "crm01-node-0006",
+      "name": "Generate Complaint No"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Generate Complaint No').first().json.updateNo }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [2440, 400],
+      "id": "crm01-node-0007",
+      "name": "Update Complaint No",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Generate Complaint No').first().json.insertLog }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [2660, 400],
+      "id": "crm01-node-0018",
+      "name": "Insert Initial Log",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id FROM vmm_complaintlogs WHERE complaintid={{ $('Generate Complaint No').first().json.complaintId }} ORDER BY id DESC LIMIT 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [2660, 400],
+      "id": "crm01-node-0013",
+      "name": "Get Log ID",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d   = $('Generate Complaint No').first().json;\nconst p   = d.p;\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst insertEsc = `INSERT INTO vmm_vendorescalations (complaintid, ticketno, escalationlevel, closuredate, uid, created, is_deleted) VALUES (${d.complaintId}, '', 1, '${p.edcStr}', ${p.uid}, NOW(), 'No')`;\n\nreturn [{ json: { insertEsc, complaintId: d.complaintId, complaintno: d.complaintno, p } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2880, 400],
+      "id": "crm01-node-0014",
+      "name": "Build Escalation INSERT"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertEsc }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [3100, 400],
+      "id": "crm01-node-0015",
+      "name": "Insert Escalation",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Build Escalation INSERT').first().json;\nreturn [{ json: { success: true, complaintId: d.complaintId, complaintno: d.complaintno, edcDate: d.p.edcStr, message: 'Complaint logged successfully' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3320, 400],
+      "id": "crm01-node-0009",
+      "name": "Build Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] } }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3540, 400],
+      "id": "crm01-node-0010",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-log-complaint": { "main": [[{ "node": "Prepare Data",             "type": "main", "index": 0 }]] },
+    "Prepare Data":                      { "main": [[{ "node": "Insert Store Record",       "type": "main", "index": 0 }]] },
+    "Insert Store Record":               { "main": [[{ "node": "Get Store Ref ID",          "type": "main", "index": 0 }]] },
+    "Get Store Ref ID":                  { "main": [[{ "node": "Build Complaint INSERT",    "type": "main", "index": 0 }]] },
+    "Build Complaint INSERT":            { "main": [[{ "node": "Insert Complaint",          "type": "main", "index": 0 }]] },
+    "Insert Complaint":                  { "main": [[{ "node": "Get Complaint ID",          "type": "main", "index": 0 }]] },
+    "Get Complaint ID":                  { "main": [[{ "node": "Increment Ref No",          "type": "main", "index": 0 }]] },
+    "Increment Ref No":                  { "main": [[{ "node": "Get Ref No",               "type": "main", "index": 0 }]] },
+    "Get Ref No":                        { "main": [[{ "node": "Generate Complaint No",     "type": "main", "index": 0 }]] },
+    "Generate Complaint No":             { "main": [[{ "node": "Update Complaint No",       "type": "main", "index": 0 }]] },
+    "Update Complaint No":               { "main": [[{ "node": "Insert Initial Log",        "type": "main", "index": 0 }]] },
+    "Insert Initial Log":                { "main": [[{ "node": "Get Log ID",                "type": "main", "index": 0 }]] },
+    "Get Log ID":                        { "main": [[{ "node": "Build Escalation INSERT",   "type": "main", "index": 0 }]] },
+    "Build Escalation INSERT":           { "main": [[{ "node": "Insert Escalation",         "type": "main", "index": 0 }]] },
+    "Insert Escalation":                 { "main": [[{ "node": "Build Response",            "type": "main", "index": 0 }]] },
+    "Build Response":                    { "main": [[{ "node": "Respond to Webhook",        "type": "main", "index": 0 }]] }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

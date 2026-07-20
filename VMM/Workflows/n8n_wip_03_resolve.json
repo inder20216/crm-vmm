@@ -1,0 +1,79 @@
+{
+  "name": "VMM WIP - Resolve",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-wip-resolve",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-240, 400],
+      "id": "wip03-webhook",
+      "name": "Webhook - POST /vmm-wip-resolve",
+      "webhookId": "vmm-wip-resolve"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || $input.first().json;\nreturn [{ json: {\n  email_id:    b.emailId || '',\n  resolved_at: new Date().toISOString()\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-16, 400],
+      "id": "wip03-code",
+      "name": "Prepare Resolve"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "wip_emails",
+        "filterType": "string",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "email_id", "condition": "eq", "keyValue": "={{ $json.email_id }}" }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "status",      "fieldValue": "resolved" },
+            { "fieldId": "resolved_at", "fieldValue": "={{ $json.resolved_at }}" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [208, 400],
+      "id": "wip03-supabase",
+      "name": "Resolve WIP",
+      "credentials": {
+        "supabaseApi": { "id": "SUPABASE_CRED_ID", "name": "Supabase" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true }",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [432, 400],
+      "id": "wip03-respond",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-wip-resolve": { "main": [[{ "node": "Prepare Resolve", "type": "main", "index": 0 }]] },
+    "Prepare Resolve":                 { "main": [[{ "node": "Resolve WIP",     "type": "main", "index": 0 }]] },
+    "Resolve WIP":                     { "main": [[{ "node": "Respond",         "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": true, "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c" }
+}

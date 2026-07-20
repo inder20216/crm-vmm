@@ -1,0 +1,275 @@
+{
+  "name": "VMM Email - Outlook (Fetch + Parse + Reply + Templates)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "vmm-fetch-inbox",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-192, -16],
+      "id": "38703146-2e54-4092-8e77-143e0bb3fef0",
+      "name": "Webhook - GET /vmm-fetch-inbox",
+      "webhookId": "vmm-fetch-inbox"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 30,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [32, -16],
+      "id": "012d285a-fb9e-4692-84e9-51bcbcd569b5",
+      "name": "Get Unread Emails",
+      "webhookId": "53fcb90c-d1c1-4ed7-8ea9-21495b2c5733",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const emails = $input.all().map(i => {\n  const m = i.json;\n  const fromAddr = m.from?.emailAddress?.address || '';\n  const fromName = m.from?.emailAddress?.name || fromAddr;\n  const storeMatch = fromAddr.match(/^([A-Z]{2}\\d{2,3})\\.sm@/i);\n  const storeCode  = storeMatch ? storeMatch[1].toUpperCase() : null;\n  const body = (m.body?.content || m.bodyPreview || '').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\n  return {\n    id:           m.id,\n    subject:      m.subject || '(No subject)',\n    fromAddr,\n    fromName,\n    storeCode,\n    receivedAt:   m.receivedDateTime,\n    bodyPreview:  body.slice(0, 200),\n    body:         body.slice(0, 3000),\n    hasStoreCode: !!storeCode,\n  };\n});\nreturn [{ json: { success: true, count: emails.length, emails } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, -16],
+      "id": "97a5d55b-c5df-404c-ae9f-9393ce52b109",
+      "name": "Format Email List"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [464, -16],
+      "id": "a5442ff9-a388-4dcd-9dc6-a747a9ea4376",
+      "name": "Respond1"
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-parse-email",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-112, 208],
+      "id": "2921cde8-df6c-41b4-ad64-42adec54405c",
+      "name": "Webhook - POST /vmm-parse-email",
+      "webhookId": "vmm-parse-email"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst templates = body.templates || [];\n\nconst templateSummary = templates.map(t => {\n  const cleanBody = t.body\n    .replace(/<table[^>]*>[\\s\\S]*?<\\/table>/gi, '[TABLE FORMAT REQUIRED]')\n    .replace(/<[^>]+>/g, '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n  return `ID ${t.id}: ${t.name} (${t.category})\\n${cleanBody}`;\n}).join('\\n---\\n');\n\nreturn [{ json: { body, templateSummary: templateSummary.slice(0, 6000), templates } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [112, 208],
+      "id": "c4a25697-2c0d-441b-8723-e2c6b8c51742",
+      "name": "Prepare Template Context"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"max_tokens\": 1200,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an assistant for VMM retail store complaint management. You will receive a full email thread AND a list of email templates.\\n\\nYour tasks:\\n1. Read the ENTIRE email thread carefully (not just the latest message)\\n2. Identify what product/issue is being reported\\n3. Select the BEST matching template from the provided list\\n4. Extract all information that has ALREADY been provided ANYWHERE in the thread\\n5. Identify ONLY the fields from the selected template that are still missing\\n6. Draft a reply asking ONLY for the missing fields (do not ask for things already provided)\\n\\nReturn valid JSON with these exact keys:\\n- storeCode: string or null (e.g. HB17)\\n- storeName: string or null\\n- employeeCode: string or null\\n- employeeName: string or null (name of the person who raised it)\\n- contactNumber: string or null\\n- productName: string or null\\n- natureOfProblem: string or null\\n- productLocation: string or null\\n- description: string (2-3 sentence professional summary)\\n- selectedTemplateId: number (ID of the best matching template)\\n- selectedTemplateName: string\\n- alreadyProvided: object (key-value of info already given in thread)\\n- missingFromTemplate: array of strings (field names still missing from template)\\n- isComplete: boolean (true only if ALL template requirements are met AND core fields present)\\n- suggestedReply: string (formal reply asking ONLY for missing fields, starting with 'Dear SM,'. Empty string if isComplete is true.)\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"=== AVAILABLE TEMPLATES ===\\n{{ $('Prepare Template Context').first().json.templateSummary }}\\n\\n=== EMAIL THREAD (latest reply first) ===\\nFrom: {{ $('Prepare Template Context').first().json.body.fromEmail }}\\nSubject: {{ $('Prepare Template Context').first().json.body.subject }}\\nStore Code (from sender email): {{ $('Prepare Template Context').first().json.body.storeCode || 'Unknown' }}\\n\\n{{ $('Prepare Template Context').first().json.body.emailBody }}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [336, 208],
+      "id": "3320ee93-48ca-4f8a-aee5-18723256fb28",
+      "name": "OpenAI Parse Email",
+      "credentials": {
+        "openAiApi": {
+          "id": "VMM_OPENAI_CRED_ID",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst content = raw?.choices?.[0]?.message?.content || '{}';\nlet parsed = {};\ntry { parsed = JSON.parse(content); } catch { parsed = { description: content, missingFromTemplate: [], suggestedReply: '', isComplete: false }; }\nreturn [{ json: { success: true, ...parsed } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 208],
+      "id": "76e94dd6-4f37-4ab7-a436-bee8e29a0484",
+      "name": "Extract Result"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [752, 208],
+      "id": "e98cf27d-3f14-4a71-9031-b2375e3dd998",
+      "name": "Respond"
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-send-email-reply",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-192, 432],
+      "id": "c468c4d9-75dc-481b-abb3-83ff6ca3841d",
+      "name": "Webhook - POST /vmm-send-email-reply",
+      "webhookId": "vmm-send-email-reply"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $('Webhook - POST /vmm-send-email-reply').first().json.body || {};\n\nconst rawHtml = b.htmlBody || (b.body ? b.body.split('\\n').map(l => l.trim() ? `<p style=\"margin:0 0 8px\">${l}</p>` : '<br/>').join('') : '');\n\nconst htmlBody = rawHtml\n  + '<hr style=\"margin:16px 0;border:none;border-top:1px solid #e2e8f0\"/>'\n  + '<p style=\"font-size:11px;color:#64748b\">VMM CRM — Open Mind Services Limited</p>';\n\nreturn [{ json: { messageId: b.messageId || '', htmlBody } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [32, 432],
+      "id": "test-reply-build-0001",
+      "name": "Build Reply Body"
+    },
+    {
+      "parameters": {
+        "operation": "reply",
+        "messageId": "={{ $json.messageId }}",
+        "bodyContent": "={{ $json.htmlBody }}",
+        "bodyContentType": "html",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [256, 432],
+      "id": "237d1a5d-1168-477c-949b-392ff2b4ff51",
+      "name": "Reply via Outlook (in-thread)",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true, \"message\": \"Reply sent\" }",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [640, 432],
+      "id": "7c5c9596-eb44-4812-b81c-817bedc88739",
+      "name": "Respond2"
+    },
+
+    {
+      "parameters": {
+        "path": "vmm-email-templates",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-128, 688],
+      "id": "b4a3509c-7332-4089-ba27-ae7115e3fa4f",
+      "name": "Webhook - GET /vmm-email-templates",
+      "webhookId": "vmm-email-templates"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1-a7miRCetJSV6JhXuSAC2LPlCHbK0HHS8J1_qKPvvNE",
+          "mode": "list",
+          "cachedResultName": "Email_templates_vmm",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1-a7miRCetJSV6JhXuSAC2LPlCHbK0HHS8J1_qKPvvNE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1-a7miRCetJSV6JhXuSAC2LPlCHbK0HHS8J1_qKPvvNE/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [96, 688],
+      "id": "b48a5823-cc2c-4261-8fc3-73f16ba1822f",
+      "name": "Get Templates Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "ltEEeRayxtB2S0lJ", "name": "Inder" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const templates = $input.all()\n  .map(i => ({\n    id:       parseInt(i.json['ID'] || 0),\n    name:     i.json['Template Name'] || '',\n    category: i.json['Category']      || '',\n    body:     i.json['Template Body'] || '',\n  }))\n  .filter(t => t.id > 0 && t.name);\nreturn [{ json: { success: true, count: templates.length, templates } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 688],
+      "id": "6d43cb81-2747-4b75-a8fa-31b355e73828",
+      "name": "Map Templates"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [544, 688],
+      "id": "215ec070-eced-4477-bce5-50d949868eca",
+      "name": "Respond3"
+    }
+  ],
+  "connections": {
+    "Webhook - GET /vmm-fetch-inbox":     { "main": [[{ "node": "Get Unread Emails",         "type": "main", "index": 0 }]] },
+    "Get Unread Emails":                  { "main": [[{ "node": "Format Email List",          "type": "main", "index": 0 }]] },
+    "Format Email List":                  { "main": [[{ "node": "Respond1",                   "type": "main", "index": 0 }]] },
+    "Webhook - POST /vmm-parse-email":    { "main": [[{ "node": "Prepare Template Context",   "type": "main", "index": 0 }]] },
+    "Prepare Template Context":           { "main": [[{ "node": "OpenAI Parse Email",         "type": "main", "index": 0 }]] },
+    "OpenAI Parse Email":                 { "main": [[{ "node": "Extract Result",             "type": "main", "index": 0 }]] },
+    "Extract Result":                     { "main": [[{ "node": "Respond",                    "type": "main", "index": 0 }]] },
+    "Webhook - POST /vmm-send-email-reply": { "main": [[{ "node": "Build Reply Body",          "type": "main", "index": 0 }]] },
+    "Build Reply Body":                     { "main": [[{ "node": "Reply via Outlook (in-thread)", "type": "main", "index": 0 }]] },
+    "Reply via Outlook (in-thread)":        { "main": [[{ "node": "Respond2",                  "type": "main", "index": 0 }]] },
+    "Webhook - GET /vmm-email-templates": { "main": [[{ "node": "Get Templates Sheet",        "type": "main", "index": 0 }]] },
+    "Get Templates Sheet":                { "main": [[{ "node": "Map Templates",              "type": "main", "index": 0 }]] },
+    "Map Templates":                      { "main": [[{ "node": "Respond3",                   "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

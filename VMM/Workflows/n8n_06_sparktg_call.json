@@ -1,0 +1,119 @@
+{
+  "name": "VMM FU — SparkTG Call",
+  "nodes": [
+    {
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "fu06-node-0001",
+      "name": "Webhook — POST /vmm-sparktg-call",
+      "webhookId": "vmm-sparktg-call",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-sparktg-call",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw  = $input.first().json;\nconst body = raw.body || raw || {};\nconst number = body.number;\n\nif (!number) {\n  return [{ json: { error: 'number is required' } }];\n}\n\nconst username  = '10167201';\nconst password  = 'agent007';\nconst serviceId = '1672';\nconst did       = '01205136387';\n\nconst clean = String(number).replace(/\\D/g, '');\nconst authHeader = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');\n\nconst bodyStr = 'number='          + encodeURIComponent(clean)\n  + '&service-id='                 + encodeURIComponent(serviceId)\n  + '&agent-dial-first=true'\n  + '&recording=true'\n  + (did ? '&did=' + encodeURIComponent(did) : '');\n\nreturn [{ json: { authHeader, bodyStr, number: clean } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 352],
+      "id": "fu06-node-0002",
+      "name": "Build Request"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://telephonycloud.co.in/api/v1/calls",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ $('Build Request').first().json.authHeader }}" },
+            { "name": "Content-Type",  "value": "application/x-www-form-urlencoded" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ $('Build Request').first().json.bodyStr }}",
+        "options": {}
+      },
+      "onError": "continueErrorOutput",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 352],
+      "id": "fu06-node-0003",
+      "name": "Call SparkTG"
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nconst callId = result.id || result.callTxnId || result.call_id || null;\nreturn [{ json: { success: true, callId, raw: result } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 280],
+      "id": "fu06-node-0004",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "jsCode": "const err = $input.first().json;\nconst msg = err.message || err.description || err.errorMessage || 'SparkTG error';\n// Clean up common SparkTG error messages for the agent\nconst friendly = msg.includes('busy') ? 'Agent is busy — wait a moment and try again'\n  : msg.includes('number') ? 'Invalid phone number'\n  : msg.includes('service') ? 'SparkTG service error — check credentials'\n  : msg;\nreturn [{ json: { success: false, error: friendly, raw: err } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 440],
+      "id": "fu06-node-0006",
+      "name": "Format Error"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 280],
+      "id": "fu06-node-0005",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 440],
+      "id": "fu06-node-0007",
+      "name": "Respond Error"
+    }
+  ],
+  "connections": {
+    "Webhook — POST /vmm-sparktg-call": {
+      "main": [[{ "node": "Build Request", "type": "main", "index": 0 }]]
+    },
+    "Build Request": {
+      "main": [[{ "node": "Call SparkTG", "type": "main", "index": 0 }]]
+    },
+    "Call SparkTG": {
+      "main":  [[{ "node": "Format Response", "type": "main", "index": 0 }]],
+      "error": [[{ "node": "Format Error",    "type": "main", "index": 0 }]]
+    },
+    "Format Response": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    },
+    "Format Error": {
+      "main": [[{ "node": "Respond Error", "type": "main", "index": 0 }]]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

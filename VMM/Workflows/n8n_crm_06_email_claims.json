@@ -1,0 +1,53 @@
+{
+  "name": "VMM CRM - Email Claims",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-email-claim",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "crm06-node-0001",
+      "name": "Webhook - POST /vmm-email-claim",
+      "webhookId": "vmm-email-claim"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body    = $input.first().json.body || {};\nconst op      = body.operation || 'check';  // claim | release | check\nconst emailId = (body.emailId || '').toString().trim();\nconst agentId = (body.agentId || '').toString().trim();\nconst agentLabel = (body.agentLabel || agentId || 'Another agent').toString().trim();\n\nconst data   = $getWorkflowStaticData('global');\ndata.claims  = data.claims || {};\nconst now    = Date.now();\nconst EXPIRY = 30 * 60 * 1000; // 30 minutes\n\n// Purge stale claims\nObject.keys(data.claims).forEach(k => {\n  if (now - data.claims[k].claimedAt > EXPIRY) delete data.claims[k];\n});\n\nif (op === 'claim' && emailId) {\n  data.claims[emailId] = { agentId, agentLabel, claimedAt: now };\n}\nif (op === 'release' && emailId) {\n  // Only the claiming agent can release\n  if (!data.claims[emailId] || data.claims[emailId].agentId === agentId)\n    delete data.claims[emailId];\n}\n\n// Always return current active claims\nreturn [{ json: { success: true, claims: data.claims } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "id": "crm06-node-0002",
+      "name": "Handle Claim"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 300],
+      "id": "crm06-node-0003",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-email-claim": { "main": [[{ "node": "Handle Claim", "type": "main", "index": 0 }]] },
+    "Handle Claim":                    { "main": [[{ "node": "Respond",      "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

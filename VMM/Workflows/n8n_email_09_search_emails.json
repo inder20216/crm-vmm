@@ -1,0 +1,79 @@
+{
+  "name": "VMM Email - Search Emails",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-search-emails",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-200, 300],
+      "id": "search-webhook-0001",
+      "name": "Webhook - GET /vmm-search-emails",
+      "webhookId": "vmm-search-emails"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.microsoft.com/v1.0/me/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "$search", "value": "={{ '\"' + $json.query.q + '\"' }}" },
+            { "name": "$select", "value": "id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,conversationId,isRead,hasAttachments" },
+            { "name": "$top", "value": "25" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [20, 300],
+      "id": "search-fetch-0001",
+      "name": "Search Graph API",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst messages = data.value || [];\n\nconst emails = messages.map(m => {\n  const fromAddr = m.from?.emailAddress?.address || '';\n  const fromName = m.from?.emailAddress?.name    || fromAddr;\n\n  const toArray = (m.toRecipients || []).map(r => r.emailAddress?.address || '').filter(Boolean);\n  const ccArray = (m.ccRecipients || []).map(r => r.emailAddress?.address || '').filter(Boolean);\n  const toDisplay = toArray.join(', ');\n\n  const allAddrs = [fromAddr, ...toArray, ...ccArray];\n  let storeCode = null;\n  for (const addr of allAddrs) {\n    const hit = addr.match(/([A-Z]{2}\\d{2,3})\\.s[m]@/i);\n    if (hit) { storeCode = hit[1].toUpperCase(); break; }\n  }\n  if (!storeCode) {\n    const hit = (m.subject || '').match(/\\b([A-Z]{2}\\d{2,3})\\b/);\n    if (hit) storeCode = hit[1].toUpperCase();\n  }\n\n  const subject = m.subject || '';\n  let complaintId = null;\n  const cMatch = subject.match(/\\[([A-Z]{0,4}-?\\d{8,})\\]/) || subject.match(/ticket\\s+([A-Z]{0,4}-?\\d{8,})/i);\n  if (cMatch) complaintId = cMatch[1];\n\n  let emailType = 'general';\n  const isToHelpdesk = [...toArray, ...ccArray].some(a => a.toLowerCase().includes('vmm') || a.toLowerCase().includes('helpdesk'));\n  if (complaintId)       emailType = 'complaint-reply';\n  else if (isToHelpdesk) emailType = 'new-complaint';\n\n  return {\n    id: m.id,\n    conversationId: m.conversationId || '',\n    subject,\n    fromAddr,\n    fromName,\n    fromDisplay: fromName !== fromAddr ? `${fromName} <${fromAddr}>` : fromAddr,\n    toDisplay,\n    storeCode,\n    complaintId,\n    emailType,\n    receivedAt: m.receivedDateTime || '',\n    isRead: m.isRead || false,\n    bodyPreview: (m.bodyPreview || '').slice(0, 200),\n    body: m.bodyPreview || '',\n    bodyHtml: '',\n    hasStoreCode: !!storeCode,\n    hasAttachments: m.hasAttachments || false,\n  };\n});\n\nreturn [{ json: { success: true, count: emails.length, emails } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "search-format-0001",
+      "name": "Format Search Results"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [460, 300],
+      "id": "search-respond-0001",
+      "name": "Respond with Results"
+    }
+  ],
+  "connections": {
+    "Webhook - GET /vmm-search-emails": { "main": [[{ "node": "Search Graph API",        "type": "main", "index": 0 }]] },
+    "Search Graph API":                 { "main": [[{ "node": "Format Search Results",    "type": "main", "index": 0 }]] },
+    "Format Search Results":            { "main": [[{ "node": "Respond with Results",     "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

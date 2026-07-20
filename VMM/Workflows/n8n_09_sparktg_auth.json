@@ -1,0 +1,85 @@
+{
+  "name": "VMM — SparkTG Auth Token",
+  "nodes": [
+    {
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "stgauth-node-0001",
+      "name": "Webhook — GET /vmm-sparktg-auth",
+      "webhookId": "vmm-sparktg-auth",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-sparktg-auth",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://telephonycloud.co.in/api/v1/login",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Basic MTAxNjcyMDE6YWdlbnQwMDc="
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 352],
+      "id": "stgauth-node-0002",
+      "name": "SparkTG Login API"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\n\n// SparkTG login API returns user info and service assignments\n// Try to extract a token or session identifier from the response\nconst token    = raw.token || raw.auth_token || raw.session_token || raw.access_token || null;\nconst userId   = raw.user_id || raw.userId || raw.id || null;\nconst services = raw.services || raw.service_ids || raw.serviceIds || [];\n\n// Build portal URL — try token-based URL first, fall back to base URL\nlet portalUrl = 'https://telephonycloud.co.in/portalv2/home';\nif (token) {\n  portalUrl = 'https://telephonycloud.co.in/portalv2/home?token=' + encodeURIComponent(token);\n} else if (userId) {\n  // Some systems accept userId in URL\n  portalUrl = 'https://telephonycloud.co.in/portalv2/home?userId=' + encodeURIComponent(userId);\n}\n\nreturn [{ json: {\n  success: true,\n  portalUrl,\n  token,\n  userId,\n  services,\n  raw\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 352],
+      "id": "stgauth-node-0003",
+      "name": "Extract Auth Data"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Access-Control-Allow-Origin", "value": "*" }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 352],
+      "id": "stgauth-node-0004",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook — GET /vmm-sparktg-auth": {
+      "main": [[{ "node": "SparkTG Login API", "type": "main", "index": 0 }]]
+    },
+    "SparkTG Login API": {
+      "main": [[{ "node": "Extract Auth Data", "type": "main", "index": 0 }]]
+    },
+    "Extract Auth Data": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

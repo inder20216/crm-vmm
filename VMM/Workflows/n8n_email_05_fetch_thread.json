@@ -1,0 +1,79 @@
+{
+  "name": "VMM Email - Fetch Thread",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-fetch-thread",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-200, 300],
+      "id": "thread-webhook-0001",
+      "name": "Webhook - POST /vmm-fetch-thread",
+      "webhookId": "vmm-fetch-thread"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.microsoft.com/v1.0/me/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "$filter", "value": "=conversationId eq '{{ $json.body.conversationId }}'" },
+            { "name": "$select", "value": "id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,conversationId,body,isRead,hasAttachments" },
+            { "name": "$top", "value": "50" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [20, 300],
+      "id": "thread-fetch-0001",
+      "name": "Fetch Thread Messages",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst messages = (data.value || []).sort((a, b) => new Date(a.receivedDateTime) - new Date(b.receivedDateTime));\n\nconst cleaned = messages.map(m => {\n  const rawHtml = m.body?.content || '';\n\n  // Strip Outlook reply divider and everything after it\n  let strippedHtml = rawHtml;\n  const divIdx = strippedHtml.search(/<div[^>]*id=\"divRplyFwdMsg\"/i);\n  if (divIdx > -1) strippedHtml = strippedHtml.slice(0, divIdx);\n\n  // Remove blockquotes (Gmail/Outlook quoted text) and boilerplate tags\n  strippedHtml = strippedHtml\n    .replace(/<blockquote[\\s\\S]*?<\\/blockquote>/gi, '')\n    .replace(/<head[\\s\\S]*?<\\/head>/gi, '')\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .slice(0, 40000);\n\n  const bodyText = strippedHtml.replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 3000);\n\n  const to = (m.toRecipients || []).map(r => {\n    const name = r.emailAddress?.name || '';\n    const addr = r.emailAddress?.address || '';\n    return name && name !== addr ? name + ' <' + addr + '>' : addr;\n  }).filter(Boolean).join(', ');\n\n  const cc = (m.ccRecipients || []).map(r => {\n    const name = r.emailAddress?.name || '';\n    const addr = r.emailAddress?.address || '';\n    return name && name !== addr ? name + ' <' + addr + '>' : addr;\n  }).filter(Boolean).join(', ');\n\n  return {\n    id: m.id,\n    subject: m.subject || '',\n    from: m.from?.emailAddress?.address || '',\n    fromName: m.from?.emailAddress?.name || '',\n    to,\n    cc,\n    receivedAt: m.receivedDateTime || '',\n    isRead: m.isRead || false,\n    hasAttachments: m.hasAttachments || false,\n    conversationId: m.conversationId || '',\n    bodyHtml: strippedHtml,\n    body: bodyText\n  };\n});\n\nreturn [{ json: { messages: cleaned, count: cleaned.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "thread-process-0001",
+      "name": "Process Thread Messages"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [460, 300],
+      "id": "thread-respond-0001",
+      "name": "Respond with Thread"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-fetch-thread": { "main": [[{ "node": "Fetch Thread Messages",    "type": "main", "index": 0 }]] },
+    "Fetch Thread Messages":            { "main": [[{ "node": "Process Thread Messages",   "type": "main", "index": 0 }]] },
+    "Process Thread Messages":          { "main": [[{ "node": "Respond with Thread",       "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

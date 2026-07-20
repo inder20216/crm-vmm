@@ -1,0 +1,91 @@
+{
+  "name": "VMM CRM — Search Complaints",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-search-complaints",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "crm02-node-0001",
+      "name": "Webhook GET vmm-search-complaints",
+      "webhookId": "vmm-search-complaints"
+    },
+    {
+      "parameters": {
+        "jsCode": "const q        = $input.first().json.query || {};\nconst search   = (q.q        || '').replace(/'/g, \"''\").trim();\nconst status   = (q.status   || '').replace(/'/g, \"''\").trim();\nconst type     = (q.type     || '').replace(/'/g, \"''\").trim();\nconst vendor   = (q.vendor   || '').replace(/'/g, \"''\").trim();\nconst fm       = (q.fm       || '').replace(/'/g, \"''\").trim();\nconst fromDate = (q.fromDate || '').replace(/'/g, \"''\").trim();\nconst toDate   = (q.toDate   || '').replace(/'/g, \"''\").trim();\nconst edcFrom  = (q.edcFrom  || '').replace(/'/g, \"''\").trim();\nconst edcTo    = (q.edcTo    || '').replace(/'/g, \"''\").trim();\nconst limit    = Math.min(parseInt(q.limit  || 50), 500);\nconst offset   = parseInt(q.offset || 0);\n\nconst conditions = [\"c.is_deleted = 'No'\"];\n\nif (search) {\n  conditions.push(`(c.complaintno LIKE '%${search}%' OR cs.storename LIKE '%${search}%' OR cs.storecode LIKE '%${search}%' OR c.productname LIKE '%${search}%' OR c.vendorname LIKE '%${search}%' OR cs.empname LIKE '%${search}%' OR ve.ticketno LIKE '%${search}%')`);\n}\nif (status) {\n  conditions.push(`cl.status = '${status}'`);\n}\nif (type) {\n  conditions.push(`c.typeofcomplaint = '${type}'`);\n}\nif (vendor) {\n  conditions.push(`c.vendorname LIKE '%${vendor}%'`);\n}\nif (fm) {\n  conditions.push(`cs.fmname LIKE '%${fm}%'`);\n}\nif (fromDate) {\n  conditions.push(`DATE(c.created) >= '${fromDate}'`);\n}\nif (toDate) {\n  conditions.push(`DATE(c.created) <= '${toDate}'`);\n}\nif (edcFrom) {\n  conditions.push(`ve.closuredate >= '${edcFrom}'`);\n}\nif (edcTo) {\n  conditions.push(`ve.closuredate <= '${edcTo}'`);\n}\n\nconst where = conditions.join(' AND ');\n\nconst joins = `FROM vmm_complaints c LEFT JOIN vmm_complaintstores cs ON cs.id = c.storerefid LEFT JOIN vmm_vendorescalations ve ON ve.id = (SELECT MAX(id) FROM vmm_vendorescalations WHERE complaintid = c.id) LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE ${where}`;\n\nconst dataSQL  = `SELECT c.id, c.complaintno, c.productname, c.producttype, c.vendorname, c.typeofcomplaint, c.tat, c.created, cs.storecode AS store_code, cs.storename AS store_name, cs.storecity AS city, cs.statename AS state, cs.fmname, cs.fmmobileno, cs.empname, cs.empmobileno, ve.id AS escalation_id, ve.closuredate AS edc, ve.escalationlevel, ve.ticketno AS vendor_ticketno, DATEDIFF(CURDATE(), c.created) AS aging, DATEDIFF(CURDATE(), ve.closuredate) AS days_overdue, cl.status AS current_status ${joins} ORDER BY c.created DESC LIMIT ${limit} OFFSET ${offset}`;\n\nconst countSQL = `SELECT COUNT(*) AS total ${joins}`;\n\nreturn [{ json: { dataSQL, countSQL } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 352],
+      "id": "crm02-node-0002",
+      "name": "Build Queries"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.dataSQL }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [680, 352],
+      "id": "crm02-node-0003",
+      "name": "Execute Data",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Build Queries').first().json.countSQL }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [900, 352],
+      "id": "crm02-node-0006",
+      "name": "Execute Count",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows  = $('Execute Data').all().map(i => i.json);\nconst ctRow = $('Execute Count').first().json;\nconst total = parseInt(ctRow.total ?? ctRow['COUNT(*)'] ?? rows.length);\nreturn [{ json: { success: true, total, count: rows.length, complaints: rows } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 352],
+      "id": "crm02-node-0004",
+      "name": "Format Results"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1340, 352],
+      "id": "crm02-node-0005",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook GET vmm-search-complaints": { "main": [[{ "node": "Build Queries",    "type": "main", "index": 0 }]] },
+    "Build Queries":                     { "main": [[{ "node": "Execute Data",     "type": "main", "index": 0 }]] },
+    "Execute Data":                      { "main": [[{ "node": "Execute Count",    "type": "main", "index": 0 }]] },
+    "Execute Count":                     { "main": [[{ "node": "Format Results",   "type": "main", "index": 0 }]] },
+    "Format Results":                    { "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]] }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

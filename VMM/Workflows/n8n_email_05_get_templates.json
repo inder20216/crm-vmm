@@ -1,0 +1,80 @@
+{
+  "name": "VMM Email - Get Templates",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "vmm-email-templates",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-128, 688],
+      "id": "b4a3509c-7332-4089-ba27-ae7115e3fa4f",
+      "name": "Webhook - GET /vmm-email-templates",
+      "webhookId": "vmm-email-templates"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1-a7miRCetJSV6JhXuSAC2LPlCHbK0HHS8J1_qKPvvNE",
+          "mode": "list",
+          "cachedResultName": "Email _templates_vmm",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1-a7miRCetJSV6JhXuSAC2LPlCHbK0HHS8J1_qKPvvNE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1-a7miRCetJSV6JhXuSAC2LPlCHbK0HHS8J1_qKPvvNE/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [96, 688],
+      "id": "b48a5823-cc2c-4261-8fc3-73f16ba1822f",
+      "name": "Get Templates Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "ltEEeRayxtB2S0lJ", "name": "Inder" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const templates = $input.all()\n  .map(i => ({\n    id:       parseInt(i.json['ID'] || 0),\n    name:     i.json['Template Name'] || '',\n    category: i.json['Category']      || '',\n    body:     i.json['Template Body'] || '',\n  }))\n  .filter(t => t.id > 0 && t.name);\nreturn [{ json: { success: true, count: templates.length, templates } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 688],
+      "id": "6d43cb81-2747-4b75-a8fa-31b355e73828",
+      "name": "Map Templates"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [544, 688],
+      "id": "215ec070-eced-4477-bce5-50d949868eca",
+      "name": "Respond3"
+    }
+  ],
+  "connections": {
+    "Webhook - GET /vmm-email-templates": { "main": [[{ "node": "Get Templates Sheet", "type": "main", "index": 0 }]] },
+    "Get Templates Sheet":                { "main": [[{ "node": "Map Templates",        "type": "main", "index": 0 }]] },
+    "Map Templates":                      { "main": [[{ "node": "Respond3",             "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

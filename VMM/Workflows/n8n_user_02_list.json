@@ -1,0 +1,60 @@
+{
+  "name": "VMM User — List All Users",
+  "_setup": "Returns all active users for the Admin User Management page.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-users-list",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "usr02-0001-0000-0000-000000000001",
+      "name": "Webhook — GET /vmm-users-list"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, email, type, status, is_deleted, DATE_FORMAT(created, '%Y-%m-%d') AS created_at FROM vmm_users WHERE is_deleted = 'no' ORDER BY type ASC, name ASC",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 352],
+      "id": "usr02-0002-0000-0000-000000000002",
+      "name": "List Users",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const users = $input.all().map(i => ({\n  id:         i.json.id,\n  name:       i.json.name,\n  ms_email:   i.json.email,\n  role:       i.json.type === 'admin' ? 'admin' : 'user',\n  type:       i.json.type,\n  status:     i.json.status === '1' ? 'active' : 'inactive',\n  created_at: i.json.created_at,\n}));\nreturn [{ json: { success: true, count: users.length, users } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 352],
+      "id": "usr02-0003-0000-0000-000000000003",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] } }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 352],
+      "id": "usr02-0004-0000-0000-000000000004",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook — GET /vmm-users-list": { "main": [[{ "node": "List Users",      "type": "main", "index": 0 }]] },
+    "List Users":                    { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Format Response":               { "main": [[{ "node": "Respond",         "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

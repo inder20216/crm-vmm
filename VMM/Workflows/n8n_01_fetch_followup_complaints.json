@@ -1,0 +1,66 @@
+{
+  "name": "VMM FU - Fetch Follow-up Complaints",
+  "nodes": [
+    {
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "fu01-node-0001",
+      "name": "Webhook GET vmm-followup-complaints",
+      "webhookId": "vmm-followup-complaints",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-followup-complaints",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.id, c.complaintno, c.productname, c.producttype, c.vendorname, c.productlocation, c.natureofproblem, c.typeofcomplaint, c.tat, c.created, cs.storecode AS store_code, cs.storename AS store_name, cs.storecity AS city, cs.empname, cs.empmobileno, cs.empcode, cs.empdesignation, cs.managername, cs.managermobileno, cs.asmname, cs.asmmobileno, cs.fmname AS fm_name, cs.fmemail AS fm_email, cs.fmmobileno AS fm_mobile, ve.id AS escalation_id, ve.escalationlevel, ve.ticketno, ve.closuredate, DATEDIFF(CURDATE(), ve.closuredate) AS days_overdue, cl.status AS current_status, cl.remarks AS last_remark, (SELECT COUNT(*) FROM vmm_complaintlogs WHERE complaintid = c.id AND status = 'Not Connected') AS nc_count FROM vmm_complaints c LEFT JOIN vmm_complaintstores cs ON cs.id = c.storerefid LEFT JOIN vmm_vendorescalations ve ON ve.id = (SELECT MAX(id) FROM vmm_vendorescalations WHERE complaintid = c.id) LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND LOWER(c.producttype) NOT LIKE '%pest%' AND LOWER(c.productname) NOT LIKE '%pest%' AND (cl.status IS NULL OR cl.status NOT IN ('Closed', 'Resolved')) ORDER BY CASE WHEN ve.closuredate IS NOT NULL AND DATEDIFF(CURDATE(), ve.closuredate) > 0 THEN 0 ELSE 1 END, ve.closuredate ASC",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 352],
+      "id": "fu01-node-0002",
+      "name": "Fetch Open Complaints",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const complaints = $input.all().map(i => ({\n  id:              i.json.id,\n  complaintno:     i.json.complaintno,\n  productname:     i.json.productname,\n  producttype:     i.json.producttype,\n  vendorname:      i.json.vendorname,\n  productlocation: i.json.productlocation,\n  natureofproblem: typeof i.json.natureofproblem === 'object' ? Buffer.from(i.json.natureofproblem?.data || []).toString('utf8') : i.json.natureofproblem,\n  typeofcomplaint: i.json.typeofcomplaint,\n  tat:             i.json.tat,\n  created:         i.json.created,\n  store_code:      i.json.store_code,\n  store_name:      i.json.store_name,\n  city:            i.json.city,\n  empname:         i.json.empname,\n  empmobileno:     i.json.empmobileno,\n  empcode:         i.json.empcode,\n  empdesignation:  i.json.empdesignation,\n  managername:     i.json.managername,\n  managermobileno: i.json.managermobileno,\n  asmname:         i.json.asmname,\n  asmmobileno:     i.json.asmmobileno,\n  fm_name:         i.json.fm_name,\n  fm_email:        i.json.fm_email,\n  fm_mobile:       i.json.fm_mobile,\n  escalation_id:   i.json.escalation_id,\n  escalationlevel: i.json.escalationlevel,\n  ticketno:        i.json.ticketno,\n  closuredate:     i.json.closuredate,\n  days_overdue:    parseInt(i.json.days_overdue || 0),\n  current_status:  i.json.current_status || 'Open',\n  last_remark:     i.json.last_remark,\n  nc_count:        parseInt(i.json.nc_count || 0),\n}));\n\nreturn [{ json: { success: true, count: complaints.length, complaints } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 352],
+      "id": "fu01-node-0003",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 352],
+      "id": "fu01-node-0004",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook GET vmm-followup-complaints": { "main": [[{ "node": "Fetch Open Complaints", "type": "main", "index": 0 }]] },
+    "Fetch Open Complaints": { "main": [[{ "node": "Format Response",    "type": "main", "index": 0 }]] },
+    "Format Response":       { "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]] }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

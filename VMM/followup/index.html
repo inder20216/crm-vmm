@@ -1,0 +1,1572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VMM Follow-up — Open Mind</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --purple:  #7c3aed;
+      --purple-l:#ede9fe;
+      --purple-d:#5b21b6;
+      --cyan:    #0891b2;
+      --cyan-l:  #cffafe;
+      --dark:    #1e1b4b;
+      --red:     #dc2626;
+      --red-l:   #fee2e2;
+      --amber:   #d97706;
+      --amber-l: #fef3c7;
+      --green:   #16a34a;
+      --green-l: #dcfce7;
+      --gray:    #64748b;
+      --border:  #e2e8f0;
+      --bg:      #f1f5f9;
+    }
+
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: #1e293b; min-height: 100vh; }
+
+    /* ── Header ── */
+    .header {
+      background: var(--dark);
+      padding: 0 24px;
+      height: 58px;
+      display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 200;
+      box-shadow: 0 2px 12px rgba(0,0,0,.3);
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .logo-mark {
+      width: 36px; height: 36px; border-radius: 9px;
+      background: var(--purple); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 13px; letter-spacing: -.5px;
+    }
+    .logo-info { line-height: 1.3; }
+    .logo-name { font-size: 15px; font-weight: 700; color: #fff; }
+    .logo-sub  { font-size: 11px; color: #94a3b8; }
+    .header-right { display: flex; align-items: center; gap: 10px; }
+    .last-updated { font-size: 11px; color: #64748b; }
+    .btn-refresh {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 14px; border-radius: 7px; border: 1px solid #334155;
+      background: #0f172a; color: #94a3b8; font-size: 12px; cursor: pointer;
+    }
+    .btn-refresh:hover { background: #1e293b; color: #fff; }
+
+    /* ── Stats ── */
+    .stats-bar {
+      display: grid; grid-template-columns: repeat(4,1fr);
+      gap: 14px; padding: 20px 24px 0;
+    }
+    .stat {
+      background: #fff; border-radius: 10px;
+      padding: 16px 18px; border: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .stat-label { font-size: 10px; font-weight: 700; color: var(--gray); text-transform: uppercase; letter-spacing: .06em; }
+    .stat-num   { font-size: 28px; font-weight: 800; line-height: 1; }
+    .num-purple { color: var(--purple); }
+    .num-red    { color: var(--red); }
+    .num-amber  { color: var(--amber); }
+    .num-dark   { color: #1e293b; }
+
+    /* ── Toolbar ── */
+    .toolbar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 18px 24px 12px;
+    }
+    .search-box {
+      flex: 1; max-width: 300px;
+      padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px;
+      font-size: 13px; background: #fff; outline: none; font-family: inherit;
+    }
+    .search-box:focus { border-color: var(--purple); }
+    .filter-select {
+      padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+      font-size: 13px; background: #fff; cursor: pointer; outline: none; font-family: inherit;
+    }
+    .filter-select:focus { border-color: var(--purple); }
+    .count-pill {
+      margin-left: auto;
+      background: var(--purple-l); color: var(--purple-d);
+      font-size: 12px; font-weight: 700;
+      padding: 4px 12px; border-radius: 20px;
+    }
+
+    /* ── Date groups ── */
+    .groups { padding: 0 24px 40px; display: flex; flex-direction: column; gap: 12px; }
+
+    .date-group { background: #fff; border-radius: 12px; border: 1px solid var(--border); overflow: hidden; }
+
+    .date-header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px 18px; cursor: pointer; user-select: none;
+      border-bottom: 1px solid transparent; transition: background .15s;
+    }
+    .date-header:hover { background: #fafbff; }
+    .date-header.open { border-bottom-color: var(--border); background: #f8f5ff; }
+
+    .chevron { font-size: 13px; color: var(--purple); transition: transform .2s; width: 16px; }
+    .chevron.open { transform: rotate(90deg); }
+
+    .date-label { font-size: 15px; font-weight: 700; color: #1e293b; }
+    .date-count {
+      background: var(--purple); color: #fff;
+      font-size: 11px; font-weight: 700;
+      padding: 2px 9px; border-radius: 20px;
+    }
+    .date-overdue {
+      margin-left: auto;
+      font-size: 12px; font-weight: 700;
+      padding: 3px 10px; border-radius: 20px;
+    }
+    .ov-critical { background: var(--red-l);   color: var(--red);   }
+    .ov-high     { background: var(--amber-l);  color: var(--amber); }
+    .ov-moderate { background: #fef9c3;         color: #b45309;      }
+    .ov-low      { background: #dbeafe;         color: #1d4ed8;      }
+
+    /* ── Complaint rows ── */
+    .complaints-list { display: none; }
+    .complaints-list.open { display: block; }
+
+    .complaint-row {
+      padding: 14px 18px;
+      border-bottom: 1px solid #f1f5f9;
+      display: grid;
+      grid-template-columns: 140px 1fr 1fr 1fr auto auto;
+      gap: 12px;
+      align-items: center;
+    }
+    .complaint-row:last-child { border-bottom: none; }
+    .complaint-row:hover { background: #fafbff; }
+
+    .cno     { font-size: 12px; font-weight: 700; color: var(--purple); letter-spacing: .3px; }
+    .cdate   { font-size: 10px; color: var(--gray); margin-top: 3px; }
+    .cstore  { font-size: 13px; font-weight: 600; }
+    .csub    { font-size: 11px; color: var(--gray); margin-top: 2px; }
+    .cbold   { font-size: 13px; font-weight: 500; }
+
+    .days-badge {
+      font-size: 12px; font-weight: 700;
+      padding: 4px 10px; border-radius: 20px;
+      white-space: nowrap;
+    }
+    .days-critical { background: var(--red-l);  color: var(--red);   }
+    .days-high     { background: var(--amber-l); color: var(--amber); }
+    .days-moderate { background: #fef9c3;        color: #b45309;      }
+    .days-low      { background: #dbeafe;        color: #1d4ed8;      }
+    .days-due      { background: #fef9c3;        color: #b45309;      }
+    .days-noedc    { background: #f1f5f9;        color: #64748b;      }
+
+    .critical-dot {
+      display: inline-block; width: 7px; height: 7px;
+      border-radius: 50%; background: var(--red);
+      margin-right: 5px; vertical-align: middle;
+    }
+
+    .row-actions { display: flex; gap: 6px; }
+    .btn-pc {
+      padding: 6px 12px; border-radius: 6px; border: none;
+      font-size: 11px; font-weight: 700; cursor: pointer;
+      background: var(--amber); color: #fff;
+    }
+    .btn-pc:hover { background: #b45309; }
+    .btn-close {
+      padding: 6px 12px; border-radius: 6px; border: none;
+      font-size: 11px; font-weight: 700; cursor: pointer;
+      background: var(--green); color: #fff;
+    }
+    .btn-close:hover { background: #15803d; }
+    .btn-edc {
+      padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+      font-size: 11px; font-weight: 700; cursor: pointer;
+      background: #fff; color: var(--purple);
+      border-color: var(--purple);
+    }
+    .btn-edc:hover { background: var(--purple-l); }
+    .btn-nc {
+      padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+      font-size: 11px; font-weight: 700; cursor: pointer;
+      background: #fff; color: var(--gray);
+    }
+    .btn-nc:hover { background: var(--bg); }
+
+    /* ── State messages ── */
+    .state-msg { text-align: center; padding: 60px 20px; color: var(--gray); }
+    .state-icon { font-size: 40px; margin-bottom: 12px; }
+    .state-text { font-size: 15px; font-weight: 500; }
+    .state-sub  { font-size: 13px; color: #94a3b8; margin-top: 6px; }
+
+    /* ── Modal overlay ── */
+    .overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(15,23,42,.55); z-index: 500;
+      align-items: center; justify-content: center; padding: 20px;
+    }
+    .overlay.open { display: flex; }
+
+    .modal {
+      background: #fff; border-radius: 14px;
+      width: 100%; max-width: 460px;
+      box-shadow: 0 16px 48px rgba(0,0,0,.22);
+      overflow: hidden;
+    }
+    .modal.modal-wide { max-width: 680px; }
+    .modal-body { padding: 18px 22px; max-height: 75vh; overflow-y: auto; }
+    .fields-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+    .fields-2col .field { margin-bottom: 14px; }
+    .field-full { grid-column: 1 / -1; }
+    .modal-head {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: 20px 22px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-title { font-size: 16px; font-weight: 700; color: #1e293b; }
+    .modal-sub   { font-size: 12px; color: var(--gray); margin-top: 3px; }
+    .modal-x     { background: none; border: none; font-size: 20px; color: #94a3b8; cursor: pointer; line-height: 1; padding: 2px; }
+    .modal-x:hover { color: #1e293b; }
+
+    .modal-body { padding: 18px 22px; }
+
+    .complaint-chip {
+      background: #f8f5ff; border: 1px solid #ddd6fe;
+      border-radius: 8px; padding: 10px 14px;
+      margin-bottom: 16px; font-size: 12px; color: #4c1d95;
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .complaint-chip strong { font-size: 13px; color: var(--dark); }
+
+    .field       { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+    .field label { font-size: 12px; font-weight: 600; color: #374151; }
+    .field input, .field textarea, .field select {
+      padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px;
+      font-size: 13px; font-family: inherit; outline: none;
+    }
+    .field input:focus, .field textarea:focus { border-color: var(--purple); }
+    .field textarea { resize: vertical; }
+
+    .modal-foot {
+      display: flex; gap: 10px; justify-content: flex-end;
+      padding: 14px 22px; border-top: 1px solid var(--border);
+      background: #fafafa;
+    }
+    .btn-cancel {
+      padding: 9px 18px; border-radius: 8px;
+      border: 1px solid var(--border); background: #fff;
+      font-size: 13px; cursor: pointer; color: #374151; font-family: inherit;
+    }
+    .btn-cancel:hover { background: var(--bg); }
+    .btn-confirm {
+      padding: 9px 22px; border-radius: 8px; border: none;
+      background: var(--purple); color: #fff;
+      font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;
+    }
+    .btn-confirm:hover   { background: var(--purple-d); }
+    .btn-confirm:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-confirm.green   { background: var(--green); }
+    .btn-confirm.green:hover { background: #15803d; }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed; bottom: 24px; right: 24px;
+      padding: 12px 20px; border-radius: 9px;
+      font-size: 13px; font-weight: 600; color: #fff;
+      z-index: 1000; opacity: 0; transform: translateY(20px);
+      transition: all .3s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.ok  { background: var(--green); }
+    .toast.err { background: var(--red); }
+
+    /* ── History timeline ── */
+    .hist-modal { max-width: 600px !important; }
+    .hist-body  { max-height: 65vh; overflow-y: auto; padding: 16px 22px; }
+
+    .hist-section { margin-bottom: 20px; }
+    .hist-section-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .06em; color: var(--gray);
+      padding-bottom: 8px; border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+
+    .timeline { display: flex; flex-direction: column; gap: 0; }
+    .tl-item {
+      display: flex; gap: 12px; padding: 8px 0;
+      position: relative;
+    }
+    .tl-item:not(:last-child)::after {
+      content: ''; position: absolute;
+      left: 14px; top: 32px; bottom: -8px; width: 2px;
+      background: var(--border);
+    }
+    .tl-dot {
+      width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; z-index: 1; margin-top: 2px;
+    }
+    .tl-esc   { background: var(--purple-l); color: var(--purple); }
+    .tl-log   { background: #e0f2fe;         color: var(--cyan);   }
+    .tl-close { background: var(--green-l);  color: var(--green);  }
+    .tl-content { flex: 1; }
+    .tl-head  { font-size: 13px; font-weight: 600; color: #1e293b; }
+    .tl-meta  { font-size: 11px; color: var(--gray); margin-top: 2px; }
+    .tl-remark {
+      font-size: 12px; color: #374151;
+      background: #f8fafc; border-left: 3px solid var(--border);
+      padding: 5px 10px; border-radius: 0 6px 6px 0;
+      margin-top: 5px;
+    }
+    .tl-empty { font-size: 13px; color: #94a3b8; text-align: center; padding: 20px 0; }
+
+    .btn-hist {
+      padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);
+      font-size: 11px; font-weight: 700; cursor: pointer;
+      background: #fff; color: var(--gray);
+    }
+    .btn-hist:hover { background: var(--bg); color: #1e293b; }
+
+    /* ── Date summary cards ── */
+    .ds-section { padding: 0 24px 14px; }
+    .ds-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .06em; color: var(--gray); margin-bottom: 10px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .ds-cards {
+      display: flex; gap: 10px;
+      overflow-x: auto; padding-bottom: 4px;
+    }
+    .ds-cards::-webkit-scrollbar { height: 4px; }
+    .ds-cards::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+    .ds-card {
+      flex-shrink: 0; background: #fff;
+      border: 1.5px solid var(--border); border-radius: 10px;
+      padding: 12px 16px; cursor: pointer; min-width: 160px;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .ds-card:hover { border-color: var(--purple); box-shadow: 0 2px 8px rgba(124,58,237,.12); }
+    .ds-card.active { border-color: var(--purple); background: #faf5ff; }
+    .ds-card-date { font-size: 13px; font-weight: 700; color: #1e293b; margin-bottom: 5px; }
+    .ds-card-count { font-size: 22px; font-weight: 800; color: var(--purple); line-height: 1; }
+    .ds-card-meta { font-size: 11px; color: var(--gray); margin-top: 4px; }
+    .ds-card-crit { font-size: 11px; color: var(--red); font-weight: 700; margin-top: 2px; }
+    .btn-showall {
+      padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+      background: #fff; color: var(--gray); font-size: 12px; font-weight: 600;
+      cursor: pointer; white-space: nowrap;
+    }
+    .btn-showall:hover { background: var(--bg); }
+
+    /* ── Contact numbers in row ── */
+    .contact-num {
+      font-size: 11px; font-weight: 600; margin-top: 3px;
+    }
+    .contact-num.emp  { color: var(--purple); }
+    .contact-num.mgr  { color: var(--green); }
+    .contact-num.asm  { color: var(--amber); }
+    .contact-num.fm   { color: var(--cyan); }
+    .contact-num.none { color: #ef4444; font-style: italic; }
+
+    /* ── Closure status toggle ── */
+    .status-toggle, .fu-method-tabs { display: flex; gap: 6px; }
+    .stgl-btn {
+      flex: 1; padding: 8px; border-radius: 7px; border: 1.5px solid var(--border);
+      font-size: 12px; font-weight: 600; cursor: pointer; background: #fff; color: var(--gray);
+    }
+    .stgl-btn.active { border-color: var(--green); background: var(--green-l); color: var(--green); }
+    .fu-tab {
+      flex: 1; padding: 8px; border-radius: 7px; border: 1.5px solid var(--border);
+      font-size: 12px; font-weight: 600; cursor: pointer; background: #fff; color: var(--gray);
+    }
+    .fu-tab.active { border-color: var(--purple); background: var(--purple-l); color: var(--purple); }
+    .close-check-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 0; margin-bottom: 6px;
+    }
+    .close-check-row input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; }
+    .close-check-row label { font-size: 13px; font-weight: 500; cursor: pointer; color: #374151; }
+
+    /* ── Dialer ── */
+    .btn-call {
+      padding: 6px 12px; border-radius: 6px; border: none;
+      font-size: 11px; font-weight: 700; cursor: pointer;
+      background: var(--green); color: #fff;
+    }
+    .btn-call:hover { background: #15803d; }
+
+    .call-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+    .call-tab {
+      flex: 1; padding: 8px; border-radius: 7px; border: 1.5px solid var(--border);
+      font-size: 12px; font-weight: 600; cursor: pointer; background: #fff;
+      color: var(--gray); text-align: center;
+    }
+    .call-tab.active { border-color: var(--green); background: var(--green-l); color: var(--green); }
+
+    .call-number-display {
+      background: #f0fdf4; border: 1px solid #bbf7d0;
+      border-radius: 10px; padding: 14px 18px;
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 16px;
+    }
+    .call-number-icon { font-size: 22px; }
+    .call-number-val  { font-size: 20px; font-weight: 800; color: #15803d; letter-spacing: 1px; }
+    .call-number-who  { font-size: 12px; color: var(--gray); margin-top: 2px; }
+
+    .call-state-msg {
+      text-align: center; padding: 14px;
+      font-size: 14px; font-weight: 600;
+    }
+    .calling-anim { color: var(--green); }
+    .call-outcome { display: flex; gap: 10px; margin-top: 6px; }
+    .btn-connected    { flex:1; padding:10px; border-radius:8px; border:none; background:var(--green); color:#fff; font-size:13px; font-weight:700; cursor:pointer; }
+    .btn-not-connected{ flex:1; padding:10px; border-radius:8px; border:1px solid var(--border); background:#fff; color:var(--gray); font-size:13px; font-weight:700; cursor:pointer; }
+    .btn-not-connected:hover { background: var(--bg); }
+
+    .settings-gear {
+      background: none; border: 1px solid #334155; border-radius: 7px;
+      color: #94a3b8; font-size: 16px; cursor: pointer; padding: 5px 9px;
+    }
+    .settings-gear:hover { background: #1e293b; color: #fff; }
+    .settings-warn { font-size: 12px; color: var(--amber); font-weight: 600; margin-left: 6px; }
+
+    .btn-stg {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 14px; border-radius: 7px;
+      border: 1px solid #16a34a;
+      background: rgba(22,163,74,.12); color: #4ade80;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .btn-stg:hover   { background: rgba(22,163,74,.25); }
+    .btn-stg.active  { background: var(--green); color: #fff; border-color: var(--green); }
+    .btn-stg.ringing { animation: stg-ring .5s infinite; }
+    @keyframes stg-ring {
+      0%,100% { background: rgba(22,163,74,.12); }
+      50%      { background: rgba(22,163,74,.4); }
+    }
+
+    @media (max-width: 900px) {
+      .stats-bar { grid-template-columns: 1fr 1fr; }
+      .complaint-row { grid-template-columns: 1fr 1fr; gap: 8px; }
+    }
+
+    /* ── Dialer widget ── */
+    .dialer-fab {
+      position: fixed; bottom: 28px; right: 28px; z-index: 600;
+      width: 54px; height: 54px; border-radius: 50%; border: none;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.25);
+      transition: background .2s, transform .15s;
+    }
+    .dialer-fab:hover { transform: scale(1.08); }
+    .dialer-fab.idle    { background: var(--purple); color: #fff; }
+    .dialer-fab.calling { background: var(--amber);  color: #fff; animation: fab-pulse 1s infinite; }
+    .dialer-fab.active  { background: var(--green);  color: #fff; animation: fab-pulse 1s infinite; }
+    .dialer-fab.ended   { background: var(--gray);   color: #fff; }
+    @keyframes fab-pulse {
+      0%,100% { box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+      50%      { box-shadow: 0 4px 28px rgba(0,0,0,.4), 0 0 0 8px rgba(255,255,255,.15); }
+    }
+
+    .dialer-widget {
+      position: fixed; bottom: 92px; right: 28px; z-index: 600;
+      width: 300px; background: #fff; border-radius: 14px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.2); overflow: hidden;
+      display: none; flex-direction: column;
+    }
+    .dialer-widget.open { display: flex; }
+
+    .dw-header {
+      background: var(--dark); padding: 12px 16px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .dw-header-icon { font-size: 18px; }
+    .dw-header-info { flex: 1; }
+    .dw-header-title { font-size: 13px; font-weight: 700; color: #fff; }
+    .dw-header-sub   { font-size: 11px; color: #94a3b8; margin-top: 1px; }
+    .dw-close { background: none; border: none; color: #64748b; font-size: 16px; cursor: pointer; padding: 2px 6px; }
+    .dw-close:hover { color: #fff; }
+
+    .dw-body { padding: 16px; }
+
+    /* idle */
+    .dw-idle-info { font-size: 12px; color: var(--gray); text-align: center; padding: 8px 0 12px; }
+
+    /* calling */
+    .dw-avatar {
+      width: 56px; height: 56px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; font-weight: 800; color: #fff;
+      margin: 0 auto 12px; flex-shrink: 0;
+    }
+    .dw-avatar.calling { background: var(--amber); animation: fab-pulse 1s infinite; }
+    .dw-avatar.active  { background: var(--green); }
+    .dw-avatar.ended   { background: var(--gray); }
+    .dw-avatar.done    { background: var(--green); }
+
+    .dw-name   { text-align: center; font-size: 14px; font-weight: 700; color: #1e293b; }
+    .dw-phone  { text-align: center; font-size: 12px; color: var(--gray); margin-top: 3px; font-family: monospace; }
+    .dw-status { text-align: center; font-size: 12px; color: var(--gray); margin-top: 8px; }
+
+    .dw-timer  {
+      text-align: center; font-size: 28px; font-weight: 800;
+      font-family: monospace; color: var(--green); margin: 10px 0;
+    }
+
+    .btn-end-call {
+      width: 100%; padding: 10px; border-radius: 8px; border: none;
+      background: var(--red); color: #fff; font-size: 13px;
+      font-weight: 700; cursor: pointer; margin-top: 8px;
+    }
+    .btn-end-call:hover { background: #b91c1c; }
+
+    /* result */
+    .dw-result { background: #f8fafc; border-radius: 8px; padding: 12px; margin-top: 8px; }
+    .dw-result-row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+    .dw-result-row:last-child { border-bottom: none; }
+    .dw-result-label { color: var(--gray); }
+    .dw-result-val   { font-weight: 600; color: #1e293b; }
+    .dw-disp {
+      font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 12px;
+    }
+    .dw-disp.connected  { background: var(--green-l); color: var(--green); }
+    .dw-disp.no-answer  { background: var(--amber-l); color: var(--amber); }
+    .dw-disp.busy       { background: var(--red-l);   color: var(--red);   }
+    .dw-disp.other      { background: #f1f5f9;        color: var(--gray);  }
+
+    .dw-new-call {
+      width: 100%; padding: 9px; border-radius: 8px; border: none;
+      background: var(--purple); color: #fff; font-size: 12px;
+      font-weight: 700; cursor: pointer; margin-top: 12px;
+    }
+    .dw-new-call:hover { background: var(--purple-d); }
+
+    /* mini bar when widget closed */
+    .dialer-mini-bar {
+      position: fixed; bottom: 92px; right: 92px; z-index: 599;
+      background: var(--green); color: #fff; border-radius: 20px;
+      padding: 6px 14px; font-size: 12px; font-weight: 700;
+      display: none; align-items: center; gap: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.2); cursor: pointer;
+    }
+    .dialer-mini-bar.show { display: flex; }
+
+    /* ── Login screen ── */
+    .login-screen {
+      position: fixed; inset: 0; z-index: 900;
+      background: linear-gradient(135deg, #1e1b4b 0%, #312e81 60%, #4c1d95 100%);
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .login-screen.hidden { display: none; }
+    .login-card {
+      background: #fff; border-radius: 16px;
+      width: 100%; max-width: 380px;
+      box-shadow: 0 24px 64px rgba(0,0,0,.35);
+      overflow: hidden;
+    }
+    .login-card-head {
+      background: var(--dark); padding: 28px 28px 22px;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+    }
+    .login-logo {
+      width: 52px; height: 52px; border-radius: 14px;
+      background: var(--purple); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 17px;
+    }
+    .login-title { font-size: 18px; font-weight: 800; color: #fff; }
+    .login-sub   { font-size: 12px; color: #94a3b8; margin-top: -4px; }
+    .login-card-body { padding: 26px 28px 10px; }
+    .login-card-body .field { margin-bottom: 16px; }
+    .login-card-body .field label { font-size: 12px; font-weight: 700; color: #374151; display: block; margin-bottom: 5px; }
+    .login-card-body .field input {
+      width: 100%; padding: 10px 13px; border: 1.5px solid var(--border);
+      border-radius: 8px; font-size: 14px; font-family: inherit; outline: none;
+    }
+    .login-card-body .field input:focus { border-color: var(--purple); }
+    .login-hint { font-size: 11px; color: #94a3b8; margin-bottom: 16px; line-height: 1.5; }
+    .login-card-foot { padding: 0 28px 26px; }
+    .btn-login {
+      width: 100%; padding: 12px; border-radius: 9px; border: none;
+      background: var(--purple); color: #fff;
+      font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit;
+      transition: background .15s;
+    }
+    .btn-login:hover    { background: var(--purple-d); }
+    .btn-login:disabled { opacity: .6; cursor: not-allowed; }
+    .login-err { font-size: 12px; color: var(--red); margin-top: 10px; text-align: center; min-height: 18px; }
+
+    .agent-chip {
+      display: flex; align-items: center; gap: 8px;
+      background: #f1f5f9; border-radius: 8px; padding: 6px 12px;
+    }
+    .agent-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0;
+    }
+    .agent-name { font-size: 12px; font-weight: 600; color: #1e293b; }
+    .btn-logout {
+      background: none; border: none; font-size: 11px; color: #94a3b8;
+      cursor: pointer; padding: 2px 6px; border-radius: 4px; margin-left: auto;
+    }
+    .btn-logout:hover { color: var(--red); background: var(--red-l); }
+  </style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div class="login-screen" id="login-screen">
+  <div class="login-card">
+    <div class="login-card-head">
+      <div class="login-logo">OM</div>
+      <div class="login-title">VMM Follow-up</div>
+      <div class="login-sub">Open Mind Services</div>
+    </div>
+    <div class="login-card-body">
+      <div class="login-hint">Enter your name to start. Click the SparkTG button in the header to open the dialer in a separate window — log in there once, then use this portal normally.</div>
+      <div class="field"><label>Your Name</label><input type="text" id="l-user" placeholder="e.g. Rahul Sharma" autocomplete="name" /></div>
+    </div>
+    <div class="login-card-foot">
+      <button class="btn-login" id="btn-login" onclick="doLogin()">Sign In</button>
+      <div class="login-err" id="login-err"></div>
+    </div>
+  </div>
+</div>
+
+<header class="header">
+  <div class="header-left">
+    <div class="logo-mark">OM</div>
+    <div class="logo-info">
+      <div class="logo-name">VMM Follow-up</div>
+      <div class="logo-sub">Open Mind Services — Overdue Escalations</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="last-updated" id="last-updated"></span>
+    <div class="agent-chip" id="agent-chip" style="display:none;">
+      <div class="agent-dot"></div>
+      <div class="agent-name" id="agent-name"></div>
+      <button class="btn-logout" onclick="doLogout()" title="Sign out">Sign out</button>
+    </div>
+    <button class="btn-stg" id="btn-stg" onclick="stgOpen()" title="Open SparkTG Dialer">📞 SparkTG</button>
+    <button class="btn-refresh" onclick="loadComplaints()">↻ Refresh</button>
+  </div>
+</header>
+
+<!-- Stats -->
+<div class="stats-bar">
+  <div class="stat">
+    <div class="stat-label">Total Open</div>
+    <div class="stat-num num-purple" id="s-total">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Critical Products</div>
+    <div class="stat-num num-red" id="s-critical">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">EDC Overdue</div>
+    <div class="stat-num num-amber" id="s-overdue">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">No EDC Set</div>
+    <div class="stat-num num-dark" id="s-noedc">—</div>
+  </div>
+</div>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  <input class="search-box" type="text" placeholder="Search store, complaint no, product…" oninput="applyFilter()" id="q" />
+  <select class="filter-select" onchange="applyFilter()" id="f-sev">
+    <option value="">All Complaints</option>
+    <option value="critical">Critical Products</option>
+    <option value="overdue">Due Today or Earlier</option>
+    <option value="noedc">No EDC Set</option>
+  </select>
+  <select class="filter-select" onchange="applyFilter()" id="f-sort">
+    <option value="asc">Date: Oldest First</option>
+    <option value="desc">Date: Latest First</option>
+  </select>
+  <span class="count-pill" id="row-count"></span>
+</div>
+
+<!-- Date Summary -->
+<div class="ds-section" id="ds-section" style="display:none;">
+  <div class="ds-title">
+    Select a date to work on
+    <button class="btn-showall" id="btn-showall" onclick="showAll()" style="display:none;">← Show All</button>
+  </div>
+  <div class="ds-cards" id="ds-cards"></div>
+</div>
+
+<!-- Groups -->
+<div class="groups" id="groups">
+  <div class="state-msg">
+    <div class="state-icon">⏳</div>
+    <div class="state-text">Loading complaints…</div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title" id="m-title"></div>
+        <div class="modal-sub"   id="m-sub"></div>
+      </div>
+      <button class="modal-x" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="complaint-chip" id="m-chip"></div>
+      <div id="m-fields"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-confirm" id="m-confirm" onclick="submit()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Call Modal -->
+<div class="overlay" id="call-overlay">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-head">
+      <div><div class="modal-title" id="call-title">Make a Call</div>
+        <div class="modal-sub" id="call-sub"></div>
+      </div>
+      <button class="modal-x" onclick="closeCall()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="complaint-chip" id="call-chip"></div>
+      <div class="call-tabs" id="call-tabs"></div>
+      <div class="call-number-display" id="call-number-display">
+        <div class="call-number-icon">📞</div>
+        <div>
+          <div class="call-number-val" id="call-number-val">—</div>
+          <div class="call-number-who" id="call-number-who"></div>
+        </div>
+      </div>
+      <div class="call-state-msg" id="call-state-msg" style="display:none;"></div>
+      <div class="call-outcome" id="call-outcome" style="display:none;">
+        <button class="btn-connected"     onclick="logCallOutcome('connected')">✓ Connected</button>
+        <button class="btn-not-connected" onclick="logCallOutcome('nc')">✗ Not Connected</button>
+      </div>
+    </div>
+    <div class="modal-foot" id="call-foot">
+      <button class="btn-cancel" onclick="closeCall()">Cancel</button>
+      <button class="btn-confirm green" id="call-btn" onclick="startCall()">📞 Start Call</button>
+    </div>
+  </div>
+</div>
+
+<!-- History Modal -->
+<div class="overlay" id="hist-overlay">
+  <div class="modal hist-modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title" id="hist-title">Complaint History</div>
+        <div class="modal-sub"   id="hist-sub"></div>
+      </div>
+      <button class="modal-x" onclick="closeHistory()">✕</button>
+    </div>
+    <div class="hist-body" id="hist-body">
+      <div class="tl-empty">Loading…</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="closeHistory()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Dialer mini bar (when widget closed during active call) -->
+<div class="dialer-mini-bar" id="dialer-mini-bar" onclick="dialerOpen()">
+  <span id="dmb-timer">00:00</span>
+  <span id="dmb-label">On call</span>
+</div>
+
+
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = {
+  fetch:        'https://automation.openmindhelpline.com/webhook/vmm-followup-complaints',
+  close:        'https://automation.openmindhelpline.com/webhook/vmm-close-complaint',
+  updateEdc:    'https://automation.openmindhelpline.com/webhook/vmm-update-edc',
+  notConnected: 'https://automation.openmindhelpline.com/webhook/vmm-not-connected',
+  history:      'https://automation.openmindhelpline.com/webhook/vmm-complaint-history',
+  call:         'https://automation.openmindhelpline.com/webhook/vmm-sparktg-call',
+};
+
+const CRITICAL_PRODUCTS = [
+  'genset', 'electrical', 'electrical panel', 'ac', 'server room ac',
+  'sensormatic', 'tiles', 'led light',
+];
+
+function isCritical(c) {
+  const name = (c.productname || '').toLowerCase().trim();
+  const type = (c.producttype || '').toLowerCase().trim();
+  return CRITICAL_PRODUCTS.some(p => name === p || type === p || name.includes(p) || type.includes(p));
+}
+
+function isPestControl(c) {
+  return (c.producttype || '').toLowerCase().includes('pest') ||
+         (c.productname || '').toLowerCase().includes('pest');
+}
+
+let all = [];
+let current     = null; // { type, complaint }
+let ncStep1     = {};   // stores step-1 data while building email in step 2
+let currentCall = null; // { id, phone, complaint }
+let stgWin      = null; // SparkTG popup window reference
+
+// ── Load ─────────────────────────────────────────────────────────────────
+async function loadComplaints() {
+  setGroups('<div class="state-msg"><div class="state-icon">⏳</div><div class="state-text">Loading…</div></div>');
+  try {
+    const r = await fetch(API.fetch);
+    const d = await r.json();
+    all = (d.complaints || []).filter(c => !isPestControl(c));
+    updateStats(all);
+    renderDateSummary(all);
+    renderGroups(all);
+    document.getElementById('last-updated').textContent =
+      'Updated ' + new Date().toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit' });
+  } catch {
+    setGroups('<div class="state-msg"><div class="state-icon">⚠️</div><div class="state-text">Could not load</div><div class="state-sub">Check n8n workflow is active and MySQL is connected</div></div>');
+  }
+}
+
+function setGroups(html) { document.getElementById('groups').innerHTML = html; }
+
+// ── Stats ─────────────────────────────────────────────────────────────────
+function updateStats(list) {
+  document.getElementById('s-total').textContent    = list.length;
+  document.getElementById('s-critical').textContent = list.filter(isCritical).length;
+  document.getElementById('s-overdue').textContent  = list.filter(c => c.days_overdue !== null && c.days_overdue >= 0).length;
+  document.getElementById('s-noedc').textContent    = list.filter(c => !c.closuredate).length;
+}
+
+// ── Filter ─────────────────────────────────────────────────────────────────
+function applyFilter() {
+  const q   = document.getElementById('q').value.toLowerCase();
+  const sev = document.getElementById('f-sev').value;
+  let list  = all.filter(c => {
+    const hay = [c.complaintno, c.store_name, c.store_code, c.productname, c.vendorname, c.natureofproblem].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+  if (sev === 'critical') list = list.filter(c => isCritical(c));
+  if (sev === 'overdue')  list = list.filter(c => c.days_overdue !== null && c.days_overdue >= 0);
+  if (sev === 'noedc')    list = list.filter(c => !c.closuredate);
+  renderGroups(list);
+}
+
+// ── Render date groups ────────────────────────────────────────────────────
+function renderGroups(list) {
+  document.getElementById('row-count').textContent = list.length + ' complaint' + (list.length !== 1 ? 's' : '');
+
+  if (!list.length) {
+    setGroups('<div class="state-msg"><div class="state-icon">✅</div><div class="state-text">No overdue complaints</div><div class="state-sub">All escalations are within their closure dates</div></div>');
+    return;
+  }
+
+  // Group by closuredate (EDC); NULL dates → '__no_edc__'
+  const byDate = {};
+  list.forEach(c => {
+    const d = c.closuredate ? (c.closuredate + '').split('T')[0] : '__no_edc__';
+    if (!byDate[d]) byDate[d] = [];
+    byDate[d].push(c);
+  });
+
+  // Sort dated groups; No EDC group always goes last
+  const sortDir = (document.getElementById('f-sort')?.value || 'asc') === 'desc' ? -1 : 1;
+  const dated   = Object.keys(byDate).filter(k => k !== '__no_edc__').sort((a, b) => sortDir * (new Date(a) - new Date(b)));
+  const sorted  = byDate['__no_edc__'] ? [...dated, '__no_edc__'] : dated;
+
+  const html = sorted.map((date, idx) => {
+    const complaints  = byDate[date];
+    const isNoEdc     = date === '__no_edc__';
+    const isOpen      = idx === 0;
+
+    const validOverdue = complaints.map(c => c.days_overdue).filter(d => d !== null && d !== undefined);
+    const maxOverdue   = validOverdue.length ? Math.max(...validOverdue) : null;
+
+    let ovClass, ovLabel;
+    if (isNoEdc) {
+      ovClass = 'ov-low'; ovLabel = 'No EDC set';
+    } else if (maxOverdue === null) {
+      ovClass = 'ov-low'; ovLabel = 'No EDC';
+    } else if (maxOverdue > 7) {
+      ovClass = 'ov-critical'; ovLabel = `Up to ${maxOverdue}d overdue`;
+    } else if (maxOverdue > 0) {
+      ovClass = 'ov-high'; ovLabel = `${maxOverdue}d overdue`;
+    } else if (maxOverdue === 0) {
+      ovClass = 'ov-moderate'; ovLabel = 'Due today';
+    } else {
+      ovClass = 'ov-low'; ovLabel = `${Math.abs(maxOverdue)}d remaining`;
+    }
+
+    const rows = complaints.map(c => {
+      const d = c.days_overdue;
+      let dc, dlabel;
+      if (d === null || d === undefined) { dc = 'days-noedc'; dlabel = 'No EDC'; }
+      else if (d > 7)  { dc = 'days-critical'; dlabel = `${d}d overdue`; }
+      else if (d > 0)  { dc = 'days-high';     dlabel = `${d}d overdue`; }
+      else if (d === 0){ dc = 'days-due';       dlabel = 'Due Today'; }
+      else             { dc = 'days-low';       dlabel = `Due in ${Math.abs(d)}d`; }
+
+      const critDot = isCritical(c) ? '<span class="critical-dot"></span>' : '';
+      const cd = escape_attr(JSON.stringify(c));
+      const edcColor = (d !== null && d > 0) ? 'var(--red)' : (d === 0 ? 'var(--amber)' : 'var(--gray)');
+      const edcText  = c.closuredate ? fmtDate(c.closuredate) : 'No EDC';
+      const primaryPhone = c.empmobileno || '';
+      const callBtnTitle = primaryPhone ? `Will call: ${primaryPhone}` : 'No contact number';
+      return `
+        <div class="complaint-row">
+          <div>
+            <div class="cno">${esc(c.complaintno)}</div>
+            <div class="cdate">Logged ${fmtDate(c.created)}</div>
+            <div class="cdate" style="color:${edcColor};font-weight:600;margin-top:3px;">EDC: ${edcText}</div>
+          </div>
+          <div>
+            <div class="cstore">${esc(c.store_name || '—')}</div>
+            <div class="csub">${esc(c.store_code || '')}${c.city ? ' &middot; ' + esc(c.city) : ''}</div>
+            ${c.empmobileno ? `<div class="contact-num emp">📞 ${esc(c.empmobileno)}</div>` : '<div class="contact-num none">No contact</div>'}
+          </div>
+          <div>
+            <div class="cbold">${critDot}${esc(c.productname)}</div>
+            <div class="csub">${esc(c.vendorname)}</div>
+          </div>
+          <div>
+            <div class="cbold" style="font-size:12px;">${esc(c.natureofproblem)}</div>
+            <div class="csub">${esc(c.typeofcomplaint || '')}</div>
+          </div>
+          <div>
+            <span class="days-badge ${dc}">${dlabel}</span>
+          </div>
+          <div class="row-actions">
+            <button class="btn-hist"  onclick="openHistory(${c.id},'${esc(c.complaintno)}')">History</button>
+            <button class="btn-call"  onclick="openCall(${c.id},'${esc(primaryPhone)}')" title="${callBtnTitle}">📞 Call</button>
+            <button class="btn-edc"  onclick="openModal('edc',        '${cd}')">Escalate</button>
+            <button class="btn-pc"   onclick="openModal('close',      '${cd}', 'Partially Closed')">Partial Close</button>
+            <button class="btn-close" onclick="openModal('close',     '${cd}', 'Closed')">Close Ticket</button>
+            <button class="btn-nc"   onclick="openModal('nc',         '${cd}')">Not Connected</button>
+          </div>
+        </div>`;
+    }).join('');
+
+    const dateLabel = isNoEdc ? 'No EDC Set' : fmtDate(date);
+    return `
+      <div class="date-group">
+        <div class="date-header ${isOpen ? 'open' : ''}" onclick="toggleGroup(this)">
+          <span class="chevron ${isOpen ? 'open' : ''}">▶</span>
+          <span class="date-label">${dateLabel}</span>
+          <span class="date-count">${complaints.length}</span>
+          <span class="date-overdue ${ovClass}">${ovLabel}</span>
+        </div>
+        <div class="complaints-list ${isOpen ? 'open' : ''}">${rows}</div>
+      </div>`;
+  }).join('');
+
+  setGroups(html);
+}
+
+function toggleGroup(header) {
+  const list = header.nextElementSibling;
+  const chev = header.querySelector('.chevron');
+  const isOpen = list.classList.contains('open');
+  list.classList.toggle('open', !isOpen);
+  chev.classList.toggle('open', !isOpen);
+  header.classList.toggle('open', !isOpen);
+}
+
+// ── Modal ─────────────────────────────────────────────────────────────────
+function openModal(type, cdStr, defaultStatus) {
+  const c = JSON.parse(decodeURIComponent(cdStr));
+  current = { type, complaint: c, defaultStatus: defaultStatus || null };
+
+  document.getElementById('m-chip').innerHTML =
+    `<strong>${esc(c.complaintno)}</strong> &nbsp;·&nbsp; ${esc(c.store_name)} &nbsp;·&nbsp; ${esc(c.productname)}
+     <span style="margin-left:auto;color:var(--red);font-weight:700;">${c.days_overdue != null ? c.days_overdue + 'd overdue' : 'No EDC'}</span>`;
+
+  const btn = document.getElementById('m-confirm');
+
+  if (type === 'close') {
+    const isPartial = current.defaultStatus === 'Partially Closed';
+    document.getElementById('m-title').textContent = isPartial ? 'Partial Close' : 'Close Ticket';
+    document.getElementById('m-sub').textContent   = isPartial
+      ? 'Mark as Partially Closed and record follow-up details'
+      : 'Mark as Closed and record follow-up details';
+    btn.textContent = isPartial ? 'Confirm Partial Close' : 'Confirm Close';
+    btn.className   = 'btn-confirm green';
+
+    document.querySelector('#overlay .modal').classList.add('modal-wide');
+
+    const preFillMobile = c.empmobileno || '';
+    const preFillTxn    = '';
+
+    document.getElementById('m-fields').innerHTML = `
+      <div class="fields-2col">
+        <div class="field field-full"><label>Follow-up Done Via *</label>
+          <div class="fu-method-tabs">
+            <button class="fu-tab active" data-method="Call" onclick="setFuMethod(this)">📞 Call</button>
+            <button class="fu-tab" data-method="Email" onclick="setFuMethod(this)">✉ Email</button>
+          </div></div>
+        <div id="fu-call-fields" style="display:contents;">
+          <div class="field"><label>SparkTG TXN ID *</label>
+            <input type="text" id="f-txn-id" placeholder="Transaction ID from SparkTG" value="${esc(preFillTxn)}" /></div>
+          <div class="field"><label>Mobile Called *</label>
+            <input type="text" id="f-mobile-called" placeholder="10-digit mobile" maxlength="10" value="${esc(preFillMobile)}" /></div>
+        </div>
+        <div id="fu-email-fields" style="display:none;" class="field-full">
+          <div class="field"><label>Email Subject *</label>
+            <input type="text" id="f-email-subject" placeholder="Subject line of the follow-up email" /></div>
+        </div>
+        <div class="field"><label>Delay Reason — Main</label>
+          <select id="f-delay-main" onchange="onDelayMainChange()">
+            <option value="">Select main reason…</option>
+            <option value="Delay From Vendor Side">Delay From Vendor Side</option>
+            <option value="Delay From HO Team">Delay From HO Team</option>
+            <option value="Work Is Delayed Due To FM">Work Is Delayed Due To FM</option>
+            <option value="Delay From Store">Delay From Store</option>
+          </select></div>
+        <div class="field"><label>Delay Reason — Sub</label>
+          <select id="f-delay-sub" disabled>
+            <option value="">Select sub-reason…</option>
+          </select></div>
+        <div class="field field-full"><label>Closing Remarks *</label>
+          <textarea id="f-remarks" rows="3" placeholder="How was the issue resolved?"></textarea></div>
+        ${isPartial ? `<div class="field"><label>New Closure Date *</label>
+          <input type="date" id="f-new-date" min="${new Date(Date.now()+86400000).toISOString().split('T')[0]}" /></div>` : ''}
+        <div class="close-check-row field-full">
+          <input type="checkbox" id="f-src-fsr" />
+          <label for="f-src-fsr">SRC / FSR received from vendor</label>
+        </div>
+      </div>`;
+
+  } else if (type === 'edc') {
+    document.getElementById('m-title').textContent = 'Update Expected Closure Date';
+    document.getElementById('m-sub').textContent   = 'Extend the EDC and log the delay reason';
+    btn.textContent = 'Update EDC';
+    btn.className   = 'btn-confirm';
+    const min = new Date(); min.setDate(min.getDate() + 1);
+    document.getElementById('m-fields').innerHTML = `
+      <div class="field"><label>Delay Reason — Main *</label>
+        <select id="f-delay-main" onchange="onDelayMainChange()">
+          <option value="">Select main reason…</option>
+          <option value="Delay From Vendor Side">Delay From Vendor Side</option>
+          <option value="Delay From HO Team">Delay From HO Team</option>
+          <option value="Work Is Delayed Due To FM">Work Is Delayed Due To FM</option>
+          <option value="Delay From Store">Delay From Store</option>
+        </select></div>
+      <div class="field"><label>Delay Reason — Sub *</label>
+        <select id="f-delay-sub" onchange="onDelaySubChange()" disabled>
+          <option value="">Select sub-reason…</option>
+        </select></div>
+      <div class="field"><label>New Closure Date *</label>
+        <input type="date" id="f-new-date" min="${min.toISOString().split('T')[0]}" /></div>
+      <div class="field"><label>Remarks</label>
+        <textarea id="f-remarks" rows="2" placeholder="Any additional remarks (optional)"></textarea></div>`;
+
+  } else {
+    const ncCount = parseInt(c.nc_count || 0);
+    const rLevel  = ncCount + 1;
+    const rColor  = rLevel >= 3 ? 'var(--red)' : rLevel === 2 ? 'var(--amber)' : '#2563eb';
+    const rBg     = rLevel >= 3 ? 'var(--red-l)' : rLevel === 2 ? 'var(--amber-l)' : '#dbeafe';
+    const rLabel  = rLevel >= 3 ? 'R3+ — Escalation Required' : rLevel === 2 ? 'R2 — Second Attempt' : 'R1 — First Attempt';
+    const rNote   = rLevel >= 3
+      ? 'Third attempt — update EDC and send urgent reminder.'
+      : rLevel === 2
+      ? 'Second attempt — update EDC and send reminder email.'
+      : 'First attempt — log, update EDC and send reminder email.';
+    const minDate = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+
+    document.getElementById('m-title').textContent = 'Not Connected — Step 1 of 2';
+    document.getElementById('m-sub').textContent   = 'Log attempt and set new EDC';
+    btn.textContent = 'Next — Compose Email →';
+    btn.className   = 'btn-confirm';
+    btn.onclick     = ncNext;
+    document.querySelector('#overlay .modal').classList.add('modal-wide');
+    document.getElementById('m-fields').innerHTML = `
+      <div style="background:${rBg};border:1.5px solid ${rColor};border-radius:8px;padding:10px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px;">
+        <span style="font-size:20px;">${rLevel >= 3 ? '🔴' : rLevel === 2 ? '🟡' : '🔵'}</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:${rColor};">${rLabel}</div>
+          <div style="font-size:11px;color:#374151;margin-top:2px;">${rNote}</div>
+        </div>
+      </div>
+      <div class="fields-2col">
+        <div class="field field-full"><label>Call Remarks</label>
+          <textarea id="f-remarks" rows="2">Called vendor — not connected</textarea></div>
+        <div class="field"><label>New EDC Date *</label>
+          <input type="date" id="f-nc-date" min="${minDate}" /></div>
+      </div>`;
+  }
+
+  document.getElementById('overlay').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('overlay').classList.remove('open');
+  document.querySelector('#overlay .modal').classList.remove('modal-wide');
+  document.getElementById('m-confirm').onclick = submit;
+  current = null;
+  ncStep1 = {};
+}
+document.getElementById('overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+
+// ── NC Step 1 → Step 2 ────────────────────────────────────────────────────
+async function ncNext() {
+  const remarks = (document.getElementById('f-remarks')?.value || '').trim();
+  const newDate =  document.getElementById('f-nc-date')?.value  || '';
+  if (!newDate) { toast('New EDC Date is required', 'err'); return; }
+  ncStep1 = { remarks, newDate, delayMain: '', delaySub: '' };
+
+  const btn = document.getElementById('m-confirm');
+  btn.disabled = true;
+  renderNcStep2();
+  btn.disabled = false;
+  btn.textContent = 'Send Email';
+  btn.onclick = submit;
+}
+
+function renderNcStep2() {
+  const c = current.complaint;
+  document.getElementById('m-title').textContent = 'Not Connected — Step 2 of 2';
+  document.getElementById('m-sub').textContent   = 'Review history and send reminder email';
+
+  const sampleLogs = [
+    { status: 'Escalated',     created: '2025-06-10', remarks: 'Escalated to vendor — EDC set to 20 Jun 2025' },
+    { status: 'Not Connected', created: '2025-06-18', remarks: 'Attempt R1 — Called vendor, not connected' },
+    { status: 'Not Connected', created: '2025-06-20', remarks: 'Attempt R2 — Called vendor again, no response' },
+  ];
+  const histHtml = `<div style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+    <div style="background:#f8fafc;padding:7px 12px;font-size:10px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--border);">Previous Communications</div>
+    ${sampleLogs.map(l => {
+      const col = l.status === 'Not Connected' ? '#1d4ed8' : l.status === 'Escalated' ? 'var(--amber)' : 'var(--green)';
+      const bg  = l.status === 'Not Connected' ? '#dbeafe'  : l.status === 'Escalated' ? '#fff7ed'      : 'var(--green-l)';
+      return `<div style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;display:flex;align-items:flex-start;gap:10px;">
+        <span style="flex-shrink:0;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${bg};color:${col};">${l.status}</span>
+        <div style="flex:1;">
+          <div style="color:var(--gray);font-size:11px;">${l.created}</div>
+          <div style="color:#374151;margin-top:2px;">${l.remarks}</div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+
+  const overdueTxt = c.days_overdue > 0 ? c.days_overdue + ' days overdue' : 'pending';
+  const template   = `Dear Store Team,\n\nThis is a reminder for complaint no. ${c.complaintno} which is ${overdueTxt}. Kindly update us on the status at the earliest.\n\nRegards,\nVMM Follow-up Team\nOpen Mind Services`;
+
+  document.getElementById('m-fields').innerHTML = `
+    ${histHtml}
+    <div class="fields-2col">
+      <div class="field field-full">
+        <label>To <span style="font-weight:400;color:var(--gray)">(comma-separated)</span> *</label>
+        <input type="text" id="f-nc-to" value="${esc(c.fm_email || '')}" placeholder="email1@example.com, email2@example.com" />
+      </div>
+      <div class="field">
+        <label>Template</label>
+        <select id="f-nc-template" onchange="onNcTemplateChange()">
+          <option value="reminder">Reminder — Status Update</option>
+          <option value="custom">Custom Message</option>
+        </select>
+      </div>
+      <div class="field"></div>
+      <div class="field field-full">
+        <label>Email Body</label>
+        <textarea id="f-nc-body" rows="6" style="font-family:inherit;">${esc(template)}</textarea>
+      </div>
+    </div>`;
+}
+
+function onNcTemplateChange() {
+  const val = document.getElementById('f-nc-template')?.value;
+  const c   = current?.complaint;
+  if (!c) return;
+  const overdueTxt = c.days_overdue > 0 ? c.days_overdue + ' days overdue' : 'pending';
+  if (val === 'reminder') {
+    document.getElementById('f-nc-body').value =
+      `Dear Store Team,\n\nThis is a reminder for complaint no. ${c.complaintno} which is ${overdueTxt}. Kindly update us on the status at the earliest.\n\nRegards,\nVMM Follow-up Team\nOpen Mind Services`;
+  } else {
+    document.getElementById('f-nc-body').value = '';
+    document.getElementById('f-nc-body').focus();
+  }
+}
+
+// ── Submit ─────────────────────────────────────────────────────────────────
+async function submit() {
+  if (!current) return;
+  const { type, complaint: c } = current;
+  const btn = document.getElementById('m-confirm');
+  btn.disabled = true; btn.textContent = 'Saving…';
+
+  try {
+    let url, body;
+
+    if (type === 'close') {
+      const closureStatus = current.defaultStatus || 'Closed';
+
+      const methodBtn    = document.querySelector('.fu-tab.active');
+      const followupMethod = methodBtn ? methodBtn.dataset.method : 'Call';
+
+      let txnId = '', mobileCalled = '', emailSubject = '';
+      if (followupMethod === 'Call') {
+        txnId       = document.getElementById('f-txn-id').value.trim();
+        mobileCalled = document.getElementById('f-mobile-called').value.trim();
+        if (!txnId || !mobileCalled) { toast('TXN ID and mobile are required for Call follow-up', 'err'); return; }
+      } else {
+        emailSubject = document.getElementById('f-email-subject').value.trim();
+        if (!emailSubject) { toast('Email subject is required for Email follow-up', 'err'); return; }
+      }
+
+      const delayMain = document.getElementById('f-delay-main').value;
+      const delaySub  = document.getElementById('f-delay-sub').value;
+      const remarks   = document.getElementById('f-remarks').value.trim();
+      const srcFsr    = document.getElementById('f-src-fsr').checked ? 'Yes' : 'No';
+
+      if (!remarks) { toast('Closing Remarks are required', 'err'); return; }
+
+      let newClosureDate = '';
+      if (closureStatus === 'Partially Closed') {
+        newClosureDate = document.getElementById('f-new-date')?.value || '';
+        if (!newClosureDate) { toast('New Closure Date is required for Partial Close', 'err'); return; }
+      }
+
+      url  = API.close;
+      body = { complaintId: c.id, closureStatus, followupMethod, txnId, mobileCalled, emailSubject, delayMain, delaySub, remarks, srcFsr, escalationLevel: c.escalationlevel || 1, newClosureDate, uid: 1 };
+
+    } else if (type === 'edc') {
+      const newClosureDate = document.getElementById('f-new-date').value;
+      const delayMain      = document.getElementById('f-delay-main').value;
+      const delaySub       = document.getElementById('f-delay-sub').value;
+      const remarks        = document.getElementById('f-remarks').value.trim();
+      if (!newClosureDate || !delayMain || !delaySub) { toast('New date, main reason and sub-reason are all required', 'err'); return; }
+      url  = API.updateEdc;
+      body = { complaintId: c.id, newClosureDate, escalationLevel: c.escalationlevel || 1, delayMain, delaySub, remarks, uid: 1 };
+
+    } else {
+      const toEmails  = (document.getElementById('f-nc-to')?.value   || '').trim();
+      const emailBody = (document.getElementById('f-nc-body')?.value  || '').trim();
+      if (!toEmails)  { toast('At least one recipient email is required', 'err'); return; }
+      if (!emailBody) { toast('Email body cannot be empty', 'err'); return; }
+      url  = API.notConnected;
+      body = {
+        complaintId:     c.id,
+        complaintno:     c.complaintno,
+        remarks:         ncStep1.remarks      || 'Called vendor — not connected',
+        newClosureDate:  ncStep1.newDate      || '',
+        escalationLevel: c.escalationlevel   || 1,
+        delayMain:       ncStep1.delayMain   || '',
+        delaySub:        ncStep1.delaySub    || '',
+        toEmails,
+        emailBody,
+        store_name:      c.store_name,
+        store_code:      c.store_code,
+        productname:     c.productname,
+        vendorname:      c.vendorname,
+        days_overdue:    c.days_overdue,
+        uid: 1,
+      };
+    }
+
+    const r    = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await r.json();
+
+    if (data.success) {
+      const msgs = { close: 'Complaint closed successfully', edc: 'EDC updated', nc: data.message || 'Attempt logged & FM notified' };
+      toast(msgs[type] || 'Done', 'ok');
+      closeModal();
+      loadComplaints();
+    } else {
+      toast(data.error || 'Something went wrong', 'err');
+    }
+  } catch {
+    toast('Network error — try again', 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escape_attr(s) { return encodeURIComponent(s); }
+function fmtDate(s) {
+  if (!s) return '';
+  return new Date(s).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+}
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className   = `toast ${type} show`;
+  setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+// ── Close modal helpers ───────────────────────────────────────────────────
+function setClosureStatus(btn) {
+  document.querySelectorAll('.stgl-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function setFuMethod(btn) {
+  document.querySelectorAll('.fu-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const method = btn.dataset.method;
+  document.getElementById('fu-call-fields').style.display  = method === 'Call'  ? 'contents' : 'none';
+  document.getElementById('fu-email-fields').style.display = method === 'Email' ? 'block'    : 'none';
+}
+
+// ── Delay Reason cascade ──────────────────────────────────────────────────
+const DELAY_SUB_REASONS = {
+  'Delay From Vendor Side': [
+    { label: 'Quotation not received',      tat: 1 },
+    { label: 'Material/Parts Not Available', tat: 5 },
+    { label: 'Delay in logistics',           tat: 3 },
+    { label: 'Vendor not responding',        tat: 1 },
+  ],
+  'Delay From HO Team': [
+    { label: 'Quotation Approval Pending',   tat: 2  },
+    { label: 'Delay in Release of PO',       tat: 2  },
+    { label: 'Delay Due To Landlord',        tat: 15 },
+    { label: 'Delay Due To Lapse of AMC',    tat: 4  },
+    { label: 'Vendor details not provided',  tat: 2  },
+    { label: 'Payment under process',        tat: null },
+    { label: 'Vendor Has Payment Issues',    tat: 15 },
+    { label: 'Delay in logistics',           tat: 3  },
+  ],
+  'Work Is Delayed Due To FM': [
+    { label: 'Local vendor/Quotation being arranged', tat: 2 },
+    { label: 'Site inspection pending',               tat: 3 },
+  ],
+  'Delay From Store': [
+    { label: 'Store has rescheduled',     tat: 3 },
+    { label: 'Product under observation', tat: 1 },
+    { label: 'Store not responding',      tat: 1 },
+  ],
+};
+
+function onDelayMainChange() {
+  const main = document.getElementById('f-delay-main').value;
+  const sub  = document.getElementById('f-delay-sub');
+  sub.innerHTML = '<option value="">Select sub-reason…</option>';
+  sub.disabled  = !main;
+  if (main && DELAY_SUB_REASONS[main]) {
+    DELAY_SUB_REASONS[main].forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.label;
+      opt.textContent = r.tat ? r.label + ' (' + r.tat + 'd)' : r.label;
+      opt.dataset.tat = r.tat || '';
+      sub.appendChild(opt);
+    });
+  }
+  const dateInput = document.getElementById('f-new-date');
+  if (dateInput) dateInput.value = '';
+}
+
+function onDelaySubChange() {
+  const sub = document.getElementById('f-delay-sub');
+  const selected = sub.options[sub.selectedIndex];
+  const tat = selected ? parseInt(selected.dataset.tat) : NaN;
+  const dateInput = document.getElementById('f-new-date');
+  if (dateInput && tat > 0) {
+    const d = new Date();
+    d.setDate(d.getDate() + tat);
+    dateInput.value = d.toISOString().split('T')[0];
+  }
+}
+
+// ── Login ─────────────────────────────────────────────────────────────────
+let agentCfg = null;  // { name } — set on login, cleared on logout
+
+function doLogin() {
+  const name  = document.getElementById('l-user').value.trim();
+  const errEl = document.getElementById('login-err');
+  if (!name) { errEl.textContent = 'Please enter your name'; return; }
+  agentCfg = { name };
+  sessionStorage.setItem('vmm_agent', JSON.stringify(agentCfg));
+  showApp();
+}
+
+function showApp() {
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('agent-chip').style.display = '';
+  document.getElementById('agent-name').textContent = agentCfg.name;
+  loadComplaints();
+}
+
+function doLogout() {
+  agentCfg = null;
+  sessionStorage.removeItem('vmm_agent');
+  document.getElementById('login-screen').classList.remove('hidden');
+  document.getElementById('agent-chip').style.display = 'none';
+  document.getElementById('l-user').value = '';
+  document.getElementById('login-err').textContent = '';
+}
+
+document.getElementById('l-user').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+function stgOpen() {
+  if (stgWin && !stgWin.closed) {
+    stgWin.focus();
+  } else {
+    stgWin = window.open('https://telephonycloud.co.in/portalv2/', 'sparktg-dialer',
+      'width=420,height=650,top=100,left=100,resizable=yes,scrollbars=yes');
+  }
+}
+
+async function openCall(id, phone) {
+  if (!phone) { toast('No contact number available for this complaint', 'warn'); return; }
+  const c = all.find(x => x.id === id);
+  currentCall = { id, phone, complaint: c };
+
+  // Fire the call immediately — no modal
+  try {
+    fetch(API.call, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ number: phone })
+    });
+  } catch {}
+
+  // Bring SparkTG popup to front so the incoming call notification is visible
+  if (stgWin && !stgWin.closed) {
+    stgWin.focus();
+  } else {
+    stgWin = window.open('https://telephonycloud.co.in/portalv2/', 'sparktg-dialer',
+      'width=420,height=650,top=100,left=100,resizable=yes,scrollbars=yes');
+  }
+}
+
+function closeCall() {
+  document.getElementById('call-overlay').classList.remove('open');
+  currentCall = null;
+}
+
+function startCall() {}
+
+function logCallOutcome(outcome) {
+  const saved = currentCall;
+  closeCall();
+  if (outcome === 'nc' && saved?.complaint) {
+    const cd = escape_attr(JSON.stringify(saved.complaint));
+    openModal('nc', cd);
+  }
+}
+
+// ── Date summary cards ────────────────────────────────────────────────────
+let activeDate = null;
+
+function renderDateSummary(list) {
+  const section = document.getElementById('ds-section');
+  const cards   = document.getElementById('ds-cards');
+  if (!list.length) { section.style.display = 'none'; return; }
+
+  const byDate = {};
+  list.forEach(c => {
+    const d = c.closuredate ? (c.closuredate + '').split('T')[0] : '__no_edc__';
+    if (!byDate[d]) byDate[d] = [];
+    byDate[d].push(c);
+  });
+
+  const dated    = Object.keys(byDate).filter(k => k !== '__no_edc__').sort((a, b) => new Date(a) - new Date(b));
+  const allDates = byDate['__no_edc__'] ? [...dated, '__no_edc__'] : dated;
+
+  section.style.display = '';
+  cards.innerHTML = allDates.map(date => {
+    const items     = byDate[date];
+    const critCount = items.filter(isCritical).length;
+    const ovCount   = items.filter(c => c.days_overdue !== null && c.days_overdue >= 0).length;
+    const isActive  = activeDate === date;
+    const label     = date === '__no_edc__' ? 'No EDC' : fmtDate(date);
+    return `<div class="ds-card${isActive ? ' active' : ''}" onclick="filterByDate('${date}')">
+      <div class="ds-card-date">${label}</div>
+      <div class="ds-card-count">${items.length}</div>
+      <div class="ds-card-meta">${critCount > 0 ? `<span style="color:var(--red);font-size:10px;">${critCount} critical</span>` : ''}${ovCount > 0 ? `<span style="color:var(--amber);font-size:10px;margin-left:4px;">${ovCount} overdue</span>` : ''}</div>
+    </div>`;
+  }).join('');
+}
+
+function filterByDate(date) {
+  activeDate = date;
+  document.getElementById('btn-showall').style.display = '';
+  const filtered = all.filter(c => {
+    const d = c.closuredate ? (c.closuredate + '').split('T')[0] : '__no_edc__';
+    return d === date;
+  });
+  renderDateSummary(all);
+  renderGroups(filtered);
+}
+
+function showAll() {
+  activeDate = null;
+  document.getElementById('btn-showall').style.display = 'none';
+  renderDateSummary(all);
+  applyFilter();
+}
+
+// ── History modal ─────────────────────────────────────────────────────────
+async function openHistory(complaintId, complaintno) {
+  document.getElementById('hist-overlay').classList.add('open');
+  document.getElementById('hist-title').textContent = 'History — ' + complaintno;
+  document.getElementById('hist-sub').textContent   = 'Loading…';
+  document.getElementById('hist-body').innerHTML    = '<div class="tl-empty">Loading…</div>';
+
+  try {
+    const r    = await fetch(API.history + '?complaintId=' + complaintId);
+    const data = await r.json();
+    const escalations = data.escalations || [];
+    const logs        = data.logs        || [];
+
+    document.getElementById('hist-sub').textContent = escalations.length + ' escalations · ' + logs.length + ' log entries';
+
+    const escHtml = escalations.length
+      ? escalations.map(e => `<div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-content">
+            <div class="tl-title">EDC — Level ${e.escalationlevel || 1}</div>
+            <div class="tl-sub">${e.edc ? 'EDC: ' + fmtDate(e.edc) : 'No date'}${e.ticketno ? ' · Ticket: ' + e.ticketno : ''}</div>
+            <div class="tl-time">${fmtDate(e.created)}</div>
+          </div></div>`).join('')
+      : '<div class="tl-empty">No escalation records</div>';
+
+    const logHtml = logs.length
+      ? logs.map(l => `<div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-content">
+            <div class="tl-title">${esc(l.status || 'Log')}</div>
+            <div class="tl-sub">${esc(l.remarks || '')}</div>
+            ${l.caseclosedby ? `<div class="tl-sub" style="color:var(--gray)">Closed by: ${esc(l.caseclosedby)}</div>` : ''}
+            <div class="tl-time">${fmtDate(l.created)}</div>
+          </div></div>`).join('')
+      : '<div class="tl-empty">No activity logs</div>';
+
+    document.getElementById('hist-body').innerHTML = `
+      <div class="hist-section">
+        <div class="hist-section-title">EDC History (${escalations.length})</div>
+        <div class="timeline">${escHtml}</div>
+      </div>
+      <div class="hist-section">
+        <div class="hist-section-title">Activity Log (${logs.length})</div>
+        <div class="timeline">${logHtml}</div>
+      </div>`;
+  } catch {
+    document.getElementById('hist-body').innerHTML = '<div class="tl-empty">Could not load history</div>';
+  }
+}
+
+function closeHistory() {
+  document.getElementById('hist-overlay').classList.remove('open');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+(function init() {
+  const saved = sessionStorage.getItem('vmm_agent');
+  if (saved) { try { agentCfg = JSON.parse(saved); showApp(); return; } catch {} }
+  // Show login screen
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,128 @@
+{
+  "name": "VMM Email - Fetch Attachments to Drive",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "vmm-fetch-attachments",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [160, 320],
+      "id": "email08-node-0001",
+      "name": "Webhook - GET /vmm-fetch-attachments",
+      "webhookId": "vmm-fetch-attachments"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://graph.microsoft.com/v1.0/users/vmm.helpdesk@openmind.in/messages/{{ $json.query.messageId }}/attachments",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [380, 320],
+      "id": "email08-node-0002",
+      "name": "Get Attachments from Outlook",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "ZaZUH3dJiLPRt7BX",
+          "name": "VMM2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst query = $('Webhook - GET /vmm-fetch-attachments').first().json.query || {};\nconst messageId = query.messageId || '';\nconst safeStamp = new Date().toISOString().replace(/[:.]/g, '-');\n\nconst attachments = (raw.value || [])\n  .filter(a => !a.isInline && a.name && a.contentBytes)\n  .map((a, idx) => {\n    const safeName = (a.name || `attachment-${idx + 1}`).replace(/[\\\\/:*?\"<>|]/g, '_');\n    const fileName = `${safeStamp}_${safeName}`;\n\n    return {\n      json: {\n        sourceMessageId: messageId,\n        originalName: a.name || safeName,\n        name: fileName,\n        size: a.size || 0,\n        contentType: a.contentType || 'application/octet-stream'\n      },\n      binary: {\n        data: {\n          data: a.contentBytes,\n          mimeType: a.contentType || 'application/octet-stream',\n          fileName\n        }\n      }\n    };\n  });\n\nif (!attachments.length) {\n  return [{ json: { noAttachments: true, attachments: [] } }];\n}\n\nreturn attachments;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 320],
+      "id": "email08-node-0003",
+      "name": "Prepare Files for Drive"
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "name": "={{ $json.name }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "parents": {
+          "__rl": true,
+          "value": "REPLACE_WITH_VMM_ATTACHMENTS_FOLDER_ID",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [820, 320],
+      "id": "email08-node-0004",
+      "name": "Upload to Google Drive",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const uploaded = $input.all();\n\nconst attachments = uploaded\n  .filter(i => !i.json.noAttachments)\n  .map(i => {\n    const id = i.json.id || i.json.fileId || '';\n    return {\n      id,\n      name: i.json.originalName || i.json.name || i.json.fileName || 'attachment',\n      driveName: i.json.name || i.json.fileName || '',\n      size: i.json.size || 0,\n      contentType: i.json.contentType || '',\n      viewLink: id ? `https://drive.google.com/file/d/${id}/view` : (i.json.webViewLink || ''),\n      downloadLink: id ? `https://drive.google.com/uc?export=download&id=${id}` : (i.json.webContentLink || '')\n    };\n  });\n\nreturn [{ json: { success: true, count: attachments.length, attachments } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 320],
+      "id": "email08-node-0005",
+      "name": "Build Drive Links"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1260, 320],
+      "id": "email08-node-0006",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook - GET /vmm-fetch-attachments": {
+      "main": [[{ "node": "Get Attachments from Outlook", "type": "main", "index": 0 }]]
+    },
+    "Get Attachments from Outlook": {
+      "main": [[{ "node": "Prepare Files for Drive", "type": "main", "index": 0 }]]
+    },
+    "Prepare Files for Drive": {
+      "main": [[{ "node": "Upload to Google Drive", "type": "main", "index": 0 }]]
+    },
+    "Upload to Google Drive": {
+      "main": [[{ "node": "Build Drive Links", "type": "main", "index": 0 }]]
+    },
+    "Build Drive Links": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

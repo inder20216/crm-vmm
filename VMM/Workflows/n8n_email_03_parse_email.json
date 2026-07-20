@@ -1,0 +1,88 @@
+{
+  "name": "VMM Email - Parse & Draft Reply",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-parse-email",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-112, 208],
+      "id": "2921cde8-df6c-41b4-ad64-42adec54405c",
+      "name": "Webhook - POST /vmm-parse-email",
+      "webhookId": "vmm-parse-email"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst templates = body.templates || [];\nconst natures   = body.natures   || [];\nconst lockedFields = body.lockedFields || {};\nconst productNames = (body.productNames || []).join(', ') || 'AC, Lift, Water Purifier, Generator, UPS, Fire Panel, CCTV';\n\n// ── Step 1: Strip HTML to plain text\nfunction stripHtml(html) {\n  return (html || '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<\\/p>/gi, '\\n')\n    .replace(/<\\/div>/gi, '\\n')\n    .replace(/<[^>]+>/g, '')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\nconst plainText = stripHtml(body.emailBody || '');\n\n// ── Step 2: Pattern-based extraction\nfunction extract(text, ...patterns) {\n  for (const p of patterns) {\n    const m = text.match(p);\n    if (m && m[1]) return m[1].trim();\n  }\n  return null;\n}\n\nconst regexExtracted = {\n  storeCode: extract(plainText,\n    /(?:site\\s*code|store\\s*code)[\\s:–\\-]+([A-Z]{1,3}\\d{2,4})/i,\n    /\\b([A-Z]{2,3}\\d{2,3})\\b/\n  ),\n  employeeCode: extract(plainText,\n    /employee\\s*(?:code|id|no\\.?)\\s*(?:is\\b)?\\s*[-:–\\-\\s]+?(\\d{5,7})/i,\n    /employee\\s*(?:code|id|no\\.?)\\s*(?:is\\b)?\\s*[-:–\\-\\s]+?(VMM\\d{3})/i\n  ),\n  employeeName: extract(plainText,\n    /employee\\s*name[\\s:–\\-]+([^\\n\\r•]+)/i\n  ),\n  contactNumber: extract(plainText,\n    /(?:contact|mobile|phone|registered\\s*contact\\s*numbers?)[\\s:–\\-]+([6-9]\\d{9})/i,\n    /\\b([6-9]\\d{9})\\b/\n  ),\n  productLocation: extract(plainText,\n    /location[\\s:–\\-]+([^\\n\\r•]+)/i\n  ),\n};\n\n// Uppercase the employee code (regex already validates format)\nif (regexExtracted.employeeCode) {\n  regexExtracted.employeeCode = regexExtracted.employeeCode.toUpperCase();\n}\n\n// Validate store code — 1-3 letters + 2-4 digits\nif (regexExtracted.storeCode) {\n  const sc = regexExtracted.storeCode.toUpperCase();\n  if (!/^[A-Z]{1,3}\\d{2,4}$/.test(sc)) {\n    regexExtracted.storeCode = null;\n  } else {\n    regexExtracted.storeCode = sc;\n  }\n}\n\n// ── Step 3: Merge — lockedFields WIN over regex, regex wins over AI\nfunction resolveField(field) {\n  const locked = (lockedFields[field] || '').toString().trim();\n  if (locked) return locked;\n  return regexExtracted[field] || null;\n}\n\nconst preResolved = {\n  storeCode:       resolveField('storeCode'),\n  employeeCode:    resolveField('employeeCode'),\n  employeeName:    resolveField('employeeName'),\n  contactNumber:   resolveField('contactNumber'),\n  productLocation: resolveField('productLocation'),\n  productName:     (lockedFields.productName    || '').trim() || null,\n  natureOfProblem: (lockedFields.natureOfProblem || '').trim() || null,\n  description:     (lockedFields.description    || '').trim() || null,\n};\n\n// ── Step 4: Build AI prompt — tell AI what is already confirmed\nconst templateSummary = templates.map(t => {\n  const cleanBody = (t.body || '')\n    .replace(/<table[\\s\\S]*?<\\/table>/gi, '[TABLE FORMAT REQUIRED]')\n    .replace(/<[^>]+>/g, '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n  return `ID ${t.id}: ${t.name} (${t.category})\\n${cleanBody}`;\n}).join('\\n---\\n').slice(0, 6000);\n\nconst natureList = natures.length\n  ? natures.map(n => `- ${n.nature} (${n.type})`).join('\\n')\n  : '(list not provided)';\n\nconst confirmedLines = Object.entries(preResolved)\n  .filter(([, v]) => v)\n  .map(([k, v]) => `  ${k}: \"${v}\"`)\n  .join('\\n') || '  (none yet)';\n\nfunction fieldLine(key, desc, confirmed) {\n  return confirmed\n    ? `- ${key}: CONFIRMED = \"${confirmed}\" — return this exact value unchanged`\n    : `- ${key}: ${desc}`;\n}\n\nconst systemPrompt = [\n  'You are an assistant for VMM retail store complaint management.',\n  'You will receive a full email thread and a list of reply templates.',\n  '',\n  'CONFIRMED FIELDS — these have already been extracted and verified. Return them EXACTLY as shown, do not change:',\n  confirmedLines,\n  '',\n  'Your tasks:',\n  '1. Read the ENTIRE email thread (all messages, not just the latest)',\n  '2. Select the best matching reply template',\n  '3. Fill in ONLY the fields that are still missing (null)',\n  '4. Draft a reply ONLY if storeCode or employeeCode is still missing',\n  '',\n  'Return valid JSON with ALL these keys:',\n  fieldLine('storeCode', 'string or null — extract from \"Site Code:\" or \"Store Code:\" label (e.g. HN28, SF90, HP17)', preResolved.storeCode),\n  fieldLine('employeeCode', 'string or null — valid formats ONLY: 5-7 digit number (e.g. 201838, 77199) OR VMM followed by 3 digits (e.g. VMM080, VMM663). Do NOT use 10-digit phone numbers.', preResolved.employeeCode),\n  fieldLine('employeeName', 'string or null — only if explicitly labelled as employee name in the email body', preResolved.employeeName),\n  fieldLine('contactNumber', 'string or null — 10-digit mobile number', preResolved.contactNumber),\n  fieldLine('productLocation', 'string or null — city/area from Location field', preResolved.productLocation),\n  fieldLine('productName', `string or null — MUST be chosen EXACTLY from this list (match by meaning, e.g. "Server room AC" = "AC", "elevator" = "Lift"): ${productNames}`, preResolved.productName),\n  `- natureOfProblem: ${preResolved.natureOfProblem ? `CONFIRMED = \"${preResolved.natureOfProblem}\" — return this exact value` : `string or null — MUST be chosen verbatim from this list:\\n${natureList}`}`,\n  `- description: ${preResolved.description ? `CONFIRMED = \"${preResolved.description}\" — return this exact value` : 'string — 2-3 sentence professional summary of the complaint'}`,\n  '- quantity: number — number of units/assets mentioned (default 1 if not specified)',\n  '- selectedTemplateId: number — ID of the best matching template',\n  '- selectedTemplateName: string',\n  '- alreadyProvided: object mapping field names to their confirmed values',\n  '- missingFromTemplate: array of field name strings that are still missing',\n  '- isComplete: boolean — set true ONLY when BOTH storeCode AND employeeCode are present. Otherwise false.',\n  '- suggestedReply: empty string \"\" if isComplete is true. If missing storeCode or employeeCode, format the reply EXACTLY like this (use actual newlines):',\n  '  Dear SM,',\n  '  ',\n  '  Thank you for reaching out. To register your complaint, kindly share the following:',\n  '  ',\n  '  [list only the missing P1 fields as bullet lines starting with •]',\n  '  ',\n  '  Please reply at the earliest so we can log and assign the complaint.',\n  '  ',\n  '  Regards,',\n  '  VMM Helpdesk Team',\n  '  Open Mind Services Limited',\n].join('\\n');\n\nconst userContent = [\n  '=== AVAILABLE TEMPLATES ===',\n  templateSummary,\n  '',\n  '=== EMAIL THREAD (full conversation) ===',\n  `From: ${body.fromEmail || ''}`,\n  `Subject: ${body.subject || ''}`,\n  `Store hint from sender email domain: ${body.storeCode || 'Unknown'}`,\n  '',\n  plainText,\n].join('\\n');\n\nconst openaiBody = {\n  model: 'gpt-4o-mini',\n  max_tokens: 1200,\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user',   content: userContent },\n  ],\n};\n\nreturn [{ json: { body, templates, natures, openaiBody, preResolved } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [112, 208],
+      "id": "c4a25697-2c0d-441b-8723-e2c6b8c51742",
+      "name": "Prepare Template Context"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Prepare Template Context').first().json.openaiBody) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [336, 208],
+      "id": "3320ee93-48ca-4f8a-aee5-18723256fb28",
+      "name": "OpenAI Parse Email",
+      "credentials": {
+        "openAiApi": {
+          "id": "VMM_OPENAI_CRED_ID",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst preResolved = $('Prepare Template Context').first().json.preResolved || {};\nconst content = raw?.choices?.[0]?.message?.content || '{}';\n\nlet parsed = {};\ntry {\n  parsed = JSON.parse(content);\n} catch {\n  parsed = { description: content, missingFromTemplate: [], suggestedReply: '', isComplete: false };\n}\n\n// Enforce pre-resolved fields — locked/regex values always win over AI output\nfor (const [field, value] of Object.entries(preResolved)) {\n  if (value) parsed[field] = value;\n}\n\n// Recompute isComplete based on final merged values\nparsed.isComplete = !!(parsed.storeCode && parsed.employeeCode);\n\n// If now complete, clear suggested reply\nif (parsed.isComplete) parsed.suggestedReply = '';\n\nparsed.missingFromTemplate = Array.isArray(parsed.missingFromTemplate) ? parsed.missingFromTemplate : [];\n\nreturn [{ json: { success: true, ...parsed } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 208],
+      "id": "76e94dd6-4f37-4ab7-a436-bee8e29a0484",
+      "name": "Extract Result"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [752, 208],
+      "id": "e98cf27d-3f14-4a71-9031-b2375e3dd998",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-parse-email": { "main": [[{ "node": "Prepare Template Context", "type": "main", "index": 0 }]] },
+    "Prepare Template Context":        { "main": [[{ "node": "OpenAI Parse Email",        "type": "main", "index": 0 }]] },
+    "OpenAI Parse Email":              { "main": [[{ "node": "Extract Result",            "type": "main", "index": 0 }]] },
+    "Extract Result":                  { "main": [[{ "node": "Respond",                   "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

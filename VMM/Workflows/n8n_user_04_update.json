@@ -1,0 +1,49 @@
+{
+  "name": "VMM User — Update User",
+  "_setup": "Updates name, email, type, status for an existing user. Body: { id, name, email, type, status }",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-user-update",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "usr04-0001-0000-0000-000000000001",
+      "name": "Webhook — POST /vmm-user-update"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE vmm_users SET name = '{{ $('Webhook — POST /vmm-user-update').first().json.body.name }}', email = '{{ $('Webhook — POST /vmm-user-update').first().json.body.email }}', type = '{{ $('Webhook — POST /vmm-user-update').first().json.body.type }}', status = '{{ $('Webhook — POST /vmm-user-update').first().json.body.status === 'active' ? '1' : '0' }}', updated = NOW() WHERE id = {{ $('Webhook — POST /vmm-user-update').first().json.body.id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 352],
+      "id": "usr04-0002-0000-0000-000000000002",
+      "name": "Update User",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true }",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] } }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 352],
+      "id": "usr04-0003-0000-0000-000000000003",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook — POST /vmm-user-update": { "main": [[{ "node": "Update User", "type": "main", "index": 0 }]] },
+    "Update User":                     { "main": [[{ "node": "Respond",     "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

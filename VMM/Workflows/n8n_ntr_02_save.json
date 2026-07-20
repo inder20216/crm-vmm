@@ -1,0 +1,114 @@
+{
+  "name": "VMM NTR — Save to MySQL (self-hosted)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-ntr-save",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [160, 300],
+      "id": "ntr02-node-0001",
+      "name": "Webhook — POST /vmm-ntr-save",
+      "webhookId": "vmm-ntr-save"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || $input.first().json;\nconst esc = v => String(v || '').replace(/'/g, \"''\");\n\nconst insert = `INSERT INTO vmm_ntr_requests\n  (store_code, store_name, request_date, received_date, email_from, email_subject, email_message_id, status, total_items, created_at)\n  VALUES\n  ('${esc(b.storeCode)}','${esc(b.storeName)}','${esc(b.requestDate)}','${esc(b.receivedDate)}',\n   '${esc(b.emailFrom)}','${esc(b.emailSubject)}','${esc(b.emailMessageId)}',\n   'pending', ${parseInt(b.totalItems) || 0}, NOW())`;\n\nreturn [{ json: { insert, body: b } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [380, 300],
+      "id": "ntr02-node-0002",
+      "name": "Build Header Insert"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insert }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [600, 300],
+      "id": "ntr02-node-0003",
+      "name": "Insert NTR Request",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id FROM vmm_ntr_requests WHERE email_message_id = '{{ $('Build Header Insert').first().json.body.emailMessageId.replace(/'/g, \"''\") }}' ORDER BY id DESC LIMIT 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [820, 300],
+      "id": "ntr02-node-0004",
+      "name": "Get Request ID",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const requestId = $input.first().json.id;\nconst items = $('Build Header Insert').first().json.body.items || [];\nconst esc = v => String(v || '').replace(/'/g, \"''\");\n\nif (!items.length) return [{ json: { requestId, noItems: true } }];\n\nconst valueRows = items.map(i =>\n  `(${requestId},'${esc(i.item_article_no)}','${esc(i.item_name)}','${esc(i.last_received_date)}','${esc(i.last_received_qty)}','${esc(i.current_stock)}','${esc(i.stock_days)}','${esc(i.store_requirement)}','${esc(i.ho_recommendation)}')`\n).join(',\\n');\n\nconst sql = `INSERT INTO vmm_ntr_items\n  (request_id, item_article_no, item_name, last_received_date, last_received_qty, current_stock, stock_days, store_requirement, ho_recommendation)\n  VALUES\\n${valueRows}`;\n\nreturn [{ json: { requestId, insertItems: sql } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 300],
+      "id": "ntr02-node-0005",
+      "name": "Build Items Insert"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertItems }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1260, 300],
+      "id": "ntr02-node-0006",
+      "name": "Insert NTR Items",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const requestId = $('Build Items Insert').first().json.requestId;\nreturn [{ json: { success: true, requestId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 300],
+      "id": "ntr02-node-0007",
+      "name": "Build Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1700, 300],
+      "id": "ntr02-node-0008",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook — POST /vmm-ntr-save": { "main": [[{ "node": "Build Header Insert", "type": "main", "index": 0 }]] },
+    "Build Header Insert":          { "main": [[{ "node": "Insert NTR Request",   "type": "main", "index": 0 }]] },
+    "Insert NTR Request":           { "main": [[{ "node": "Get Request ID",        "type": "main", "index": 0 }]] },
+    "Get Request ID":               { "main": [[{ "node": "Build Items Insert",    "type": "main", "index": 0 }]] },
+    "Build Items Insert":           { "main": [[{ "node": "Insert NTR Items",      "type": "main", "index": 0 }]] },
+    "Insert NTR Items":             { "main": [[{ "node": "Build Response",        "type": "main", "index": 0 }]] },
+    "Build Response":               { "main": [[{ "node": "Respond",              "type": "main", "index": 0 }]] }
+  },
+  "meta": { "templateCredsSetupCompleted": false,
+    "instanceId": "8442590b0e55dbd54e355747c7c925a75dfcef3563273e7cbd717163cbe23470" }
+}

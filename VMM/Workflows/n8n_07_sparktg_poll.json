@@ -1,0 +1,95 @@
+{
+  "name": "VMM FU — SparkTG Poll Status",
+  "nodes": [
+    {
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "fu07-node-0001",
+      "name": "Webhook — GET /vmm-sparktg-poll",
+      "webhookId": "vmm-sparktg-poll",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-sparktg-poll",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const q = $input.first().json.query || {};\nconst callId = q.callId;\nif (!callId) return [{ json: { error: 'callId is required' } }];\n\nconst username  = '10167201';\nconst password  = 'agent007';\nconst serviceId = '1672';\nconst authHeader = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');\n\nreturn [{ json: { authHeader, callId, serviceId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 352],
+      "id": "fu07-node-0002",
+      "name": "Build Poll Request"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://telephonycloud.co.in/api/v1/agent-recent-calls",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ $('Build Poll Request').first().json.authHeader }}" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "recent_txn_id", "value": "={{ $('Build Poll Request').first().json.callId }}" },
+            { "name": "svc-id",        "value": "={{ $('Build Poll Request').first().json.serviceId }}" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 352],
+      "id": "fu07-node-0003",
+      "name": "Poll SparkTG"
+    },
+    {
+      "parameters": {
+        "jsCode": "const callId = $('Build Poll Request').first().json.callId;\nconst raw = $input.first().json;\nconst records = Array.isArray(raw) ? raw : (raw.data || raw.records || []);\nconst record = records.find(r => r.xnid === callId || r.id === callId || r.callTxnId === callId) || null;\nreturn [{ json: { success: true, found: !!record, record } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 352],
+      "id": "fu07-node-0004",
+      "name": "Format Poll Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 352],
+      "id": "fu07-node-0005",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook — GET /vmm-sparktg-poll": {
+      "main": [[{ "node": "Build Poll Request", "type": "main", "index": 0 }]]
+    },
+    "Build Poll Request": {
+      "main": [[{ "node": "Poll SparkTG", "type": "main", "index": 0 }]]
+    },
+    "Poll SparkTG": {
+      "main": [[{ "node": "Format Poll Response", "type": "main", "index": 0 }]]
+    },
+    "Format Poll Response": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

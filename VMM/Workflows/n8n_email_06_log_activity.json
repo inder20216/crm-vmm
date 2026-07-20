@@ -1,0 +1,117 @@
+{
+  "name": "VMM Email - Log Activity on Complaint",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-email-log-activity",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "email06-node-0001",
+      "name": "Webhook POST vmm-email-log-activity",
+      "webhookId": "vmm-email-log-activity"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b   = $input.first().json.body || {};\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst complaintNo = esc(b.complaintNo || b.complaintId || '').trim();\nconst remarks     = esc(b.remarks || '');\nconst newStatus   = esc(b.newStatus || '');\nconst newEdc      = esc(b.newEdc || '');\nconst uid         = parseInt(b.uid || 1);\n\nif (!complaintNo) return [{ json: { error: 'complaintNo required' } }];\n\nconst sqlFind = `SELECT c.id FROM vmm_complaints c WHERE c.complaintno = '${complaintNo}' AND c.is_deleted = 'No' LIMIT 1`;\n\nreturn [{ json: { sqlFind, complaintNo, remarks, newStatus, newEdc, uid } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 352],
+      "id": "email06-node-0002",
+      "name": "Prepare"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sqlFind }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [680, 352],
+      "id": "email06-node-0003",
+      "name": "Find Complaint",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev  = $('Prepare').first().json;\nconst row   = $input.first()?.json;\n\nif (!row || !row.id) {\n  return [{ json: { found: false, message: `Complaint ${prev.complaintNo} not found`, insertLog: 'SELECT 1', updateEdc: null } }];\n}\n\nconst cid = row.id;\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst statusToLog = prev.newStatus || 'Open';\nconst logRemarks  = prev.remarks || 'Update received';\n\nconst insertLog = `INSERT INTO vmm_complaintlogs (complaintid, remarks, status, uid, created, is_deleted) VALUES (${cid}, '${esc(logRemarks)}', '${esc(statusToLog)}', ${prev.uid}, NOW(), 'No')`;\n\nconst updateEdc = prev.newEdc\n  ? `UPDATE vmm_vendorescalations SET closuredate = '${esc(prev.newEdc)}' WHERE id = (SELECT MAX(id) FROM vmm_vendorescalations WHERE complaintid = ${cid})`\n  : null;\n\nreturn [{ json: { found: true, cid, complaintNo: prev.complaintNo, insertLog, updateEdc, statusToLog } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 352],
+      "id": "email06-node-0004",
+      "name": "Build Queries"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertLog }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1120, 352],
+      "id": "email06-node-0005",
+      "name": "Insert Log",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Build Queries').first().json.updateEdc || 'SELECT 1' }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1340, 352],
+      "id": "email06-node-0006",
+      "name": "Update EDC",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Build Queries').first().json;\nreturn [{ json: { success: d.found, found: d.found, complaintNo: d.complaintNo, status: d.statusToLog, message: d.found ? 'Activity logged successfully' : d.message } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 352],
+      "id": "email06-node-0007",
+      "name": "Build Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1780, 352],
+      "id": "email06-node-0008",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook POST vmm-email-log-activity": { "main": [[{ "node": "Prepare",        "type": "main", "index": 0 }]] },
+    "Prepare":        { "main": [[{ "node": "Find Complaint", "type": "main", "index": 0 }]] },
+    "Find Complaint": { "main": [[{ "node": "Build Queries",  "type": "main", "index": 0 }]] },
+    "Build Queries":  { "main": [[{ "node": "Insert Log",     "type": "main", "index": 0 }]] },
+    "Insert Log":     { "main": [[{ "node": "Update EDC",     "type": "main", "index": 0 }]] },
+    "Update EDC":     { "main": [[{ "node": "Build Response", "type": "main", "index": 0 }]] },
+    "Build Response": { "main": [[{ "node": "Respond",        "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "VMM Email - Send Reply",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-reply-new",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-400, 300],
+      "id": "reply-webhook",
+      "name": "Webhook - POST /vmm-reply",
+      "webhookId": "vmm-reply-new"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\n\nlet ccEmails = '';\nif (b.ccRecipients) {\n  const raw = Array.isArray(b.ccRecipients) ? b.ccRecipients.join(';') : b.ccRecipients;\n  ccEmails = raw.split(';').map(e => e.trim()).filter(Boolean).join(';');\n}\n\nreturn [{ json: {\n  messageId: b.messageId || '',\n  htmlBody:  b.htmlBody  || '',\n  toEmail:   b.toRecipients || '',\n  ccEmails,\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-176, 300],
+      "id": "reply-prepare",
+      "name": "Prepare Data"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://default6fb82fad19c741e5b5e1e7e1b02b03.23.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/08/workflows/ffdaaa5d00304a00a81f036785971baa/triggers/manual/paths/invoke?api-version=1",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messageId: $json.messageId, htmlBody: $json.htmlBody, toEmail: $json.toEmail, ccEmails: $json.ccEmails }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [48, 300],
+      "id": "reply-pa",
+      "name": "Send via Power Automate"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true, \"message\": \"Reply sent\" }",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [272, 300],
+      "id": "reply-respond",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-reply": { "main": [[{ "node": "Prepare Data",             "type": "main", "index": 0 }]] },
+    "Prepare Data":              { "main": [[{ "node": "Send via Power Automate",   "type": "main", "index": 0 }]] },
+    "Send via Power Automate":   { "main": [[{ "node": "Respond",                  "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

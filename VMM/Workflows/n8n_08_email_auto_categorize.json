@@ -1,0 +1,186 @@
+{
+  "name": "VMM — Email Auto Categorizer",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 5 }]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-400, 352],
+      "id": "cat-node-0001",
+      "name": "Every 5 Minutes"
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst from = new Date(now.getTime() - 6 * 60 * 1000); // last 6 min (small overlap)\nreturn [{ json: {\n  startDate: from.toISOString(),\n  endDate:   now.toISOString()\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-200, 352],
+      "id": "cat-node-0002",
+      "name": "Calculate Window"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "returnAll": true,
+        "output": "fields",
+        "fields": ["id", "subject", "bodyPreview", "receivedDateTime", "categories", "from"],
+        "filtersUI": {
+          "values": {
+            "filters": {
+              "custom": "=receivedDateTime ge {{ $json.startDate }} and receivedDateTime le {{ $json.endDate }}",
+              "foldersToInclude": []
+            }
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [20, 352],
+      "id": "cat-node-0003",
+      "name": "Get Recent Emails",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "ZaZUH3dJiLPRt7BX",
+          "name": "VMM2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const VALID_CATEGORIES = [\n  'New Complaint',\n  'Vendor Reply',\n  'Store Reply',\n  'Quotation / Invoice',\n  'FM / HO Communication',\n  'Business Opportunity',\n  'Auto Response',\n  'Others'\n];\n\nconst results = [];\n\nfor (const item of items) {\n  const email = item.json;\n  const cats  = email.categories || [];\n\n  // Skip if already has a valid auto-category\n  const alreadyCategorized = cats.some(c => VALID_CATEGORIES.includes(c));\n  if (alreadyCategorized) continue;\n\n  const subject  = (email.subject       || '(no subject)').slice(0, 200);\n  const preview  = (email.bodyPreview    || '').slice(0, 400);\n  const sender   = email.from?.emailAddress?.address || '';\n\n  const aiPrompt = 'Email Subject: ' + subject + '\\nSender: ' + sender + '\\nBody Preview: ' + preview;\n\n  results.push({ json: {\n    emailId:  email.id,\n    subject,\n    sender,\n    aiPrompt\n  }});\n}\n\nif (!results.length) return [{ json: { skip: true } }];\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "cat-node-0004",
+      "name": "Filter & Prep Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 352],
+      "id": "cat-node-0005",
+      "name": "Has Emails?"
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "model": { "__rl": true, "value": "gpt-4o-mini", "mode": "list" },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You categorize emails for a VMM (Vendor Maintenance Management) helpdesk at a retail chain. Classify each email into EXACTLY ONE of these categories:\n\n- New Complaint: Fresh complaint from a store about a facility issue (AC, lift, electrical, genset, sensormatic, pest control, housekeeping, etc.)\n- Vendor Reply: A vendor or service provider responding to an existing complaint or escalation\n- Store Reply: A store staff member responding to a follow-up from the helpdesk\n- Quotation / Invoice: A vendor sending a price quote, invoice, or billing document\n- FM / HO Communication: Internal communication from a Facility Manager or Head Office team member\n- Business Opportunity: Sales pitch, partnership proposal, or promotional/marketing email\n- Auto Response: Out-of-office reply, delivery failure, or automated system notification\n- Others: Anything that does not fit the above categories\n\nReply with ONLY the category name — no explanation, no punctuation, nothing else."
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.aiPrompt }}"
+            }
+          ]
+        },
+        "options": { "temperature": 0, "maxTokens": 20 }
+      },
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.8,
+      "position": [680, 320],
+      "id": "cat-node-0006",
+      "name": "OpenAI — Categorize",
+      "credentials": {
+        "openAiApi": {
+          "id": "VMM_OPENAI_CREDENTIAL_ID",
+          "name": "VMM OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const VALID_CATEGORIES = [\n  'New Complaint',\n  'Vendor Reply',\n  'Store Reply',\n  'Quotation / Invoice',\n  'FM / HO Communication',\n  'Business Opportunity',\n  'Auto Response',\n  'Others'\n];\n\nconst aiResponse = $input.first().json;\nconst raw = (\n  aiResponse.message?.content ||\n  aiResponse.choices?.[0]?.message?.content ||\n  aiResponse.text ||\n  ''\n).trim();\n\n// Match to valid category (case-insensitive)\nconst category = VALID_CATEGORIES.find(\n  c => c.toLowerCase() === raw.toLowerCase()\n) || 'Others';\n\nconst prev = $('Filter & Prep Prompt').first().json;\n\nreturn [{ json: {\n  emailId:  prev.emailId,\n  subject:  prev.subject,\n  category,\n  rawAI:    raw\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 320],
+      "id": "cat-node-0007",
+      "name": "Extract Category"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://graph.microsoft.com/v1.0/me/messages/{{ $json.emailId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"categories\": [\"{{ $json.category }}\"]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 320],
+      "id": "cat-node-0008",
+      "name": "Apply Category (Graph API)",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "ZaZUH3dJiLPRt7BX",
+          "name": "VMM2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [[{ "node": "Calculate Window", "type": "main", "index": 0 }]]
+    },
+    "Calculate Window": {
+      "main": [[{ "node": "Get Recent Emails", "type": "main", "index": 0 }]]
+    },
+    "Get Recent Emails": {
+      "main": [[{ "node": "Filter & Prep Prompt", "type": "main", "index": 0 }]]
+    },
+    "Filter & Prep Prompt": {
+      "main": [[{ "node": "Has Emails?", "type": "main", "index": 0 }]]
+    },
+    "Has Emails?": {
+      "main": [
+        [{ "node": "OpenAI — Categorize", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "OpenAI — Categorize": {
+      "main": [[{ "node": "Extract Category", "type": "main", "index": 0 }]]
+    },
+    "Extract Category": {
+      "main": [[{ "node": "Apply Category (Graph API)", "type": "main", "index": 0 }]]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

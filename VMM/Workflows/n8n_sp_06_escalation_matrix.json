@@ -1,0 +1,87 @@
+{
+  "name": "VMM SP — Escalation Matrix",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-sp-escalation-matrix",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "em-node-0001",
+      "name": "Webhook — GET /vmm-sp-escalation-matrix",
+      "webhookId": "vmm-sp-escalation-matrix"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_ESCALATION_MATRIX_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [460, 352],
+      "id": "em-node-0002",
+      "name": "Read Escalation Matrix Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ltEEeRayxtB2S0lJ",
+          "name": "Inder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const query  = $('Webhook — GET /vmm-sp-escalation-matrix').first().json.query || {};\nconst vendor = (query.vendor || '').toString().trim().toLowerCase();\nconst region = (query.region || '').toString().trim();\nconst level  = (query.level  || '').toString().trim();\n\nconst all = $input.all();\n\nconst contacts = all\n  .map(item => ({\n    vendorName:    (item.json['Vendor Name']      || '').trim(),\n    region:        (item.json['Region']           || '').trim(),\n    city:          (item.json['City']             || '').trim(),\n    level:         (item.json['Escalation Level'] || '').trim(),\n    contactPerson: (item.json['Contact Person']   || '').trim(),\n    customerCareNo:(item.json['Customer Care No'] != null ? String(item.json['Customer Care No']) : '').trim(),\n    mobile1:       (item.json['Mobile No 1']      != null ? String(item.json['Mobile No 1'])      : '').trim(),\n    mobile2:       (item.json['Mobile No 2']      != null ? String(item.json['Mobile No 2'])      : '').trim(),\n    mobile3:       (item.json['Mobile No 3']      != null ? String(item.json['Mobile No 3'])      : '').trim(),\n    email:         (item.json['Email']            || '').trim(),\n    status:        (item.json['Status']           || '').trim(),\n  }))\n  .filter(c => c.vendorName && c.status.toLowerCase() === 'active')\n  .filter(c => !vendor || c.vendorName.toLowerCase().includes(vendor))\n  .filter(c => !region || c.region.toLowerCase() === region.toLowerCase())\n  .filter(c => !level  || c.level.toLowerCase()  === level.toLowerCase());\n\nreturn [{ json: { success: true, count: contacts.length, contacts } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 352],
+      "id": "em-node-0003",
+      "name": "Filter & Map Contacts"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 352],
+      "id": "em-node-0004",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook — GET /vmm-sp-escalation-matrix": {
+      "main": [[{ "node": "Read Escalation Matrix Sheet", "type": "main", "index": 0 }]]
+    },
+    "Read Escalation Matrix Sheet": {
+      "main": [[{ "node": "Filter & Map Contacts", "type": "main", "index": 0 }]]
+    },
+    "Filter & Map Contacts": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

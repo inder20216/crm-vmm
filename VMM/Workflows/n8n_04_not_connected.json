@@ -1,0 +1,158 @@
+{
+  "name": "VMM FU - Not Connected",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-not-connected",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "fu04-node-0001",
+      "name": "Webhook POST vmm-not-connected",
+      "webhookId": "vmm-not-connected"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\nconst complaintId     = parseInt(b.complaintId);\nconst uid             = parseInt(b.uid || 1);\nconst remarks         = b.remarks || '';\nconst txnId           = b.txnId || '';\nconst mobileCalled    = b.mobileCalled || '';\nconst escalationLevel = parseInt(b.escalationLevel || 1);\nconst delayMain       = b.delayMain || '';\nconst delaySub        = b.delaySub  || '';\n\nif (!complaintId) return [{ json: { success: false, error: 'complaintId required' } }];\n\n// Use EDC from frontend if provided; fall back to today + 3 days\nlet newClosureDate = (b.newClosureDate || '').trim();\nif (!newClosureDate) {\n  const edc = new Date(); edc.setDate(edc.getDate() + 3);\n  newClosureDate = edc.toISOString().split('T')[0];\n}\n\nconst sqlCountNc = `SELECT COUNT(*) AS nc_count FROM vmm_complaintlogs WHERE complaintid = ${complaintId} AND status = 'Not Connected'`;\n\nreturn [{ json: { sqlCountNc, complaintId, uid, remarks, txnId, mobileCalled, newClosureDate, escalationLevel, delayMain, delaySub } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 352],
+      "id": "fu04-node-0002",
+      "name": "Prepare"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sqlCountNc }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [680, 352],
+      "id": "fu04-node-0003",
+      "name": "Count NC Logs",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev    = $('Prepare').first().json;\nconst ncRow   = $input.first().json;\nconst ncCount = parseInt(ncRow.nc_count ?? ncRow[0]?.nc_count ?? 0);\nconst rLevel  = ncCount + 1;\nconst rLabel  = rLevel === 1 ? 'R1 - First Attempt' : rLevel === 2 ? 'R2 - Second Attempt' : 'R3+ - Escalation Required';\n\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst parts = ['Called - Not Connected | ' + rLabel];\nif (prev.txnId) parts.push('TXN: ' + prev.txnId);\nif (prev.mobileCalled) parts.push('Mobile: ' + prev.mobileCalled);\nif (prev.remarks) parts.push(prev.remarks);\nparts.push('Source: Call');\nif (prev.delayMain) {\n  const delayStr = prev.delaySub ? prev.delayMain + ' > ' + prev.delaySub : prev.delayMain;\n  parts.push('Delay: ' + delayStr);\n}\n\nconst fullRemarks = esc(parts.filter(Boolean).join(' | '));\n\nconst insertLog = `INSERT INTO vmm_complaintlogs (complaintid, remarks, status, uid, created, is_deleted) VALUES (${prev.complaintId}, '${fullRemarks}', 'Not Connected', ${prev.uid}, NOW(), 'No')`;\n\nconst insertEsc = `INSERT INTO vmm_vendorescalations (complaintid, escalationlevel, ticketno, closuredate, uid, created, is_deleted) VALUES (${prev.complaintId}, ${prev.escalationLevel}, '', '${prev.newClosureDate}', ${prev.uid}, NOW(), 'No')`;\n\nreturn [{ json: { insertLog, insertEsc, complaintId: prev.complaintId, rLevel, uid: prev.uid, newClosureDate: prev.newClosureDate } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 352],
+      "id": "fu04-node-0004",
+      "name": "Build Log"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertLog }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1120, 352],
+      "id": "fu04-node-0005",
+      "name": "Insert NC Log",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Build Log').first().json.insertEsc }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1340, 352],
+      "id": "fu04-node-0006",
+      "name": "Insert Escalation",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT c.complaintno, c.productname, c.vendorname, c.escalation_messageid, cs.storename, cs.storecode, cs.storeemail, cs.fmname, cs.fmemail FROM vmm_complaints c LEFT JOIN vmm_complaintstores cs ON cs.id = c.storerefid WHERE c.id = {{ $('Build Log').first().json.complaintId }} LIMIT 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [1560, 352],
+      "id": "fu04-node-0009",
+      "name": "Fetch Complaint Details",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d   = $('Build Log').first().json;\nconst row = $input.first().json;\n\nconst bufStr = v => {\n  if (v == null) return '';\n  if (typeof v === 'object' && v.type === 'Buffer' && Array.isArray(v.data)) {\n    try { return new TextDecoder().decode(new Uint8Array(v.data)); } catch { return ''; }\n  }\n  return String(v);\n};\n\nconst TEST_MODE   = true;\nconst TEST_TO     = 'inder@openmind.in';\nconst ALWAYS_CC   = 'VMM Team <54933595.openmindservices.onmicrosoft.com@in.teams.ms>';\n\nconst complaintno      = bufStr(row.complaintno);\nconst productName      = bufStr(row.productname) || 'the product';\nconst storeName        = bufStr(row.storename)   || 'Store';\nconst storeCode        = bufStr(row.storecode);\nconst storeEmail       = bufStr(row.storeemail)  || 'vmm@openmindserviceslimited.in';\nconst fmEmail          = bufStr(row.fmemail);\nconst escalationMsgId  = bufStr(row.escalation_messageid);\n\nconst toEmail = TEST_MODE ? TEST_TO : storeEmail;\n\nconst ccParts = [];\nif (!TEST_MODE && fmEmail) ccParts.push(fmEmail);\nif (ALWAYS_CC) ALWAYS_CC.split(',').map(e => e.trim()).filter(Boolean).forEach(e => { if (!ccParts.includes(e)) ccParts.push(e); });\nconst ccEmails = ccParts.join(';');\n\nreturn [{ json: {\n  escalationMsgId,\n  rLevel:      d.rLevel,\n  complaintno,\n  storeName,\n  storeCode,\n  productName,\n  newEdc:      d.newClosureDate,\n  toEmail,\n  ccEmails,\n  complaintId: d.complaintId,\n  newClosureDate: d.newClosureDate,\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 352],
+      "id": "fu04-node-0010",
+      "name": "Build NC Payload"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://inder20216.app.n8n.cloud/webhook/vmm-nc-reminder",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messageId: $json.escalationMsgId, rLevel: $json.rLevel, complaintno: $json.complaintno, storeName: $json.storeName, storeCode: $json.storeCode, productName: $json.productName, newEdc: $json.newEdc, toEmail: $json.toEmail, ccEmails: $json.ccEmails }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 352],
+      "id": "fu04-node-0011",
+      "name": "Call NC Reminder (Cloud n8n)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Build NC Payload').first().json;\nconst reminderRes = $input.first().json || {};\nreturn [{ json: {\n  success: true,\n  complaintId:    d.complaintId,\n  rLevel:         d.rLevel,\n  newEdc:         d.newClosureDate,\n  reminderSent:   reminderRes.success === true && !reminderRes.skipped,\n  message: 'Not Connected R' + d.rLevel + ' logged. EDC set to ' + d.newClosureDate + (reminderRes.success && !reminderRes.skipped ? '. Reminder reply sent on escalation thread.' : '. No escalation email on file — reminder skipped.')\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 352],
+      "id": "fu04-node-0007",
+      "name": "Build Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2440, 352],
+      "id": "fu04-node-0008",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook POST vmm-not-connected": { "main": [[{ "node": "Prepare",                       "type": "main", "index": 0 }]] },
+    "Prepare":                         { "main": [[{ "node": "Count NC Logs",                 "type": "main", "index": 0 }]] },
+    "Count NC Logs":                   { "main": [[{ "node": "Build Log",                     "type": "main", "index": 0 }]] },
+    "Build Log":                       { "main": [[{ "node": "Insert NC Log",                 "type": "main", "index": 0 }]] },
+    "Insert NC Log":                   { "main": [[{ "node": "Insert Escalation",             "type": "main", "index": 0 }]] },
+    "Insert Escalation":               { "main": [[{ "node": "Fetch Complaint Details",       "type": "main", "index": 0 }]] },
+    "Fetch Complaint Details":         { "main": [[{ "node": "Build NC Payload",              "type": "main", "index": 0 }]] },
+    "Build NC Payload":                { "main": [[{ "node": "Call NC Reminder (Cloud n8n)", "type": "main", "index": 0 }]] },
+    "Call NC Reminder (Cloud n8n)":   { "main": [[{ "node": "Build Response",                "type": "main", "index": 0 }]] },
+    "Build Response":                  { "main": [[{ "node": "Respond to Webhook",            "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

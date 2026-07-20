@@ -1,0 +1,49 @@
+{
+  "name": "VMM User — Soft Delete User",
+  "_setup": "Soft-deletes a user by setting is_deleted = 'yes'. Body: { id }",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-user-delete",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "usr05-0001-0000-0000-000000000001",
+      "name": "Webhook — POST /vmm-user-delete"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE vmm_users SET is_deleted = 'yes', updated = NOW() WHERE id = {{ $('Webhook — POST /vmm-user-delete').first().json.body.id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 352],
+      "id": "usr05-0002-0000-0000-000000000002",
+      "name": "Soft Delete User",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true }",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] } }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 352],
+      "id": "usr05-0003-0000-0000-000000000003",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook — POST /vmm-user-delete": { "main": [[{ "node": "Soft Delete User", "type": "main", "index": 0 }]] },
+    "Soft Delete User":                { "main": [[{ "node": "Respond",          "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,95 @@
+{
+  "name": "VMM CRM - Dashboard Stats",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-dashboard-stats",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "crm03-node-0001",
+      "name": "Webhook GET vmm-dashboard-stats",
+      "webhookId": "vmm-dashboard-stats"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT (SELECT COUNT(*) FROM vmm_complaints WHERE is_deleted = 'No') AS total_all, (SELECT COUNT(*) FROM vmm_complaints c LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND (cl.status IS NULL OR cl.status NOT IN ('Closed','Resolved'))) AS total_open, (SELECT COUNT(*) FROM vmm_complaints c LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND cl.status IN ('Closed','Resolved')) AS total_closed, (SELECT COUNT(*) FROM vmm_complaints WHERE is_deleted = 'No' AND DATE(created) = CURDATE()) AS logged_today, (SELECT COUNT(*) FROM vmm_complaints WHERE is_deleted = 'No' AND YEARWEEK(created, 1) = YEARWEEK(CURDATE(), 1)) AS logged_week, (SELECT COUNT(*) FROM vmm_complaints WHERE is_deleted = 'No' AND YEAR(created) = YEAR(CURDATE()) AND MONTH(created) = MONTH(CURDATE())) AS logged_month, (SELECT COUNT(*) FROM vmm_complaints c LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND DATE(cl.created) = CURDATE() AND cl.status IN ('Closed','Resolved')) AS closed_today, (SELECT COUNT(*) FROM vmm_complaints c LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND YEARWEEK(cl.created, 1) = YEARWEEK(CURDATE(), 1) AND cl.status IN ('Closed','Resolved')) AS closed_week, (SELECT COUNT(*) FROM vmm_complaints c LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND YEAR(cl.created) = YEAR(CURDATE()) AND MONTH(cl.created) = MONTH(CURDATE()) AND cl.status IN ('Closed','Resolved')) AS closed_month, (SELECT COUNT(*) FROM vmm_complaints c LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) LEFT JOIN vmm_vendorescalations ve ON ve.id = (SELECT MAX(id) FROM vmm_vendorescalations WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND (cl.status IS NULL OR cl.status NOT IN ('Closed','Resolved')) AND DATEDIFF(CURDATE(), ve.closuredate) > 7) AS critical",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 352],
+      "id": "crm03-node-0002",
+      "name": "Get Stats",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.id, c.complaintno, c.productname, c.vendorname, cs.storecode, cs.storename AS store_name, cs.storecity AS city, COALESCE(cl.status, 'Open') AS status, ve.closuredate, CASE WHEN ve.closuredate IS NOT NULL AND DATEDIFF(CURDATE(), ve.closuredate) > 0 THEN DATEDIFF(CURDATE(), ve.closuredate) ELSE NULL END AS days_overdue FROM vmm_complaints c LEFT JOIN vmm_complaintstores cs ON cs.id = c.storerefid LEFT JOIN vmm_vendorescalations ve ON ve.id = (SELECT MAX(id) FROM vmm_vendorescalations WHERE complaintid = c.id) LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND (cl.status IS NULL OR cl.status NOT IN ('Closed','Resolved')) ORDER BY CASE WHEN ve.closuredate IS NOT NULL AND DATEDIFF(CURDATE(), ve.closuredate) > 0 THEN 0 ELSE 1 END, c.created DESC LIMIT 20",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [680, 352],
+      "id": "crm03-node-0003",
+      "name": "Get Recent Complaints",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT cs.uid, COUNT(DISTINCT c.id) AS logged, SUM(CASE WHEN cl.status IN ('Closed','Resolved') THEN 1 ELSE 0 END) AS closed, SUM(CASE WHEN cl.status IS NULL OR cl.status NOT IN ('Closed','Resolved') THEN 1 ELSE 0 END) AS open FROM vmm_complaints c LEFT JOIN vmm_complaintstores cs ON cs.id = c.storerefid LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND YEAR(c.created) = YEAR(CURDATE()) AND MONTH(c.created) = MONTH(CURDATE()) GROUP BY cs.uid ORDER BY logged DESC",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [900, 352],
+      "id": "crm03-node-0006",
+      "name": "Get Productivity",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const statsRow     = $('Get Stats').first()?.json || {};\nconst recent       = $('Get Recent Complaints').all().map(i => i.json);\nconst productivity = $('Get Productivity').all().map(i => i.json);\n\nreturn [{ json: {\n  success: true,\n  stats: {\n    totalAll:     parseInt(statsRow.total_all    || 0),\n    totalOpen:    parseInt(statsRow.total_open   || 0),\n    totalClosed:  parseInt(statsRow.total_closed || 0),\n    loggedToday:  parseInt(statsRow.logged_today || 0),\n    loggedWeek:   parseInt(statsRow.logged_week  || 0),\n    loggedMonth:  parseInt(statsRow.logged_month || 0),\n    closedToday:  parseInt(statsRow.closed_today || 0),\n    closedWeek:   parseInt(statsRow.closed_week  || 0),\n    closedMonth:  parseInt(statsRow.closed_month || 0),\n    critical:     parseInt(statsRow.critical     || 0)\n  },\n  recentComplaints: recent,\n  productivity\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 352],
+      "id": "crm03-node-0004",
+      "name": "Build Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1340, 352],
+      "id": "crm03-node-0005",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook GET vmm-dashboard-stats": { "main": [[{ "node": "Get Stats",             "type": "main", "index": 0 }]] },
+    "Get Stats":                        { "main": [[{ "node": "Get Recent Complaints", "type": "main", "index": 0 }]] },
+    "Get Recent Complaints":            { "main": [[{ "node": "Get Productivity",      "type": "main", "index": 0 }]] },
+    "Get Productivity":                 { "main": [[{ "node": "Build Response",        "type": "main", "index": 0 }]] },
+    "Build Response":                   { "main": [[{ "node": "Respond to Webhook",    "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

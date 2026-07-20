@@ -1,0 +1,79 @@
+{
+  "name": "VMM Email - Escalation via Outlook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-escalation-outlook",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-400, 300],
+      "id": "escout-01",
+      "name": "Webhook",
+      "webhookId": "vmm-escalation-outlook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\nreturn [{ json: {\n  toEmail:  b.toEmail  || '',\n  ccEmails: b.ccEmails || '',\n  subject:  b.subject  || '',\n  htmlBody: b.htmlBody || '',\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-176, 300],
+      "id": "escout-02",
+      "name": "Prepare"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "PASTE_POWER_AUTOMATE_SEND_EMAIL_URL_HERE",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ toEmail: $json.toEmail, ccEmails: $json.ccEmails, subject: $json.subject, htmlBody: $json.htmlBody }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [48, 300],
+      "id": "escout-03",
+      "name": "Send via Power Automate"
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json || {};\nconst messageId      = r.messageId      || r.id              || '';\nconst conversationId = r.conversationId || r.conversationId  || '';\nreturn [{ json: { success: true, messageId, conversationId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [272, 300],
+      "id": "escout-04",
+      "name": "Extract MessageId"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [496, 300],
+      "id": "escout-05",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook":               { "main": [[{ "node": "Prepare",                 "type": "main", "index": 0 }]] },
+    "Prepare":               { "main": [[{ "node": "Send via Power Automate", "type": "main", "index": 0 }]] },
+    "Send via Power Automate": { "main": [[{ "node": "Extract MessageId",     "type": "main", "index": 0 }]] },
+    "Extract MessageId":     { "main": [[{ "node": "Respond",                 "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

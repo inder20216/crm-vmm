@@ -1,0 +1,84 @@
+{
+  "name": "VMM SP — Products List",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-sp-products",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "b2c3d4e5-0002-0002-0002-000000000001",
+      "name": "Webhook — GET /vmm-sp-products",
+      "webhookId": "vmm-sp-products"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1uzfGESr8kpQ_JKgkSOww2s3WxsH8y1U-YMvM8is31yE",
+          "mode": "list",
+          "cachedResultName": "VMM Master Data"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Products & Vendors",
+          "mode": "list",
+          "cachedResultName": "Products & Vendors"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [460, 352],
+      "id": "b2c3d4e5-0002-0002-0002-000000000002",
+      "name": "Get Products Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ltEEeRayxtB2S0lJ",
+          "name": "Inder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const query = $('Webhook — GET /vmm-sp-products').first().json.query || {};\nconst nameFilter = (query.name || '').toString().trim().toLowerCase();\n\nconst all = $input.all();\n\nlet products = all\n  .filter(item => (item.json['Product Name'] || '').trim() && (item.json['Vendor'] || '').trim())\n  .map(item => ({\n    name:        (item.json['Product Name']     || '').trim(),\n    vendor:      (item.json['Vendor']           || '').trim(),\n    category:    (item.json['Product Category'] || '').trim(),\n    hoName:      (item.json['HO Name']          || '').trim(),\n    hoEmail:     (item.json['HO Email']         || '').trim(),\n    vendorEmail: (item.json['Vendor Email']     || '').trim(),\n  }));\n\n// Optional filter by product name\nif (nameFilter) {\n  products = products.filter(p => p.name.toLowerCase().includes(nameFilter) || nameFilter.includes(p.name.toLowerCase()));\n}\n\nreturn [{\n  json: {\n    success: true,\n    count: products.length,\n    products\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 352],
+      "id": "b2c3d4e5-0002-0002-0002-000000000003",
+      "name": "Filter & Map Products"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 352],
+      "id": "b2c3d4e5-0002-0002-0002-000000000004",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook — GET /vmm-sp-products": {
+      "main": [[{ "node": "Get Products Sheet", "type": "main", "index": 0 }]]
+    },
+    "Get Products Sheet": {
+      "main": [[{ "node": "Filter & Map Products", "type": "main", "index": 0 }]]
+    },
+    "Filter & Map Products": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

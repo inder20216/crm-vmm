@@ -1,0 +1,73 @@
+{
+  "name": "VMM WIP - List Open",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-wip-list",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-240, 400],
+      "id": "wip02-webhook",
+      "name": "Webhook - GET /vmm-wip-list",
+      "webhookId": "vmm-wip-list"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "wip_emails",
+        "returnAll": true,
+        "filterType": "string",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "status", "condition": "eq", "keyValue": "open" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [-16, 400],
+      "id": "wip02-supabase",
+      "name": "Fetch Open WIPs",
+      "credentials": {
+        "supabaseApi": { "id": "SUPABASE_CRED_ID", "name": "Supabase" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\n\nconst wips = rows\n  .sort((a, b) => new Date(b.replied_at || b.received_at || 0) - new Date(a.replied_at || a.received_at || 0))\n  .map(r => ({\n    id:             r.email_id        || '',\n    conversationId: r.conversation_id || '',\n    subject:        r.subject         || '',\n    fromAddr:       r.from_addr       || '',\n    storeCode:      r.store_code      || '',\n    receivedAt:     r.received_at     || '',\n    repliedAt:      r.replied_at      || '',\n    savedBy:        r.saved_by        || '',\n    status:         'WIP',\n    parsed: (() => {\n      try { return typeof r.partial_fields === 'object' ? r.partial_fields : JSON.parse(r.partial_fields || '{}'); }\n      catch { return {}; }\n    })()\n  }));\n\nreturn [{ json: { success: true, wips } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [208, 400],
+      "id": "wip02-code",
+      "name": "Format WIPs"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [432, 400],
+      "id": "wip02-respond",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook - GET /vmm-wip-list": { "main": [[{ "node": "Fetch Open WIPs", "type": "main", "index": 0 }]] },
+    "Fetch Open WIPs":             { "main": [[{ "node": "Format WIPs",     "type": "main", "index": 0 }]] },
+    "Format WIPs":                 { "main": [[{ "node": "Respond",         "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": true, "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c" }
+}

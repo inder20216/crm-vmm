@@ -1,0 +1,80 @@
+{
+  "name": "VMM Email - Fetch Inbox",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "vmm-inbox",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-176, -176],
+      "id": "38703146-2e54-4092-8e77-143e0bb3fef0",
+      "name": "Webhook - GET /vmm-inbox",
+      "webhookId": "vmm-inbox"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 250,
+        "output": "raw",
+        "filtersUI": {
+          "values": {
+            "filters": {
+              "readStatus": "all",
+              "foldersToInclude": [
+                "AQMkADA5NTJlMDk5AC1jYjZjLTQxYzItOThiYy01MmI5Y2FjZDA3ZjQALgAAA7dZXXVRlb1KoAteory3XIkBADq7RADXZ_xHhV1DodJn93wAAAIBDAAAAA=="
+              ]
+            }
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [48, -176],
+      "id": "012d285a-fb9e-4692-84e9-51bcbcd569b5",
+      "name": "Get Unread Emails",
+      "webhookId": "53fcb90c-d1c1-4ed7-8ea9-21495b2c5733",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": { "id": "ZaZUH3dJiLPRt7BX", "name": "VMM2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const emails = $input.all().map(i => {\n  const m = i.json;\n\n  const fromAddr = m.from?.emailAddress?.address || '';\n  const fromName = m.from?.emailAddress?.name    || fromAddr;\n\n  const toArray = (m.toRecipients || []).map(r => r.emailAddress?.address || '').filter(Boolean);\n  const ccArray = (m.ccRecipients || []).map(r => r.emailAddress?.address || '').filter(Boolean);\n  const toDisplay = toArray.join(', ');\n  const ccDisplay = ccArray.join(', ');\n\n  const rawHtml = m.body?.content || m.bodyPreview || '';\n\n  // HTML for display — keeps structure, removes scripts/styles/head\n  const bodyHtml = rawHtml\n    .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<!DOCTYPE[^>]*>/gi, '')\n    .replace(/<head[\\s\\S]*?<\\/head>/gi, '')\n    .slice(0, 80000);\n\n  // Plain text for AI parsing and previews\n  const body = rawHtml\n    .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<[^>]*>/g, ' ')\n    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/\\s{3,}/g, '\\n\\n').trim();\n\n  const allAddrs = [fromAddr, ...toArray, ...ccArray];\n  let storeCode = null;\n  for (const addr of allAddrs) {\n    const hit = addr.match(/([A-Z]{2}\\d{2,3})\\.s[m]@/i);\n    if (hit) { storeCode = hit[1].toUpperCase(); break; }\n  }\n  if (!storeCode) {\n    const hit = (m.subject || '').match(/\\b([A-Z]{2}\\d{2,3})\\b/);\n    if (hit) storeCode = hit[1].toUpperCase();\n  }\n  if (!storeCode) {\n    const hit = body.match(/\\(([A-Z]{2}\\d{2,3})\\)/);\n    if (hit) storeCode = hit[1].toUpperCase();\n  }\n\n  const subject = m.subject || '';\n  let complaintId = null;\n  const cMatch = subject.match(/\\[([A-Z]{0,4}-?\\d{8,})\\]/) || subject.match(/ticket\\s+([A-Z]{0,4}-?\\d{8,})/i);\n  if (cMatch) complaintId = cMatch[1];\n\n  let emailType = 'general';\n  const isToHelpdesk = [...toArray, ...ccArray].some(a => a.toLowerCase().includes('vmm') || a.toLowerCase().includes('helpdesk'));\n  if (complaintId)       emailType = 'complaint-reply';\n  else if (isToHelpdesk) emailType = 'new-complaint';\n\n  return {\n    id: m.id, conversationId: m.conversationId || '',\n    subject, fromAddr, fromName,\n    fromDisplay: fromName !== fromAddr ? `${fromName} <${fromAddr}>` : fromAddr,\n    toDisplay, ccDisplay, toArray, ccArray,\n    storeCode, complaintId, emailType,\n    receivedAt: m.receivedDateTime || '',\n    isRead: m.isRead || false,\n    bodyPreview: body.slice(0, 250),\n    body: body.slice(0, 20000),\n    bodyHtml,\n    hasStoreCode: !!storeCode,\n    hasAttachments: m.hasAttachments || false,\n  };\n});\n\n// Sort newest first\nemails.sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt));\n\nreturn [{ json: { success: true, count: emails.length, emails } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [256, -176],
+      "id": "97a5d55b-c5df-404c-ae9f-9393ce52b109",
+      "name": "Format Email List"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [480, -176],
+      "id": "a5442ff9-a388-4dcd-9dc6-a747a9ea4376",
+      "name": "Respond1"
+    }
+  ],
+  "connections": {
+    "Webhook - GET /vmm-inbox": { "main": [[{ "node": "Get Unread Emails",  "type": "main", "index": 0 }]] },
+    "Get Unread Emails":              { "main": [[{ "node": "Format Email List",   "type": "main", "index": 0 }]] },
+    "Format Email List":              { "main": [[{ "node": "Respond1",            "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

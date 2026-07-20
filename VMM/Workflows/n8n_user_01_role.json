@@ -1,0 +1,60 @@
+{
+  "name": "VMM User — Get Role by Email",
+  "_setup": "Called on every app load after Microsoft login. Returns the user's role from vmm_users.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-user-role",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "usr01-0001-0000-0000-000000000001",
+      "name": "Webhook — GET /vmm-user-role"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id, name, email, type FROM vmm_users WHERE email = '{{ $('Webhook — GET /vmm-user-role').first().json.query.email }}' AND is_deleted = 'no' AND status = '1' LIMIT 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 352],
+      "id": "usr01-0002-0000-0000-000000000002",
+      "name": "Find User by Email",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nif (!rows || rows.length === 0 || !rows[0].json.id) {\n  return [{ json: { found: false } }];\n}\nconst u = rows[0].json;\n// Map type to CRM role: admin = full access, everything else = agent\nconst role = u.type === 'admin' ? 'admin' : 'user';\nreturn [{ json: { found: true, user: { id: u.id, name: u.name, email: u.email, type: u.type, role, status: 'active' } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 352],
+      "id": "usr01-0003-0000-0000-000000000003",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] } }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 352],
+      "id": "usr01-0004-0000-0000-000000000004",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook — GET /vmm-user-role": { "main": [[{ "node": "Find User by Email", "type": "main", "index": 0 }]] },
+    "Find User by Email":           { "main": [[{ "node": "Format Response",    "type": "main", "index": 0 }]] },
+    "Format Response":              { "main": [[{ "node": "Respond",            "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

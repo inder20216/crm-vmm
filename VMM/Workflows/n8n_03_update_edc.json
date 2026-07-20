@@ -1,0 +1,91 @@
+{
+  "name": "VMM FU - Update EDC",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-update-edc",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 352],
+      "id": "fu03-node-0001",
+      "name": "Webhook POST vmm-update-edc",
+      "webhookId": "vmm-update-edc"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst complaintId     = parseInt(body.complaintId);\nconst newClosureDate  = (body.newClosureDate || '');\nconst escalationLevel = parseInt(body.escalationLevel || 1);\nconst delayMain       = body.delayMain  || '';\nconst delaySub        = body.delaySub   || '';\nconst extraRemarks    = body.remarks    || '';\nconst uid             = parseInt(body.uid || 1);\n\nif (!complaintId || !newClosureDate) return [{ json: { success: false, error: 'complaintId and newClosureDate required' } }];\n\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst parts = [];\nif (delayMain) parts.push('Delay: ' + delayMain + (delaySub ? ' - ' + delaySub : ''));\nif (extraRemarks) parts.push(extraRemarks);\nif (!parts.length) parts.push('EDC Extended');\n\nconst remarksStr = esc(parts.join(' | '));\n\nconst insertLog = `INSERT INTO vmm_complaintlogs (complaintid, remarks, status, uid, created, is_deleted) VALUES (${complaintId}, '${remarksStr}', 'Escalated', ${uid}, NOW(), 'No')`;\n\nconst insertEsc = `INSERT INTO vmm_vendorescalations (complaintid, escalationlevel, ticketno, closuredate, uid, created, is_deleted) VALUES (${complaintId}, ${escalationLevel}, '', '${esc(newClosureDate)}', ${uid}, NOW(), 'No')`;\n\nreturn [{ json: { insertLog, insertEsc, complaintId, newClosureDate, escalationLevel } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 352],
+      "id": "fu03-node-0002",
+      "name": "Build Queries"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.insertLog }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [680, 352],
+      "id": "fu03-node-0003",
+      "name": "Insert Log",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Build Queries').first().json.insertEsc }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [900, 352],
+      "id": "fu03-node-0004",
+      "name": "Insert Escalation",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Build Queries').first().json;\nreturn [{ json: { success: true, complaintId: d.complaintId, newClosureDate: d.newClosureDate, escalationLevel: d.escalationLevel, message: 'EDC updated to ' + d.newClosureDate } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 352],
+      "id": "fu03-node-0005",
+      "name": "Build Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1340, 352],
+      "id": "fu03-node-0006",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook POST vmm-update-edc": { "main": [[{ "node": "Build Queries",     "type": "main", "index": 0 }]] },
+    "Build Queries":               { "main": [[{ "node": "Insert Log",         "type": "main", "index": 0 }]] },
+    "Insert Log":                  { "main": [[{ "node": "Insert Escalation",  "type": "main", "index": 0 }]] },
+    "Insert Escalation":           { "main": [[{ "node": "Build Response",     "type": "main", "index": 0 }]] },
+    "Build Response":              { "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]] }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

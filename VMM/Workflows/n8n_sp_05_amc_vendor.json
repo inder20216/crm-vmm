@@ -1,0 +1,215 @@
+{
+  "name": "VMM SP — AMC Vendor Lookup",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vmm-sp-amc-vendor",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 400],
+      "id": "amc-node-0001",
+      "name": "Webhook — GET /vmm-sp-amc-vendor",
+      "webhookId": "vmm-sp-amc-vendor"
+    },
+    {
+      "parameters": {
+        "jsCode": "const query   = $input.first().json.query || {};\nconst product = (query.product || '').toString().trim().toLowerCase();\n\n// Normalise the incoming product name to one of the 4 known AMC categories\nconst AC_NAMES          = ['ac', 'air conditioner', 'air conditioning', 'a/c', 'server room ac', 'air curtain'];\nconst LIFT_NAMES        = ['lift', 'elevator', 'lifts', 'elevators', 'escalator'];\nconst SENSORMATIC_NAMES = ['sensormatic', 'eas', 'anti-theft'];\nconst PESTCONTROL_NAMES = ['pest control', 'pest', 'fumigation'];\n\nlet category = 'unknown';\nif (AC_NAMES.some(n => product.includes(n) || n.includes(product)))          category = 'ac';\nelse if (LIFT_NAMES.some(n => product.includes(n) || n.includes(product)))   category = 'lift';\nelse if (SENSORMATIC_NAMES.some(n => product.includes(n) || n.includes(product))) category = 'sensormatic';\nelse if (PESTCONTROL_NAMES.some(n => product.includes(n) || n.includes(product))) category = 'pestcontrol';\n\nreturn [{ json: { ...($input.first().json), _category: category, _storeCode: (query.storeCode || '').trim().toUpperCase(), _product: product } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400],
+      "id": "amc-node-0002",
+      "name": "Classify Product"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "conditions": { "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json._category }}", "rightValue": "ac", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "conditions": { "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json._category }}", "rightValue": "lift", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "conditions": { "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json._category }}", "rightValue": "sensormatic", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "conditions": { "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json._category }}", "rightValue": "pestcontrol", "operator": { "type": "string", "operation": "equals" } }] } }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [680, 400],
+      "id": "amc-node-0003",
+      "name": "Route by Product"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_AC_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [900, 160],
+      "id": "amc-node-0004",
+      "name": "Read AC AMC Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ltEEeRayxtB2S0lJ",
+          "name": "Inder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_LIFT_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [900, 320],
+      "id": "amc-node-0005",
+      "name": "Read Lift AMC Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ltEEeRayxtB2S0lJ",
+          "name": "Inder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SENSORMATIC_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [900, 480],
+      "id": "amc-node-0006",
+      "name": "Read Sensormatic AMC Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ltEEeRayxtB2S0lJ",
+          "name": "Inder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_PESTCONTROL_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [900, 640],
+      "id": "amc-node-0007",
+      "name": "Read Pest Control AMC Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ltEEeRayxtB2S0lJ",
+          "name": "Inder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Runs after each sheet read — finds the row matching storeCode and returns vendor + vendorEmail.\n// Works for all 4 product sheets as long as columns are: Store Code, Vendor, Vendor Email\n// (column names are flexible — see aliases below)\n\nconst classify = $('Classify Product').first().json;\nconst storeCode = classify._storeCode || '';\nconst product   = classify._product   || '';\nconst category  = classify._category  || '';\n\nif (!storeCode) {\n  return [{ json: { found: false, message: 'storeCode is required' } }];\n}\n\nconst all = $input.all();\n\n// Flexible column name lookup\nfunction col(row, ...names) {\n  for (const n of names) {\n    const val = (row[n] || '').toString().trim();\n    if (val) return val;\n  }\n  return '';\n}\n\nconst match = all.find(item => {\n  const rowCode = col(item.json, 'Store Code', 'StoreCode', 'store_code', 'Code').toUpperCase();\n  return rowCode === storeCode;\n});\n\nif (!match) {\n  return [{ json: { found: false, storeCode, product, category, message: 'No AMC vendor on record for this store' } }];\n}\n\nconst vendor      = col(match.json, 'Vendor', 'Vendor Name', 'vendor_name', 'Company');\nconst vendorEmail = col(match.json, 'Vendor Email', 'Email', 'vendor_email', 'Contact Email');\nconst vendorPhone = col(match.json, 'Vendor Phone', 'Phone', 'Mobile', 'Contact No');\n\nreturn [{ json: { found: true, vendor, vendorEmail, vendorPhone, storeCode, product, category } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 400],
+      "id": "amc-node-0008",
+      "name": "Match & Return Vendor"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fallback — product not in any AMC category\nconst classify = $('Classify Product').first().json;\nreturn [{ json: { found: false, storeCode: classify._storeCode, product: classify._product, message: 'No AMC vendor data for this product type' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 800],
+      "id": "amc-node-0009",
+      "name": "Unknown Product"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1340, 400],
+      "id": "amc-node-0010",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook — GET /vmm-sp-amc-vendor": {
+      "main": [[{ "node": "Classify Product", "type": "main", "index": 0 }]]
+    },
+    "Classify Product": {
+      "main": [[{ "node": "Route by Product", "type": "main", "index": 0 }]]
+    },
+    "Route by Product": {
+      "main": [
+        [{ "node": "Read AC AMC Sheet",           "type": "main", "index": 0 }],
+        [{ "node": "Read Lift AMC Sheet",          "type": "main", "index": 0 }],
+        [{ "node": "Read Sensormatic AMC Sheet",   "type": "main", "index": 0 }],
+        [{ "node": "Read Pest Control AMC Sheet",  "type": "main", "index": 0 }],
+        [{ "node": "Unknown Product",              "type": "main", "index": 0 }]
+      ]
+    },
+    "Read AC AMC Sheet":          { "main": [[{ "node": "Match & Return Vendor", "type": "main", "index": 0 }]] },
+    "Read Lift AMC Sheet":        { "main": [[{ "node": "Match & Return Vendor", "type": "main", "index": 0 }]] },
+    "Read Sensormatic AMC Sheet": { "main": [[{ "node": "Match & Return Vendor", "type": "main", "index": 0 }]] },
+    "Read Pest Control AMC Sheet":{ "main": [[{ "node": "Match & Return Vendor", "type": "main", "index": 0 }]] },
+    "Match & Return Vendor":      { "main": [[{ "node": "Respond to Webhook",   "type": "main", "index": 0 }]] },
+    "Unknown Product":            { "main": [[{ "node": "Respond to Webhook",   "type": "main", "index": 0 }]] }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}
