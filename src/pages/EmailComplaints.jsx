@@ -87,6 +87,24 @@ function normalizeText(value) {
   return (value || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+function stripHtml(html) {
+  if (!html) return '';
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function findBestByText(items, text, fields) {
   const target = normalizeText(text);
   if (!target) return null;
@@ -1416,7 +1434,15 @@ export default function EmailComplaints() {
                         onClick={() => {
                           const next = activeAction === 'update-case' ? null : 'update-case';
                           setActiveAction(next);
-                          setUpdateForm(f => ({ ...f, complaintId: detectedId }));
+                          if (next === 'update-case') {
+                            const from = selected?.fromDisplay || selected?.fromAddr || '';
+                            const to   = selected?.toDisplay   || '';
+                            const body = (selected?.body || stripHtml(selected?.bodyHtml) || selected?.bodyPreview || '').slice(0, 1500);
+                            const autoRemarks = `Email received from ${from} and sent to ${to}\n\n${body}`.trim();
+                            setUpdateForm(f => ({ ...f, complaintId: detectedId, remarks: autoRemarks }));
+                          } else {
+                            setUpdateForm(f => ({ ...f, complaintId: detectedId }));
+                          }
                           if (next === 'update-case' && !detectedId) {
                             const sc = selected?.storeCode;
                             if (sc) {
