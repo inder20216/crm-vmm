@@ -19,7 +19,7 @@ const AMC_ONLY_PRODUCTS     = new Set(['civil work','weighing scale','pest contr
 const REQUIRED_FIELDS = ['storeCode', 'productName', 'natureOfProblem', 'description'];
 const FIELD_LABELS = {
   storeCode: 'Store Code', employeeCode: 'Employee Code', employeeName: 'Employee Name',
-  contactNumber: 'Contact Number', productName: 'Product Name',
+  contactNumber: 'Contact Number',
   productLocation: 'Product Location', description: 'Description',
 };
 
@@ -161,7 +161,7 @@ export default function EmailComplaints() {
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
   const [products,     setProducts]     = useState([]);  // raw rows: each row = { name, vendor, category, hoName, hoEmail, vendorEmail }
   const [natures,      setNatures]      = useState([]);
-  const [parsedEdits,  setParsedEdits]  = useState({ storeCode: '', productName: '', vendorName: '', natureOfProblem: '', complaintType: '', employeeCode: '', contactNumber: '', productLocation: '', description: '' });
+  const [parsedEdits,  setParsedEdits]  = useState({ storeCode: '', employeeCode: '', contactNumber: '', productLocation: '', description: '' });
   const [replyTo,         setReplyTo]         = useState([]);
   const [replyCc,         setReplyCc]         = useState([]);
   const [toInput,         setToInput]         = useState('');
@@ -169,12 +169,12 @@ export default function EmailComplaints() {
   const [empLookupStatus, setEmpLookupStatus] = useState('idle'); // idle|loading|found|not-found
   const [resolvedEmpName, setResolvedEmpName] = useState('');
   const [showReplyEditor, setShowReplyEditor] = useState(false);
-  const [quantity,        setQuantity]        = useState(1);
-  const [contractType,    setContractType]    = useState('');   // 'AMC' | 'Warranty' | 'NotApplicable'
-  const [vendorEmail,     setVendorEmail]     = useState('');   // For Warranty/NotApplicable — agent-entered vendor email (To)
-  const [extraEscTo,      setExtraEscTo]      = useState('');   // Extra To recipients for escalation email
-  const [extraEscCc,      setExtraEscCc]      = useState('');   // Extra CC recipients for escalation email
-  const [amcLookup,       setAmcLookup]       = useState('idle'); // 'idle' | 'loading' | 'found' | 'not-found'
+  const itemIdRef = useRef(1);
+  const [complaintItems, setComplaintItems] = useState([{
+    id: 1, productName: '', vendorName: '', contractType: '', vendorEmail: '',
+    natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '',
+    amcLookup: 'idle', selectedAttachIndices: null,
+  }]);
   const [emTab,           setEmTab]           = useState('form');  // 'form' | 'matrix'
   const [escalationMatrix, setEscalationMatrix] = useState([]);
   const [emLoading,       setEmLoading]       = useState(false);
@@ -393,24 +393,6 @@ export default function EmailComplaints() {
     return () => clearTimeout(t);
   }, [parsedEdits.employeeCode]); // eslint-disable-line
 
-  // AMC vendor lookup — fires when contractType switches to AMC and product + store are known
-  useEffect(() => {
-    if (contractType !== 'AMC' || !parsed) { return; }
-    const storeCode   = parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode || '';
-    const productName = parsedEdits.productName || '';
-    if (!storeCode || !productName) return;
-    setAmcLookup('loading');
-    vmm.getAmcVendor(storeCode, productName)
-      .then(res => {
-        if (res.found) {
-          setParsedEdits(prev => ({ ...prev, vendorName: res.vendor }));
-          setAmcLookup('found');
-        } else {
-          setAmcLookup('not-found');
-        }
-      })
-      .catch(() => setAmcLookup('not-found'));
-  }, [contractType]); // eslint-disable-line
 
   const switchTab = (tab) => {
     if (tab === activeTab) return;
@@ -448,12 +430,7 @@ export default function EmailComplaints() {
     setToInput('');
     setCcInput('');
     setShowReplyEditor(false);
-    setQuantity(1);
-    setContractType('');
-    setVendorEmail('');
-    setExtraEscTo('');
-    setExtraEscCc('');
-    setAmcLookup('idle');
+    setComplaintItems([{ id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null }]);
     setEmTab('form');
     setEmSearch('');
     setEmRegion('');
@@ -469,15 +446,19 @@ export default function EmailComplaints() {
       const matchedNature  = findBestByText(natures,  p.natureOfProblem || '', ['nature']);
       setParsedEdits({
         storeCode:       p.storeCode || email.storeCode || '',
-        productName:     matchedProduct?.name   || p.productName     || '',
-        vendorName:      p.vendorName      || '',
-        natureOfProblem: matchedNature?.nature  || p.natureOfProblem || '',
-        complaintType:   matchedNature?.type    || p.complaintType   || '',
         employeeCode:    p.employeeCode    || '',
         contactNumber:   p.contactNumber   || '',
         productLocation: p.productLocation || '',
         description:     p.description     || '',
       });
+      setComplaintItems([{
+        id: (++itemIdRef.current),
+        productName:     matchedProduct?.name || p.productName     || '',
+        vendorName:      p.vendorName      || '',
+        natureOfProblem: matchedNature?.nature  || p.natureOfProblem || '',
+        complaintType:   matchedNature?.type    || p.complaintType   || '',
+        contractType: '', vendorEmail: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null,
+      }]);
       if (p.employeeCode) {
         setEmpLookupStatus(p.employeeName ? 'found' : 'idle');
         setResolvedEmpName(p.employeeName || '');
@@ -489,7 +470,7 @@ export default function EmailComplaints() {
     } else {
       setEmpLookupStatus('idle');
       setResolvedEmpName('');
-      setParsedEdits({ storeCode: email.storeCode || '', productName: '', vendorName: '', natureOfProblem: '', complaintType: '', employeeCode: '', contactNumber: '', productLocation: '', description: '' });
+      setParsedEdits({ storeCode: email.storeCode || '', employeeCode: '', contactNumber: '', productLocation: '', description: '' });
     }
   };
 
@@ -572,15 +553,23 @@ export default function EmailComplaints() {
       const matchedNature  = findBestByText(natures,  res.natureOfProblem || '', ['nature']);
       setParsedEdits(prev => ({
         storeCode:       res.storeCode       || selected?.storeCode    || prev?.storeCode       || '',
-        productName:     matchedProduct?.name || res.productName       || prev?.productName     || '',
-        vendorName:      res.vendorName      || prev?.vendorName      || '',
-        natureOfProblem: matchedNature?.nature  || res.natureOfProblem || prev?.natureOfProblem || '',
-        complaintType:   matchedNature?.type    || res.complaintType   || prev?.complaintType   || '',
         employeeCode:    res.employeeCode    || prev?.employeeCode    || '',
         contactNumber:   res.contactNumber   || prev?.contactNumber   || '',
         productLocation: res.productLocation || prev?.productLocation || '',
         description:     res.description     || prev?.description     || '',
       }));
+      setComplaintItems(prev => {
+        const first = prev[0] || {};
+        return [
+          { ...first,
+            productName:     matchedProduct?.name || res.productName || first.productName || '',
+            vendorName:      res.vendorName      || first.vendorName      || '',
+            natureOfProblem: matchedNature?.nature  || res.natureOfProblem || first.natureOfProblem || '',
+            complaintType:   matchedNature?.type    || res.complaintType   || first.complaintType   || '',
+          },
+          ...prev.slice(1),
+        ];
+      });
       setParsed(res);
       setSelectedTemplateId(res.selectedTemplateId || null);
       if (res.suggestedReply) setReplyBody(res.suggestedReply);
@@ -651,6 +640,56 @@ export default function EmailComplaints() {
     } finally { setSending(false); }
   };
 
+  // ── Complaint item helpers ────────────────────────────────────────
+  const updateItem = (id, patch) => setComplaintItems(prev => prev.map(x => x.id === id ? { ...x, ...patch } : x));
+  const removeItem = (id) => setComplaintItems(prev => prev.filter(x => x.id !== id));
+  const addItem = () => setComplaintItems(prev => [
+    ...prev,
+    { id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null },
+  ]);
+  const lookupAmcForItem = async (id, productName) => {
+    const storeCode = parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode || '';
+    if (!storeCode || !productName) return;
+    updateItem(id, { amcLookup: 'loading' });
+    try {
+      const res = await vmm.getAmcVendor(storeCode, productName);
+      if (res.found) updateItem(id, { vendorName: res.vendor, amcLookup: 'found' });
+      else updateItem(id, { amcLookup: 'not-found' });
+    } catch { updateItem(id, { amcLookup: 'not-found' }); }
+  };
+  const isAttachSelected = (item, idx) => item.selectedAttachIndices === null || item.selectedAttachIndices.includes(idx);
+  const toggleAttach = (id, idx) => {
+    setComplaintItems(prev => prev.map(x => {
+      if (x.id !== id) return x;
+      const all = (attachmentData || []).filter(a => a.viewLink).map((_, i) => i);
+      if (x.selectedAttachIndices === null) return { ...x, selectedAttachIndices: all.filter(i => i !== idx) };
+      const next = x.selectedAttachIndices.includes(idx)
+        ? x.selectedAttachIndices.filter(i => i !== idx)
+        : [...x.selectedAttachIndices, idx];
+      return { ...x, selectedAttachIndices: next.length === all.length ? null : next };
+    }));
+  };
+  const getItemVendors = (productName) => {
+    const selProd = (productName || '').toLowerCase().trim();
+    if (!selProd || !products.length) return [];
+    const exact = products.filter(p => p.name.toLowerCase() === selProd);
+    if (exact.length > 0) return exact.map(p => ({ name: p.vendor, email: p.vendorEmail || '' }));
+    const fuzzy = products.filter(p => p.name.toLowerCase().includes(selProd) || selProd.includes(p.name.toLowerCase()));
+    return [...new Map(fuzzy.map(p => [p.vendor.toLowerCase(), { name: p.vendor, email: p.vendorEmail || '' }])).values()];
+  };
+  const getItemHoEmail = (productName) => {
+    const row = products.find(p => p.name.toLowerCase() === (productName || '').toLowerCase());
+    return row?.hoEmail || HO_EMAIL;
+  };
+  const getItemVendorType = (productName) => {
+    const k = (productName || '').toLowerCase().trim();
+    return AMC_WARRANTY_PRODUCTS.has(k) ? 'amc_warranty' : AMC_ONLY_PRODUCTS.has(k) ? 'amc_only' : 'fm_ho';
+  };
+  const getItemShowVendorSection = (item) => {
+    const vt = getItemVendorType(item.productName);
+    return vt === 'amc_warranty' || (vt === 'amc_only' && item.contractType === 'AMC');
+  };
+
   const logComplaint = async () => {
     if (!parsed) return;
     if (selected.hasAttachments && !attachmentData) {
@@ -660,32 +699,18 @@ export default function EmailComplaints() {
     setLogging(true);
     try {
       const storeCode = parsedEdits.storeCode || parsed.storeCode || selected.storeCode || '';
-      const empCode = parsedEdits.employeeCode || parsed.employeeCode || '';
+      const empCode   = parsedEdits.employeeCode || parsed.employeeCode || '';
       const [storeRes, empRes] = await Promise.all([
         storeCode ? vmm.lookupStore(storeCode).catch(() => null) : Promise.resolve(null),
-        empCode ? vmm.lookupEmployee(empCode).catch(() => null) : Promise.resolve(null),
+        empCode   ? vmm.lookupEmployee(empCode).catch(() => null) : Promise.resolve(null),
       ]);
-
-      const store    = storeRes?.store    || {};
-      const employee = empRes?.employee   || {};
-      const product  = products.find(p =>
-        p.name.toLowerCase() === (parsedEdits.productName || '').toLowerCase()
-      ) || findBestByText(products, parsedEdits.productName || parsed.productName || '', ['name']) || {
-        name:   parsedEdits.productName || parsed.productName || '',
-        vendor: parsedEdits.vendorName  || '',
-      };
-      const nature = natures.find(n =>
-        n.nature.toLowerCase() === (parsedEdits.natureOfProblem || '').toLowerCase()
-      ) || { nature: parsedEdits.natureOfProblem || '', type: parsedEdits.complaintType || 'Repair', tatDays: 7 };
+      const store    = storeRes?.store  || {};
+      const employee = empRes?.employee || {};
       const driveAttachments = (attachmentData || []).filter(a => a.viewLink);
-      const attachmentText = driveAttachments.length
-        ? '\n\nAttachments:\n' + driveAttachments.map(a => `- ${a.name}: ${a.viewLink}`).join('\n')
-        : '';
       const providedText = parsed.alreadyProvided && Object.keys(parsed.alreadyProvided).length
         ? '\n\nDetails provided:\n' + Object.entries(parsed.alreadyProvided).map(([k, v]) => `- ${camelToLabel(k)}: ${v}`).join('\n')
         : '';
-
-      const payload = {
+      const sharedPayload = {
         storeCode,
         storeName:           store.name || parsed.storeName || '',
         city:                store.city || '',
@@ -705,15 +730,7 @@ export default function EmailComplaints() {
         employeeName:        resolvedEmpName || parsed.employeeName || employee.name || '',
         contactNumber:       parsedEdits.contactNumber || parsed.contactNumber || employee.mobile || '',
         designation:         employee.designation || '',
-        productName:         product.name    || parsedEdits.productName    || parsed.productName    || '',
-        vendorName:          parsedEdits.vendorName  || product.vendor || '',
-        productType:         product.category || '',
-        natureOfComplaint:   nature.nature   || parsedEdits.natureOfProblem || parsed.natureOfProblem || '',
-        complaintType:       parsedEdits.complaintType || nature.type || 'Repair',
-        contractType:        contractType || '',
-        tatDays:             nature.tatDays  || 7,
         productLocation:     parsedEdits.productLocation || parsed.productLocation || 'See email',
-        remarks:             `${parsedEdits.description || parsed.description || ''}${providedText}${attachmentText}`.trim(),
         source:              'E-mail',
         emailSubject:        selected.subject,
         callTxnId:           '',
@@ -721,38 +738,70 @@ export default function EmailComplaints() {
         emailConversationId: selected.conversationId || '',
         emailFrom:           selected.fromAddr || '',
         emailTo:             selected.toDisplay || '',
-        attachmentLinks:     driveAttachments,
         uid: 1,
       };
 
-      // AC: always 1 complaint per store regardless of unit count; other products: one per unit
-      const isACProduct = /\bac\b|air.?cond/i.test((parsedEdits.productName || '').toLowerCase());
-      const qty = isACProduct ? 1 : Math.max(1, Math.min(quantity, 20));
       const allResults = [];
-      for (let i = 0; i < qty; i++) {
+      for (const item of complaintItems) {
+        const product = products.find(p => p.name.toLowerCase() === (item.productName || '').toLowerCase())
+          || findBestByText(products, item.productName || '', ['name'])
+          || { name: item.productName || '', vendor: item.vendorName || '', category: '' };
+        const nature = natures.find(n => n.nature.toLowerCase() === (item.natureOfProblem || '').toLowerCase())
+          || { nature: item.natureOfProblem || '', type: item.complaintType || 'Repair', tatDays: 7 };
+        const itemAttachments = item.selectedAttachIndices === null
+          ? driveAttachments
+          : item.selectedAttachIndices.map(i => driveAttachments[i]).filter(Boolean);
+        const attachmentText = itemAttachments.length
+          ? '\n\nAttachments:\n' + itemAttachments.map(a => `- ${a.name}: ${a.viewLink}`).join('\n')
+          : '';
+        const payload = {
+          ...sharedPayload,
+          productName:       product.name    || item.productName    || '',
+          vendorName:        item.vendorName  || product.vendor      || '',
+          productType:       product.category || '',
+          natureOfComplaint: nature.nature    || item.natureOfProblem || '',
+          complaintType:     item.complaintType || nature.type       || 'Repair',
+          contractType:      item.contractType  || '',
+          tatDays:           nature.tatDays     || 7,
+          remarks:           `${parsedEdits.description || parsed.description || ''}${providedText}${attachmentText}`.trim(),
+          attachmentLinks:   itemAttachments,
+        };
         const res = await vmm.logComplaint(payload);
-        if (res.success) allResults.push(res);
-        else { showToast(`Failed on complaint ${i + 1}: ${res.message || 'Unknown error'}`, 'err'); break; }
+        if (res.success) allResults.push({ res, item, payload, itemAttachments });
+        else { showToast(`"${item.productName || `Complaint ${allResults.length + 1}`}" failed: ${res.message || 'Unknown error'}`, 'err'); break; }
       }
 
-      if (allResults.length === qty) {
-        const nos = allResults.map(r => r.complaintno).join(', ');
-        const confirmBody = qty > 1
-          ? `Dear Store Team,\n\nYour complaints (${qty} units) have been registered successfully.\n\nComplaint Nos: ${nos}\nProduct: ${payload.productName}\nExpected Closure: ${allResults[0].edcDate}\n\nOur team will follow up within the expected closure date.\n\nRegards,\nOpen Mind Services`
-          : `Dear Store Team,\n\nYour complaint has been registered successfully.\n\nComplaint No: ${allResults[0].complaintno}\nProduct: ${payload.productName}\nExpected Closure: ${allResults[0].edcDate}\n\nOur team will follow up within the expected closure date.\n\nRegards,\nOpen Mind Services`;
+      if (allResults.length === complaintItems.length) {
+        const nos = allResults.map(r => r.res.complaintno).join(', ');
+        const bodyLines = [
+          'Dear Store Team,',
+          '',
+          allResults.length > 1
+            ? `Your ${allResults.length} complaints have been registered successfully.`
+            : 'Your complaint has been registered successfully.',
+          '',
+          ...allResults.map((r, i) =>
+            allResults.length > 1
+              ? `${i + 1}. ${r.payload.productName} — No: ${r.res.complaintno}, EDC: ${r.res.edcDate}`
+              : `Complaint No: ${r.res.complaintno}\nProduct: ${r.payload.productName}\nExpected Closure: ${r.res.edcDate}`
+          ),
+          '',
+          'Our team will follow up within the expected closure date.',
+          '',
+          'Regards,',
+          'Open Mind Services',
+        ];
+        const confirmBody = bodyLines.join('\n');
         const confirmHtml = '<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7">'
           + confirmBody.split('\n').map(l => l.trim() ? `<p style="margin:0 0 8px">${l}</p>` : '<br/>').join('')
           + '<hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0"/>'
           + '<p style="font-size:11px;color:#64748b">Open Mind Services Limited — VMM CRM</p></div>';
         const OWN = 'vmm.helpdesk@openmind.in';
         const threadCCs = [...new Set(threadMessages.flatMap(m => m.cc || []).filter(cc => cc && cc.toLowerCase() !== OWN))].join(';');
-        // Reply to latest message in thread, not the originally selected one
         const sortedMsgs = [...threadMessages].sort((a, b) => new Date(b.receivedDateTime) - new Date(a.receivedDateTime));
         const replyMsgId = sortedMsgs[0]?.id || selected.id;
         await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, ccRecipients: threadCCs }).catch(() => {});
-        // Tag the reply email and original WIP email as Case Logged
         vmm.categorizeEmail(replyMsgId, ['Case Logged', 'New CRM']).catch(() => {});
-        // Find WIP by direct id match or conversationId match
         const wipMatch = wipList.find(w =>
           w.id === selected.id ||
           (w.conversationId && selected.conversationId && w.conversationId === selected.conversationId)
@@ -761,28 +810,25 @@ export default function EmailComplaints() {
         if (wipMatch && wipMatch.id !== replyMsgId) {
           vmm.categorizeEmail(wipMatch.id, ['Case Logged', 'New CRM']).catch(() => {});
         }
-        // Send consolidated escalation email (one email for all units)
-        vmm.sendEscalationEmail({
-          storeCode:         payload.storeCode        || '',
-          storeName:         payload.storeName        || '',
-          storeEmail:        payload.storeEmail       || '',
-          fmName:            payload.fmName           || '',
-          fmEmail:           payload.fmEmail          || '',
-          vendorName:        payload.vendorName       || '',
-          productName:       payload.productName      || '',
-          natureOfComplaint: parsedEdits.natureOfProblem || '',
-          storeState:        store.state              || '',
-          storeCity:         store.city               || '',
-          complaints: allResults.map(r => ({
-            complaintno:     r.complaintno,
-            productLocation: payload.productLocation,
-            natureOfProblem: parsedEdits.natureOfProblem || '',
-            edcDate:         r.edcDate,
-          })),
-          attachmentLinks: driveAttachments,
-          extraToEmails: extraEscTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
-          extraCcEmails: extraEscCc.split(/[;,]/).map(s => s.trim()).filter(Boolean),
-        }).catch(() => {});
+        // One escalation email per complaint item (different product/vendor each)
+        for (const { res, item, payload: iPayload, itemAttachments } of allResults) {
+          vmm.sendEscalationEmail({
+            storeCode:         sharedPayload.storeCode  || '',
+            storeName:         sharedPayload.storeName  || '',
+            storeEmail:        sharedPayload.storeEmail || '',
+            fmName:            sharedPayload.fmName     || '',
+            fmEmail:           sharedPayload.fmEmail    || '',
+            vendorName:        item.vendorName          || '',
+            productName:       iPayload.productName     || '',
+            natureOfComplaint: item.natureOfProblem     || '',
+            storeState:        store.state              || '',
+            storeCity:         store.city               || '',
+            complaints: [{ complaintno: res.complaintno, productLocation: iPayload.productLocation, natureOfProblem: item.natureOfProblem || '', edcDate: res.edcDate }],
+            attachmentLinks: itemAttachments,
+            extraToEmails: item.extraEscTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
+            extraCcEmails: item.extraEscCc.split(/[;,]/).map(s => s.trim()).filter(Boolean),
+          }).catch(() => {});
+        }
         claimEmail(selected.id, 'release');
         tagEmail(selected.id, 'logged', `Logged • ${nos} • Agent ${agentId.slice(-4)}`);
         setWipList(prev => prev.filter(w =>
@@ -790,10 +836,12 @@ export default function EmailComplaints() {
           !(selected.conversationId && w.conversationId && w.conversationId === selected.conversationId)
         ));
         vmm.resolveWip(wipIdToResolve).catch(() => {});
-        // Keep the email visible in the list with its logged tag (restore if it was previously in WIP)
         setInboxEmails(prev => prev.find(e => e.id === selected.id) ? prev : [{ ...selected, hasStoreCode: !!selected.storeCode }, ...prev]);
-        setLogSuccess({ results: allResults, payload });
-        setSelected(null); setParsed(null); setReplyBody(''); setQuantity(1);
+        setLogSuccess({
+          results: allResults.map(r => r.res),
+          payload: { ...sharedPayload, productName: allResults.map(r => r.payload.productName).join(', ') },
+        });
+        setSelected(null); setParsed(null); setReplyBody('');
       }
     } catch {
       showToast('Could not log complaint — server error', 'err');
@@ -824,44 +872,13 @@ export default function EmailComplaints() {
   };
 
   const missingRequired = parsed ? (parsed.missingFromTemplate || []) : [];
-  const productInList   = products.some(p => p.name.toLowerCase() === parsedEdits.productName.trim().toLowerCase());
-  const isAC = /\bac\b|air.?cond/i.test(parsedEdits.productName || '');
-
-  // Unique product names for dropdown (each row is product+vendor pair, deduplicate by name)
+  // Unique product names for dropdown (deduplicate by name)
   const uniqueProducts = [...new Map(products.map(p => [p.name.toLowerCase(), p])).values()];
-
-  // Vendors for the selected product — each products row where name matches = one vendor option
-  const filteredVendors = (() => {
-    const selProd = (parsedEdits.productName || '').toLowerCase().trim();
-    if (!selProd || !products.length) return [];
-    const exact = products.filter(p => p.name.toLowerCase() === selProd);
-    if (exact.length > 0) return exact.map(p => ({ name: p.vendor, email: p.vendorEmail || '' }));
-    // Fuzzy fallback: partial match (removes duplicates by vendor name)
-    const fuzzy = products.filter(p => p.name.toLowerCase().includes(selProd) || selProd.includes(p.name.toLowerCase()));
-    return [...new Map(fuzzy.map(p => [p.vendor.toLowerCase(), { name: p.vendor, email: p.vendorEmail || '' }])).values()];
-  })();
-
-  // HO email from the sheet row for the selected product (falls back to hardcoded constant)
-  const matchedProductRow = products.find(p => p.name.toLowerCase() === (parsedEdits.productName || '').toLowerCase());
-  const hoEmailForProduct = matchedProductRow?.hoEmail || HO_EMAIL;
-
-  // Derive vendor escalation type from product name
-  const prodKey           = (parsedEdits.productName || '').toLowerCase().trim();
-  const productVendorType = AMC_WARRANTY_PRODUCTS.has(prodKey) ? 'amc_warranty'
-    : AMC_ONLY_PRODUCTS.has(prodKey) ? 'amc_only'
-    : 'fm_ho';
-  // Vendor section shown for AMC&Warranty (all contracts) + AMC-Only (AMC contract only)
-  const showVendorSection = productVendorType === 'amc_warranty'
-    || (productVendorType === 'amc_only' && contractType === 'AMC');
-  // FM is the TO recipient when there is no vendor escalation
-  const isFMProduct = !showVendorSection;
-  const effectiveQty = isAC ? 1 : quantity;
-  // Can log if: store code present + employee verified (if code was given). Missing template fields are advisory only.
-  const storeOk      = !!(parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode);
-  const employeeOk   = !parsed?.employeeCode || empLookupStatus === 'found';
-  const typeOk       = !!parsedEdits.complaintType;
-  const contractOk   = !!contractType;
-  const canLog       = parsed && storeOk && employeeOk && typeOk && contractOk;
+  // Can log if: store present + employee verified + every complaint item has product/nature/type/contract
+  const storeOk    = !!(parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode);
+  const employeeOk = !parsed?.employeeCode || empLookupStatus === 'found';
+  const canLog     = parsed && storeOk && employeeOk && complaintItems.length > 0
+    && complaintItems.every(item => item.productName && item.natureOfProblem && item.complaintType && item.contractType);
 
   const handleTemplateChange = (newId) => {
     setSelectedTemplateId(newId);
@@ -981,19 +998,10 @@ export default function EmailComplaints() {
             <div className="ec-confirm-subtitle">Please verify all details are correct:</div>
             <div className="ec-confirm-grid">
               {[
-                { label: 'Store Code',        val: parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode, req: true  },
-                { label: 'Employee Code',     val: parsedEdits.employeeCode || parsed?.employeeCode,  req: false },
-                { label: 'Employee Name',     val: resolvedEmpName || parsed?.employeeName,            req: false },
-                { label: 'Contact Number',    val: parsedEdits.contactNumber || parsed?.contactNumber, req: false },
-                { label: 'Product',           val: parsedEdits.productName || parsed?.productName, req: true  },
-                { label: 'Service Contract',  val: contractType === 'AMC' ? 'Under AMC' : contractType === 'Warranty' ? 'Under Warranty' : contractType === 'NotApplicable' ? 'Not Applicable' : '', req: true },
-                { label: 'Vendor',             val: parsedEdits.vendorName, req: false },
-                ...(vendorEmail ? [
-                  { label: 'Escalation To',    val: vendorEmail, req: false },
-                  { label: 'Escalation CC',    val: isFMProduct ? 'Store Manager + HO + FM' : 'Store Manager + HO', req: false },
-                ] : []),
-                { label: 'Nature of Problem', val: parsedEdits.natureOfProblem || parsed?.natureOfProblem, req: true  },
-                ...(!isAC ? [{ label: 'Number of Units', val: quantity, req: true }] : []),
+                { label: 'Store Code',     val: parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode, req: true },
+                { label: 'Employee Code',  val: parsedEdits.employeeCode || parsed?.employeeCode,  req: false },
+                { label: 'Employee Name',  val: resolvedEmpName || parsed?.employeeName,            req: false },
+                { label: 'Contact Number', val: parsedEdits.contactNumber || parsed?.contactNumber, req: false },
               ].map(({ label, val, req }) => (
                 <div key={label} className={`ec-confirm-row${!val && req ? ' warn' : ''}`}>
                   <span className="ec-confirm-label">{label}</span>
@@ -1001,10 +1009,31 @@ export default function EmailComplaints() {
                 </div>
               ))}
             </div>
+            {complaintItems.map((item, idx) => (
+              <div key={item.id} style={{ margin: '8px 0', padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12 }}>
+                <div style={{ fontWeight: 700, color: '#4f46e5', marginBottom: 6, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                  {complaintItems.length > 1 ? `Complaint #${idx + 1}` : 'Complaint'}
+                </div>
+                {[
+                  { label: 'Product',          val: item.productName,    req: true },
+                  { label: 'Contract',         val: item.contractType === 'AMC' ? 'Under AMC' : item.contractType === 'Warranty' ? 'Under Warranty' : item.contractType === 'NotApplicable' ? 'Not Applicable' : '', req: true },
+                  { label: 'Vendor',           val: item.vendorName,     req: false },
+                  ...(item.vendorEmail ? [{ label: 'Escalation To', val: item.vendorEmail, req: false }] : []),
+                  { label: 'Nature',           val: item.natureOfProblem, req: true },
+                  { label: 'Type',             val: item.complaintType,   req: true },
+                  { label: 'Images',           val: item.selectedAttachIndices === null ? 'All' : `${item.selectedAttachIndices.length} selected`, req: false },
+                ].map(({ label, val, req }) => (
+                  <div key={label} className={`ec-confirm-row${!val && req ? ' warn' : ''}`}>
+                    <span className="ec-confirm-label">{label}</span>
+                    <span className={`ec-confirm-val${!val ? ' empty' : ''}`}>{val || (req ? '⚠ Missing' : '—')}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
             <div className="ec-confirm-actions">
               <button className="ec-confirm-cancel" onClick={() => setConfirmModal(false)}>Go Back &amp; Edit</button>
               <button className="ec-confirm-ok" onClick={() => { setConfirmModal(false); logComplaint(); }}>
-                {effectiveQty > 1 ? `Confirm — Log ${effectiveQty} Complaints` : 'Confirm — Log Complaint'}
+                {complaintItems.length > 1 ? `Confirm — Log ${complaintItems.length} Complaints` : 'Confirm — Log Complaint'}
               </button>
             </div>
           </div>
@@ -1924,28 +1953,6 @@ export default function EmailComplaints() {
                           </div>
                         );
                       }
-                      // Product — searchable dropdown from real list
-                      if (key === 'productName') {
-                        return (
-                          <div key={key} className={`ec-field ${productInList ? 'filled' : 'missing-req'}`}>
-                            <span className="ec-field-label">Product Name<span className="req"> *</span></span>
-                            <SearchableSelect
-                              options={uniqueProducts}
-                              value={parsedEdits.productName}
-                              placeholder="Search product…"
-                              getLabel={p => p.name}
-                              getSub={p => {
-                                const cnt = products.filter(r => r.name.toLowerCase() === p.name.toLowerCase()).length;
-                                return `${p.category || ''}${cnt > 1 ? ` · ${cnt} vendors` : ''}`;
-                              }}
-                              onChange={p => { setParsedEdits(prev => ({ ...prev, productName: p.name, vendorName: '' })); setContractType(''); setAmcLookup('idle'); setVendorEmail(''); }}
-                            />
-                            {parsedEdits.productName && !productInList && (
-                              <span style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>⚠ Not in product list</span>
-                            )}
-                          </div>
-                        );
-                      }
                       // Store Code — always editable; auto-filled from email domain or employee record
                       if (key === 'storeCode') {
                         const storeVal = parsedEdits.storeCode || parsed.storeCode || selected?.storeCode || '';
@@ -2040,227 +2047,169 @@ export default function EmailComplaints() {
                         </div>
                       );
                     })}
-                    {/* Service Contract — AMC/Warranty/Not Applicable; AMC triggers live vendor lookup */}
-                    <div className={`ec-field ${contractType ? 'filled' : 'missing'}`}>
-                      <span className="ec-field-label">Service Contract<span className="req"> *</span></span>
-                      <select
-                        className="ec-field-input"
-                        value={contractType}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setContractType(val);
-                          setAmcLookup('idle');
-                          if (val !== 'AMC') setVendorEmail('');
-                          if (val !== 'AMC') setParsedEdits(prev => ({ ...prev, vendorName: '' }));
-                        }}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <option value="">— Select contract type —</option>
-                        <option value="AMC">Under AMC</option>
-                        {productVendorType === 'amc_warranty' && (
-                          <option value="Warranty">Under Warranty</option>
-                        )}
-                        <option value="NotApplicable">Not Applicable</option>
-                      </select>
-                      {productVendorType === 'fm_ho' && contractType && (
-                        <span style={{ fontSize: 10, color: '#7c3aed', marginTop: 3, display: 'block' }}>
-                          ⚡ This product escalates to FM &amp; HO Team
-                        </span>
-                      )}
-                      {contractType === 'AMC' && amcLookup === 'loading' && (
-                        <span style={{ fontSize: 10, color: '#7c3aed', marginTop: 2 }}>Looking up AMC vendor…</span>
-                      )}
-                      {contractType === 'AMC' && amcLookup === 'not-found' && (
-                        <span style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>⚠ No AMC vendor on record — enter manually below</span>
-                      )}
-                    </div>
-                    {/* Vendor — only shown for products with vendor escalation */}
-                    {!showVendorSection && contractType && (
-                      <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f0fdf4', marginTop: 4, marginBottom: 4 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 8 }}>
-                          ⚡ Escalation — FM &amp; HO Team
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                          <div style={{ fontSize: 12, color: '#15803d', display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ background: '#dcfce7', color: '#166534', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>TO</span>
-                            Facility Manager email (auto from store lookup)
-                          </div>
-                          {hoEmailForProduct && (
-                            <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
-                              {hoEmailForProduct} (HO)
-                            </div>
-                          )}
-                          <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
-                            Store Manager (auto)
-                          </div>
-                        </div>
-
-                        {/* Extra CC for FM/HO path */}
-                        <div style={{ marginTop: 10 }}>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
-                            Extra CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span>
-                          </div>
-                          <input
-                            className="ec-field-input"
-                            type="text"
-                            placeholder="email1@example.com, email2@example.com"
-                            value={extraEscCc}
-                            onChange={e => setExtraEscCc(e.target.value)}
-                            style={{ background: '#fff' }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                    {showVendorSection && <div className={`ec-field ${parsedEdits.vendorName ? 'filled' : 'missing'}`}>
-                      <span className="ec-field-label">Vendor</span>
-                      <SearchableSelect
-                        options={filteredVendors}
-                        value={parsedEdits.vendorName}
-                        placeholder={filteredVendors.length ? 'Search vendor…' : 'Enter vendor name…'}
-                        getLabel={v => v.name}
-                        getSub={v => v.email ? `📧 ${v.email}` : (v.products?.length ? v.products.slice(0,2).join(', ') : '')}
-                        onChange={v => {
-                          setParsedEdits(prev => ({ ...prev, vendorName: v.name }));
-                          if (v.email) setVendorEmail(v.email); // auto-fill To for all contract types
-                        }}
-                        onFreeText={text => setParsedEdits(prev => ({ ...prev, vendorName: text }))}
-                      />
-                    </div>}
-                    {/* Escalation email — shown once a vendor is selected, for all contract types */}
-                    {showVendorSection && parsedEdits.vendorName && (
-                      <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f5f3ff', marginTop: 4 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 10 }}>
-                          ✉ Escalation Email
-                        </div>
-
-                        {/* To — vendor email, editable */}
-                        <div style={{ marginBottom: 10 }}>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
-                            To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(Vendor)</span>
-                          </div>
-                          <input
-                            className="ec-field-input"
-                            type="email"
-                            placeholder="vendor@email.com"
-                            value={vendorEmail}
-                            onChange={e => setVendorEmail(e.target.value.trim())}
-                            style={{ background: '#fff' }}
-                          />
-                          {!vendorEmail && (
-                            <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 3 }}>⚠ Enter vendor email to send escalation</div>
-                          )}
-                        </div>
-
-                        {/* CC — auto-filled, read-only preview */}
-                        <div>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
-                            CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(auto)</span>
-                          </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>SM</span>
-                              Store Manager email (from store lookup)
-                            </div>
-                            {hoEmailForProduct && hoEmailForProduct !== HO_EMAIL && (
-                              <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>HO</span>
-                                {hoEmailForProduct}
-                              </div>
-                            )}
-                            {(!hoEmailForProduct || hoEmailForProduct === HO_EMAIL) && (
-                              <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>HO</span>
-                                HO email (from product data)
-                              </div>
-                            )}
-                            <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <span style={{ background: '#dcfce7', color: '#166534', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>FM</span>
-                              Facility Manager email (from store lookup)
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Extra To */}
-                        <div style={{ marginTop: 10 }}>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
-                            Extra To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span>
-                          </div>
-                          <input
-                            className="ec-field-input"
-                            type="text"
-                            placeholder="email1@example.com, email2@example.com"
-                            value={extraEscTo}
-                            onChange={e => setExtraEscTo(e.target.value)}
-                            style={{ background: '#fff' }}
-                          />
-                        </div>
-
-                        {/* Extra CC */}
-                        <div style={{ marginTop: 8 }}>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
-                            Extra CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span>
-                          </div>
-                          <input
-                            className="ec-field-input"
-                            type="text"
-                            placeholder="email1@example.com, email2@example.com"
-                            value={extraEscCc}
-                            onChange={e => setExtraEscCc(e.target.value)}
-                            style={{ background: '#fff' }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                    {/* Nature of Problem — searchable fixed list */}
-                    {(() => {
-                      const natureInList = natures.some(n => n.nature === parsedEdits.natureOfProblem);
-                      return (
-                        <div className={`ec-field ${natureInList ? 'filled' : 'missing-req'}`}>
-                          <span className="ec-field-label">Nature of Problem<span className="req"> *</span></span>
-                          <SearchableSelect
-                            options={natures}
-                            value={parsedEdits.natureOfProblem}
-                            placeholder="Search nature…"
-                            getLabel={n => n.nature}
-                            getSub={n => `${n.type} · ${n.tatDays}d TAT`}
-                            onChange={n => setParsedEdits(prev => ({ ...prev, natureOfProblem: n.nature, complaintType: n.type }))}
-                          />
-                        </div>
-                      );
-                    })()}
-                    {/* Complaint Type — auto from nature, but overridable */}
-                    {(() => {
-                      const types = [...new Set(natures.map(n => n.type).filter(Boolean))];
-                      return (
-                        <div className={`ec-field ${parsedEdits.complaintType ? 'filled' : 'missing-req'}`}>
-                          <span className="ec-field-label">Complaint Type<span className="req"> *</span></span>
-                          <select
-                            className="ec-field-input"
-                            value={parsedEdits.complaintType}
-                            onChange={e => setParsedEdits(prev => ({ ...prev, complaintType: e.target.value }))}
-                            style={{ cursor: 'pointer' }}
-                          >
-                            <option value="">— Select type —</option>
-                            {types.map(t => <option key={t} value={t}>{t}</option>)}
-                          </select>
-                        </div>
-                      );
-                    })()}
-                    {/* Number of Units — always 1 for email complaints (one complaint per email) */}
-                    <div className="ec-field filled">
-                      <span className="ec-field-label">Number of Units</span>
-                      <input
-                        type="number"
-                        className="ec-field-qty-input"
-                        value={1}
-                        disabled
-                        style={{ opacity: 0.5, cursor: 'not-allowed' }}
-                      />
-                      <span style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>1 complaint per email</span>
-                    </div>
                   </div>
+                  {/* ── Complaint item cards ── */}
+                  {complaintItems.map((item, idx) => {
+                    const itemProdInList  = products.some(p => p.name.toLowerCase() === (item.productName || '').toLowerCase().trim());
+                    const itemVendors     = getItemVendors(item.productName);
+                    const itemHoEmail    = getItemHoEmail(item.productName);
+                    const itemVendorType = getItemVendorType(item.productName);
+                    const itemShowVendor = getItemShowVendorSection(item);
+                    const itemNatureOk   = natures.some(n => n.nature === item.natureOfProblem);
+                    const complaintTypes = [...new Set(natures.map(n => n.type).filter(Boolean))];
+                    const driveFiles     = (attachmentData || []).filter(a => a.viewLink);
+                    return (
+                      <div key={item.id} style={{ border: '1.5px solid #c7d2fe', borderRadius: 10, padding: '12px 14px', margin: '10px 0', background: '#fafafa' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: '#4f46e5', textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                            {complaintItems.length > 1 ? `Complaint #${idx + 1}` : 'Complaint Details'}
+                            {item.productName && <span style={{ marginLeft: 6, fontWeight: 400, color: '#374151', textTransform: 'none', letterSpacing: 0 }}>— {item.productName}</span>}
+                          </span>
+                          {complaintItems.length > 1 && (
+                            <button onClick={() => removeItem(item.id)} style={{ padding: '2px 10px', fontSize: 11, color: '#dc2626', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>Remove</button>
+                          )}
+                        </div>
+                        <div className="ec-fields-grid">
+                          {/* Product */}
+                          <div className={`ec-field ${itemProdInList ? 'filled' : 'missing-req'}`}>
+                            <span className="ec-field-label">Product<span className="req"> *</span></span>
+                            <SearchableSelect
+                              options={uniqueProducts}
+                              value={item.productName}
+                              placeholder="Search product…"
+                              getLabel={p => p.name}
+                              getSub={p => {
+                                const cnt = products.filter(r => r.name.toLowerCase() === p.name.toLowerCase()).length;
+                                return `${p.category || ''}${cnt > 1 ? ` · ${cnt} vendors` : ''}`;
+                              }}
+                              onChange={p => updateItem(item.id, { productName: p.name, vendorName: '', contractType: '', vendorEmail: '' })}
+                            />
+                            {item.productName && !itemProdInList && <span style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>⚠ Not in product list</span>}
+                          </div>
+                          {/* Service Contract */}
+                          <div className={`ec-field ${item.contractType ? 'filled' : 'missing'}`}>
+                            <span className="ec-field-label">Service Contract<span className="req"> *</span></span>
+                            <select className="ec-field-input" value={item.contractType}
+                              onChange={e => {
+                                const val = e.target.value;
+                                const patch = { contractType: val, amcLookup: 'idle' };
+                                if (val !== 'AMC') { patch.vendorEmail = ''; patch.vendorName = ''; }
+                                updateItem(item.id, patch);
+                                if (val === 'AMC') lookupAmcForItem(item.id, item.productName);
+                              }}
+                              style={{ cursor: 'pointer' }}>
+                              <option value="">— Select contract type —</option>
+                              <option value="AMC">Under AMC</option>
+                              {itemVendorType === 'amc_warranty' && <option value="Warranty">Under Warranty</option>}
+                              <option value="NotApplicable">Not Applicable</option>
+                            </select>
+                            {itemVendorType === 'fm_ho' && item.contractType && <span style={{ fontSize: 10, color: '#7c3aed', marginTop: 3, display: 'block' }}>⚡ Escalates to FM &amp; HO</span>}
+                            {item.contractType === 'AMC' && item.amcLookup === 'loading' && <span style={{ fontSize: 10, color: '#7c3aed', marginTop: 2 }}>Looking up AMC vendor…</span>}
+                            {item.contractType === 'AMC' && item.amcLookup === 'not-found' && <span style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>⚠ No AMC vendor — enter manually</span>}
+                          </div>
+                          {/* Nature of Problem */}
+                          <div className={`ec-field ${itemNatureOk ? 'filled' : 'missing-req'}`}>
+                            <span className="ec-field-label">Nature of Problem<span className="req"> *</span></span>
+                            <SearchableSelect options={natures} value={item.natureOfProblem} placeholder="Search nature…"
+                              getLabel={n => n.nature} getSub={n => `${n.type} · ${n.tatDays}d TAT`}
+                              onChange={n => updateItem(item.id, { natureOfProblem: n.nature, complaintType: n.type })} />
+                          </div>
+                          {/* Complaint Type */}
+                          <div className={`ec-field ${item.complaintType ? 'filled' : 'missing-req'}`}>
+                            <span className="ec-field-label">Complaint Type<span className="req"> *</span></span>
+                            <select className="ec-field-input" value={item.complaintType}
+                              onChange={e => updateItem(item.id, { complaintType: e.target.value })} style={{ cursor: 'pointer' }}>
+                              <option value="">— Select type —</option>
+                              {complaintTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                          </div>
+                          {/* Vendor */}
+                          {itemShowVendor && (
+                            <div className={`ec-field ${item.vendorName ? 'filled' : 'missing'}`}>
+                              <span className="ec-field-label">Vendor</span>
+                              <SearchableSelect options={itemVendors} value={item.vendorName}
+                                placeholder={itemVendors.length ? 'Search vendor…' : 'Enter vendor name…'}
+                                getLabel={v => v.name} getSub={v => v.email ? `📧 ${v.email}` : ''}
+                                onChange={v => updateItem(item.id, { vendorName: v.name, vendorEmail: v.email || item.vendorEmail })}
+                                onFreeText={text => updateItem(item.id, { vendorName: text })} />
+                            </div>
+                          )}
+                        </div>
+                        {/* FM/HO escalation */}
+                        {!itemShowVendor && item.contractType && (
+                          <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f0fdf4', margin: '8px 0' }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 8 }}>⚡ Escalation — FM &amp; HO Team</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                              <div style={{ fontSize: 12, color: '#15803d', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ background: '#dcfce7', color: '#166534', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>TO</span>
+                                Facility Manager (auto from store lookup)
+                              </div>
+                              <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
+                                {itemHoEmail} (HO)
+                              </div>
+                              <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
+                                Store Manager (auto)
+                              </div>
+                            </div>
+                            <div style={{ marginTop: 10 }}>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>Extra CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span></div>
+                              <input className="ec-field-input" type="text" placeholder="email1@example.com, email2@example.com" value={item.extraEscCc} onChange={e => updateItem(item.id, { extraEscCc: e.target.value })} style={{ background: '#fff' }} />
+                            </div>
+                          </div>
+                        )}
+                        {/* Vendor escalation email */}
+                        {itemShowVendor && item.vendorName && (
+                          <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f5f3ff', margin: '8px 0' }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 10 }}>✉ Escalation Email</div>
+                            <div style={{ marginBottom: 10 }}>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(Vendor)</span></div>
+                              <input className="ec-field-input" type="email" placeholder="vendor@email.com" value={item.vendorEmail} onChange={e => updateItem(item.id, { vendorEmail: e.target.value.trim() })} style={{ background: '#fff' }} />
+                              {!item.vendorEmail && <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 3 }}>⚠ Enter vendor email to send escalation</div>}
+                            </div>
+                            <div style={{ marginBottom: 8 }}>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(auto)</span></div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {[['SM','#dbeafe','#1d4ed8','Store Manager (auto)'],['HO','#fef3c7','#92400e',itemHoEmail],['FM','#dcfce7','#166534','Facility Manager (auto)']].map(([tag,bg,fg,txt]) => (
+                                  <div key={tag} style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ background: bg, color: fg, borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>{tag}</span>
+                                    {txt}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                            <div style={{ marginBottom: 8 }}>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>Extra To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span></div>
+                              <input className="ec-field-input" type="text" placeholder="email1@example.com, email2@example.com" value={item.extraEscTo} onChange={e => updateItem(item.id, { extraEscTo: e.target.value })} style={{ background: '#fff' }} />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>Extra CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span></div>
+                              <input className="ec-field-input" type="text" placeholder="email1@example.com, email2@example.com" value={item.extraEscCc} onChange={e => updateItem(item.id, { extraEscCc: e.target.value })} style={{ background: '#fff' }} />
+                            </div>
+                          </div>
+                        )}
+                        {/* Image selection for this complaint */}
+                        {driveFiles.length > 0 && (
+                          <div style={{ marginTop: 10, padding: '10px 12px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#0369a1', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.04em' }}>📎 Images for this complaint</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              {driveFiles.map((a, i) => (
+                                <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12, color: '#0f172a' }}>
+                                  <input type="checkbox" checked={isAttachSelected(item, i)} onChange={() => toggleAttach(item.id, i)} style={{ width: 14, height: 14, cursor: 'pointer' }} />
+                                  <span style={{ flex: 1 }}>{a.name}</span>
+                                  {a.viewLink && <a href={a.viewLink} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: '#0284c7', textDecoration: 'none' }}>View</a>}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <button onClick={addItem} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '8px 16px', fontSize: 12, fontWeight: 600, color: '#4f46e5', background: '#eef2ff', border: '1.5px dashed #a5b4fc', borderRadius: 8, cursor: 'pointer', width: '100%', margin: '4px 0 12px' }}>
+                    + Add Another Complaint (different product / vendor)
+                  </button>
 
                   {/* Product-specific fields */}
                   {parsed.productSpecificFields && Object.keys(parsed.productSpecificFields).length > 0 && (
@@ -2296,7 +2245,7 @@ export default function EmailComplaints() {
                   <div className="ec-parsed-actions">
                     {canLog && (
                       <button className="ec-log-btn" onClick={() => setConfirmModal(true)} disabled={logging}>
-                        {logging ? 'Logging…' : effectiveQty > 1 ? `✓ Log ${effectiveQty} Complaints` : '✓ Log Complaint'}
+                        {logging ? 'Logging…' : complaintItems.length > 1 ? `✓ Log ${complaintItems.length} Complaints` : '✓ Log Complaint'}
                       </button>
                     )}
                     <button
@@ -2329,10 +2278,10 @@ export default function EmailComplaints() {
                         </select>
                       </div>
 
-                      {vendorEmail && (
+                      {complaintItems[0]?.vendorEmail && (
                         <div style={{ marginBottom: 8, fontSize: 11, color: '#16a34a', background: '#dcfce7', borderRadius: 6, padding: '5px 10px', fontWeight: 600 }}>
-                          ✓ To: {vendorEmail}
-                          <button onClick={() => setVendorEmail('')} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>×</button>
+                          ✓ To: {complaintItems[0].vendorEmail}
+                          <button onClick={() => updateItem(complaintItems[0].id, { vendorEmail: '' })} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>×</button>
                         </div>
                       )}
 
@@ -2371,7 +2320,7 @@ export default function EmailComplaints() {
                                     <td style={{ padding: '7px 10px' }}>
                                       {c.email && (
                                         <button
-                                          onClick={() => { setVendorEmail(c.email); setEmTab('form'); }}
+                                          onClick={() => { updateItem(complaintItems[0].id, { vendorEmail: c.email }); setEmTab('form'); }}
                                           style={{ padding: '3px 10px', fontSize: 11, background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}
                                         >Use →</button>
                                       )}
