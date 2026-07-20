@@ -144,10 +144,12 @@ export default function EmailComplaints() {
   const emails = activeTab === 'sent' ? sentEmails : inboxEmails;
   const [fetching,  setFetching]  = useState(false);
   const [selected,  setSelected]  = useState(null);
-  const [parsing,   setParsing]   = useState(false);
-  const [parsed,    setParsed]    = useState(null);
-  const [replyBody, setReplyBody] = useState('');
-  const [sending,   setSending]   = useState(false);
+  const [parsing,         setParsing]         = useState(false);
+  const [parsed,          setParsed]          = useState(null);
+  const [replyBody,       setReplyBody]       = useState('');
+  const [sending,         setSending]         = useState(false);
+  const [quickReplyBody,  setQuickReplyBody]  = useState('');
+  const [sendingQuickReply, setSendingQuickReply] = useState(false);
   const [logging,       setLogging]       = useState(false);
   const [loggingActivity, setLoggingActivity] = useState(false);
   const [toast,         setToast]         = useState('');
@@ -431,7 +433,7 @@ export default function EmailComplaints() {
     setParsed(null);
     setReplyBody('');
     setActiveAction(null);
-    setUpdateForm({ complaintId: email.complaintId || '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' }); setUpdateAction(null); setFoundComplaint(null); setRecentCases([]); setLoadingRecent(false);
+    setUpdateForm({ complaintId: email.complaintId || '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' }); setUpdateAction(null); setFoundComplaint(null); setRecentCases([]); setLoadingRecent(false); setQuickReplyBody('');
     // Restore cached attachments so the Load button doesn't reappear after refresh
     const cached = email.id ? localStorage.getItem(`vmm_attach_${email.id}`) : null;
     setAttachmentData(cached ? JSON.parse(cached) : null);
@@ -1473,6 +1475,16 @@ export default function EmailComplaints() {
                         ↻ Update a Case
                       </button>
                       <button
+                        className={`ec-action-btn ec-action-reply ${activeAction === 'reply' ? 'selected' : ''}`}
+                        onClick={() => {
+                          const next = activeAction === 'reply' ? null : 'reply';
+                          setActiveAction(next);
+                          if (!next) setQuickReplyBody('');
+                        }}
+                      >
+                        ✉ Reply
+                      </button>
+                      <button
                         className="ec-action-btn ec-action-grey"
                         onClick={() => {
                           tagEmail(selected.id, 'nonrelevant', 'Non-Relevant');
@@ -1697,6 +1709,54 @@ export default function EmailComplaints() {
                         : '✏ Save Update'}
                     </button>
                   )}
+                </div>
+              )}
+
+              {/* ── Quick Reply Panel ── */}
+              {activeAction === 'reply' && (
+                <div className="ec-quick-reply-panel">
+                  <div className="ec-update-title">Reply to Email</div>
+                  <div className="ec-quick-reply-meta">
+                    <div><span className="ec-qr-label">To:</span> <span className="ec-qr-val">{replyTo.join(', ') || selected.fromAddr || '—'}</span></div>
+                    {replyCc.length > 0 && <div><span className="ec-qr-label">CC:</span> <span className="ec-qr-val">{replyCc.join(', ')}</span></div>}
+                  </div>
+                  <textarea
+                    className="ec-quick-reply-body"
+                    rows={6}
+                    placeholder="Type your reply…"
+                    value={quickReplyBody}
+                    onChange={e => setQuickReplyBody(e.target.value)}
+                    autoFocus
+                  />
+                  <button
+                    className="ec-submit-update-btn"
+                    disabled={sendingQuickReply || !quickReplyBody.trim()}
+                    onClick={async () => {
+                      setSendingQuickReply(true);
+                      try {
+                        const htmlBody = '<div style="font-family:Arial,sans-serif;font-size:13px;color:#1e293b;line-height:1.6">'
+                          + quickReplyBody.split('\n').map(l => l.trim() ? `<p style="margin:0 0 8px">${l}</p>` : '<br/>').join('')
+                          + '<hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0"/>'
+                          + '<p style="font-size:11px;color:#64748b">Open Mind Services Limited — VMM CRM</p></div>';
+                        const sortedMsgs = [...threadMessages].sort((a, b) => new Date(b.receivedDateTime) - new Date(a.receivedDateTime));
+                        const replyMsgId = sortedMsgs[0]?.id || selected.id;
+                        await vmm.sendEmailReply({
+                          messageId:    replyMsgId,
+                          htmlBody,
+                          toRecipients: replyTo,
+                          ccRecipients: replyCc,
+                        });
+                        vmm.categorizeEmail(selected.id, ['Case Updated', 'New CRM']).catch(() => {});
+                        tagEmail(selected.id, 'updated', 'Replied');
+                        showToast('Reply sent', 'ok');
+                        setActiveAction(null);
+                        setQuickReplyBody('');
+                      } catch { showToast('Could not send reply', 'err'); }
+                      finally { setSendingQuickReply(false); }
+                    }}
+                  >
+                    {sendingQuickReply ? 'Sending…' : '✉ Send Reply'}
+                  </button>
                 </div>
               )}
 

@@ -149,8 +149,18 @@
 .ec-action-primary:hover, .ec-action-primary.selected { background: #7c3aed; color: #fff; border-color: #7c3aed; }
 .ec-action-update  { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
 .ec-action-update:hover, .ec-action-update.selected  { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+.ec-action-reply   { background: #f0fdf4; color: #15803d; border-color: #86efac; }
+.ec-action-reply:hover, .ec-action-reply.selected { background: #15803d; color: #fff; border-color: #15803d; }
 .ec-action-grey    { background: #f8fafc; color: #64748b; border-color: #e2e8f0; }
 .ec-action-grey:hover { background: #fee2e2; color: #dc2626; border-color: #fca5a5; }
+
+/* Quick Reply Panel */
+.ec-quick-reply-panel { background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; padding: 14px 16px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 10px; }
+.ec-quick-reply-meta  { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.ec-qr-label { color: #64748b; font-weight: 600; min-width: 26px; display: inline-block; }
+.ec-qr-val   { color: #1e293b; }
+.ec-quick-reply-body  { width: 100%; border: 1px solid #bbf7d0; border-radius: 6px; padding: 8px 10px; font-size: 13px; font-family: inherit; resize: vertical; box-sizing: border-box; background: #fff; }
+.ec-quick-reply-body:focus { outline: none; border-color: #15803d; }
 
 /* WIP match notice */
 .ec-wip-match {
