@@ -112,8 +112,8 @@ export async function fetchInbox({ deltaMode = true } = {}) {
   while (nextUrl) {
     const res = await fetch(nextUrl, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) {
-      // Delta link expired — reset and do a full fetch next time
-      if (res.status === 410) {
+      // 410 = delta expired; 400 = delta link malformed/stale — both need a full reset
+      if (res.status === 410 || res.status === 400) {
         sessionStorage.removeItem(DELTA_KEY);
         return fetchInbox({ deltaMode: false });
       }
