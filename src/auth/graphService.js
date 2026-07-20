@@ -394,22 +394,19 @@ export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, 
 
   let toAddresses, ccAddresses;
   if (isVendorCase) {
+    // Vendor escalation: TO vendor, CC FM + SM + HO
     toAddresses = [makeAddr(vendorResolved.email, resolvedVendor)];
     ccAddresses = [];
-    if (storeEmail) addUniq(ccAddresses, storeEmail, storeName);
-    if (fmEmail)    addUniq(ccAddresses, fmEmail, fmName);
-    if (smEmail)    addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
+    if (fmEmail)      addUniq(ccAddresses, fmEmail, fmName);
+    if (smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
     if (hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
-    ESCALATION_TEAM.forEach(a => addUniq(ccAddresses, a, ''));
   } else {
+    // FM/HO escalation: TO FM, CC SM + HO
     toAddresses = [];
-    if (fmEmail)      addUniq(toAddresses, fmEmail, fmName);
-    if (hoPoc?.email) addUniq(toAddresses, hoPoc.email, hoPoc.name);
-    if (!toAddresses.length) toAddresses = ESCALATION_TEAM.map(a => makeAddr(a, ''));
+    if (fmEmail) addUniq(toAddresses, fmEmail, fmName);
     ccAddresses = [];
-    if (storeEmail) addUniq(ccAddresses, storeEmail, storeName);
-    if (smEmail)    addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
-    ESCALATION_TEAM.forEach(a => addUniq(ccAddresses, a, ''));
+    if (smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
+    if (hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
   }
 
   return { toAddresses, ccAddresses, isVendorCase, resolvedVendor };
@@ -547,13 +544,11 @@ export async function sendClosureEmailDirect({
 
   const toList = [];
   if (storeEmail) addUniq(toList, storeEmail, storeName);
-  if (!toList.length) ESCALATION_TEAM.forEach(a => addUniq(toList, a, ''));
 
   const ccList = [];
   if (fmEmail)      addUniq(ccList, fmEmail, fmName);
   if (smEmail)      addUniq(ccList, smEmail, `SM ${storeCode}`);
   if (hoPoc?.email) addUniq(ccList, hoPoc.email, hoPoc.name);
-  ESCALATION_TEAM.forEach(a => addUniq(ccList, a, ''));
 
   return sendFromSharedMailbox({ subject, htmlBody, toAddresses: toList, ccAddresses: ccList });
 }
