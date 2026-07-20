@@ -219,7 +219,7 @@ export default function SearchComplaints() {
                         <td className="date-cell" style={{ color: '#94a3b8' }}>{rangeStart + idx}</td>
                         <td className="date-cell">{fmtDate(r.created)}</td>
                         <td className="mono">
-                          <Link to={`/complaints/${r.id}`} style={{ color: '#7c3aed', textDecoration: 'none' }}>
+                          <Link to={`/complaints/${r.complaintno}`} style={{ color: '#7c3aed', textDecoration: 'none' }}>
                             {r.complaintno}
                           </Link>
                         </td>

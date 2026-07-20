@@ -36,6 +36,7 @@
       "position": [680, 352],
       "id": "9d5c4e1f-3f6a-6b7c-0d8e-1f2a3b4c5d6e",
       "name": "CmplDetail Fetch Main",
+      "alwaysOutputData": true,
       "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
     },
     {
@@ -49,6 +50,7 @@
       "position": [900, 352],
       "id": "0e6d5f2a-4a7b-7c8d-1e9f-2a3b4c5d6e7f",
       "name": "CmplDetail Fetch Logs",
+      "alwaysOutputData": true,
       "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
     },
     {
@@ -62,6 +64,7 @@
       "position": [1120, 352],
       "id": "1f7e6a3b-5b8c-8d9e-2f0a-3b4c5d6e7f8a",
       "name": "CmplDetail Fetch Esc",
+      "alwaysOutputData": true,
       "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
     },
     {
