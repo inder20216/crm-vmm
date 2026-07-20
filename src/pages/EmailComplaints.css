@@ -458,7 +458,8 @@
 .ec-tag-filter-btn:hover { border-color: #94a3b8; color: #334155; }
 .ec-tag-filter-btn.active { background: #334155; color: #fff; border-color: #334155; }
 .ec-tag-filter-btn.wip.active   { background: #7c3aed; border-color: #7c3aed; }
-.ec-tag-filter-btn.logged.active { background: #15803d; border-color: #15803d; }
+.ec-tag-filter-btn.logged.active  { background: #15803d; border-color: #15803d; }
+.ec-tag-filter-btn.updated.active { background: #1d4ed8; border-color: #1d4ed8; }
 .ec-filter-count {
   background: rgba(0,0,0,.12); color: inherit;
   border-radius: 10px; padding: 0 5px; font-size: 10px; font-weight: 600;

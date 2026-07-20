@@ -232,6 +232,13 @@ export default function EmailComplaints() {
     setEmailTags(updated);
   };
 
+  // Patch email categories in local state so inferTagFromCategories reflects immediately
+  const patchEmailCategories = (id, newCats) => {
+    setInboxEmails(prev => prev.map(e =>
+      e.id === id ? { ...e, categories: [...new Set([...(e.categories || []), ...newCats])] } : e
+    ));
+  };
+
   const POLL_MS = 30000;
   const pollRef = useRef(null);
 
@@ -1119,15 +1126,28 @@ export default function EmailComplaints() {
             </div>
           )}
 
-          {/* Tag filter bar — Logged only */}
-          {!searchMode && emails.some(e => emailTags[e.id]?.type === 'logged') && (
-            <div className="ec-tag-filter-bar">
-              <button className={`ec-tag-filter-btn ${tagFilter === null ? 'active' : ''}`} onClick={() => setTagFilter(null)}>All</button>
-              <button className={`ec-tag-filter-btn logged ${tagFilter === 'logged' ? 'active' : ''}`} onClick={() => setTagFilter(tagFilter === 'logged' ? null : 'logged')}>
-                Logged<span className="ec-filter-count">{emails.filter(e => emailTags[e.id]?.type === 'logged').length}</span>
-              </button>
-            </div>
-          )}
+          {/* Tag filter bar */}
+          {!searchMode && (() => {
+            const getTag = e => emailTags[e.id] || inferTagFromCategories(e.categories);
+            const loggedN    = emails.filter(e => getTag(e)?.type === 'logged').length;
+            const updatedN   = emails.filter(e => ['updated','escalated','closed'].includes(getTag(e)?.type)).length;
+            if (!loggedN && !updatedN) return null;
+            return (
+              <div className="ec-tag-filter-bar">
+                <button className={`ec-tag-filter-btn ${tagFilter === null ? 'active' : ''}`} onClick={() => setTagFilter(null)}>All</button>
+                {loggedN > 0 && (
+                  <button className={`ec-tag-filter-btn logged ${tagFilter === 'logged' ? 'active' : ''}`} onClick={() => setTagFilter(tagFilter === 'logged' ? null : 'logged')}>
+                    ✓ Logged<span className="ec-filter-count">{loggedN}</span>
+                  </button>
+                )}
+                {updatedN > 0 && (
+                  <button className={`ec-tag-filter-btn updated ${tagFilter === 'updated' ? 'active' : ''}`} onClick={() => setTagFilter(tagFilter === 'updated' ? null : 'updated')}>
+                    ↻ Updated<span className="ec-filter-count">{updatedN}</span>
+                  </button>
+                )}
+              </div>
+            );
+          })()}
 
 
           <div className="ec-email-list">
@@ -1180,7 +1200,10 @@ export default function EmailComplaints() {
 
 
             {tagFilter !== 'wip' && baseEmails.length > 0 && (() => {
-              const filtered = tagFilter === 'logged' ? baseEmails.filter(e => emailTags[e.id]?.type === 'logged') : baseEmails;
+              const getTag = e => emailTags[e.id] || inferTagFromCategories(e.categories);
+              const filtered = tagFilter === 'logged' ? baseEmails.filter(e => getTag(e)?.type === 'logged')
+                : tagFilter === 'updated' ? baseEmails.filter(e => ['updated','escalated','closed'].includes(getTag(e)?.type))
+                : baseEmails;
               return filtered.length > 0 ? (
                 <div className="ec-section-label">
                   {tagFilter === 'logged' ? `Logged (${filtered.length})` : activeTab === 'sent' ? `Sent Items (${filtered.length})` : `${readFilter === 'unread' ? 'Unread' : readFilter === 'read' ? 'Read' : 'All'} Inbox (${filtered.length})`}
@@ -1192,7 +1215,12 @@ export default function EmailComplaints() {
                 Click Refresh to load emails from VMM2.
               </div>
             )}
-            {activeTab !== 'wip' && tagFilter !== 'wip' && (tagFilter === 'logged' ? baseEmails.filter(e => emailTags[e.id]?.type === 'logged') : baseEmails).map(e => {
+            {activeTab !== 'wip' && tagFilter !== 'wip' && (() => {
+              const getTag2 = e => emailTags[e.id] || inferTagFromCategories(e.categories);
+              return (tagFilter === 'logged' ? baseEmails.filter(e => getTag2(e)?.type === 'logged')
+                : tagFilter === 'updated' ? baseEmails.filter(e => ['updated','escalated','closed'].includes(getTag2(e)?.type))
+                : baseEmails);
+            })().map(e => {
               const typeLabel = e.emailType === 'complaint-reply' ? { label: `#${e.complaintId}`, cls: 'ec-complaint-badge' }
                 : e.emailType === 'new-complaint'    ? { label: 'New', cls: 'ec-new-badge' }
                 : { label: 'Other', cls: 'ec-reply-badge' };
@@ -1692,6 +1720,7 @@ export default function EmailComplaints() {
                             const tagLabel = `${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'} • ${updateForm.complaintId.trim()}`;
                             const graphCat = updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Case Closed' : 'Case Updated';
                             tagEmail(selected.id, tagType, tagLabel);
+                            patchEmailCategories(selected.id, [graphCat, 'New CRM']);
                             vmm.categorizeEmail(selected.id, [graphCat, 'New CRM']).catch(() => {});
                             showToast(`${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'}: ${updateForm.complaintId.trim()}`, 'ok');
                             setActiveAction(null);
@@ -1746,6 +1775,7 @@ export default function EmailComplaints() {
                           toRecipients: replyTo,
                           ccRecipients: replyCc,
                         });
+                        patchEmailCategories(selected.id, ['Case Updated', 'New CRM']);
                         vmm.categorizeEmail(selected.id, ['Case Updated', 'New CRM']).catch(() => {});
                         tagEmail(selected.id, 'updated', 'Replied');
                         showToast('Reply sent', 'ok');
