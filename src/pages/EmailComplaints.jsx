@@ -147,6 +147,12 @@ export default function EmailComplaints() {
   const [contractType,    setContractType]    = useState('');   // 'AMC' | 'Warranty' | 'NotApplicable'
   const [vendorEmail,     setVendorEmail]     = useState('');   // For Warranty/NotApplicable — agent-entered vendor email (To)
   const [amcLookup,       setAmcLookup]       = useState('idle'); // 'idle' | 'loading' | 'found' | 'not-found'
+  const [emTab,           setEmTab]           = useState('form');  // 'form' | 'matrix'
+  const [escalationMatrix, setEscalationMatrix] = useState([]);
+  const [emLoading,       setEmLoading]       = useState(false);
+  const [emSearch,        setEmSearch]        = useState('');
+  const [emRegion,        setEmRegion]        = useState('');
+  const [emLevel,         setEmLevel]         = useState('');
   const [confirmModal,    setConfirmModal]    = useState(false);
   const [activeClaims,    setActiveClaims]    = useState({});
   const [logSuccess,      setLogSuccess]      = useState(null); // { results, payload } after successful log
@@ -409,6 +415,10 @@ export default function EmailComplaints() {
     setContractType('');
     setVendorEmail('');
     setAmcLookup('idle');
+    setEmTab('form');
+    setEmSearch('');
+    setEmRegion('');
+    setEmLevel('');
     setThreadMessages([]);
 
     // WIP email — restore previously parsed fields so agent can edit and log directly
@@ -1667,6 +1677,30 @@ export default function EmailComplaints() {
                     </div>
                   )}
 
+                  {/* ── Tab bar ── */}
+                  <div style={{ display: 'flex', borderBottom: '2px solid #e2e8f0', marginBottom: 14, gap: 2 }}>
+                    {[['form', 'Complaint Form'], ['matrix', '📋 Escalation Matrix']].map(([key, label]) => (
+                      <button
+                        key={key}
+                        onClick={() => {
+                          setEmTab(key);
+                          if (key === 'matrix' && !escalationMatrix.length && !emLoading) {
+                            setEmLoading(true);
+                            vmm.getEscalationMatrix().then(r => setEscalationMatrix(r.contacts || [])).catch(() => {}).finally(() => setEmLoading(false));
+                          }
+                        }}
+                        style={{
+                          padding: '6px 14px', fontSize: 12, fontWeight: 600, border: 'none',
+                          cursor: 'pointer', borderRadius: '6px 6px 0 0', marginBottom: -2,
+                          background: emTab === key ? '#4f46e5' : 'transparent',
+                          color: emTab === key ? '#fff' : '#64748b',
+                          borderBottom: emTab === key ? '2px solid #4f46e5' : '2px solid transparent',
+                        }}
+                      >{label}</button>
+                    ))}
+                  </div>
+
+                  {emTab === 'form' && <>
                   {/* Standard fields */}
                   <div className="ec-fields-grid">
                     {Object.entries(FIELD_LABELS).map(([key, label]) => {
@@ -2025,6 +2059,85 @@ export default function EmailComplaints() {
                       ✉ {showReplyEditor ? 'Edit Reply' : 'Ask for Missing Info'}
                     </button>
                   </div>
+                  </>}
+
+                  {emTab === 'matrix' && (
+                    <div>
+                      <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+                        <input
+                          placeholder="Search vendor…"
+                          value={emSearch}
+                          onChange={e => setEmSearch(e.target.value)}
+                          style={{ flex: '1 1 140px', padding: '6px 10px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, outline: 'none' }}
+                        />
+                        <select value={emRegion} onChange={e => setEmRegion(e.target.value)}
+                          style={{ padding: '6px 8px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer' }}>
+                          <option value="">All Regions</option>
+                          {['Pan India','North','South','East','West'].map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                        <select value={emLevel} onChange={e => setEmLevel(e.target.value)}
+                          style={{ padding: '6px 8px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer' }}>
+                          <option value="">All Levels</option>
+                          {['First Call','Level 1','Level 2','Level 3','Level 4','Level 5'].map(l => <option key={l} value={l}>{l}</option>)}
+                        </select>
+                      </div>
+
+                      {vendorEmail && (
+                        <div style={{ marginBottom: 8, fontSize: 11, color: '#16a34a', background: '#dcfce7', borderRadius: 6, padding: '5px 10px', fontWeight: 600 }}>
+                          ✓ To: {vendorEmail}
+                          <button onClick={() => setVendorEmail('')} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>×</button>
+                        </div>
+                      )}
+
+                      {emLoading ? (
+                        <div style={{ textAlign: 'center', color: '#94a3b8', padding: 24, fontSize: 12 }}>Loading escalation matrix…</div>
+                      ) : (
+                        <div style={{ overflowX: 'auto', maxHeight: 380, overflowY: 'auto', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                          <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', minWidth: 580 }}>
+                            <thead>
+                              <tr style={{ background: '#1e1b4b', color: '#fff', position: 'sticky', top: 0, zIndex: 1 }}>
+                                {['Vendor','Region','Level','Contact','Mobile','Email',''].map(h => (
+                                  <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(() => {
+                                const rows = escalationMatrix.filter(c =>
+                                  (!emSearch || c.vendorName.toLowerCase().includes(emSearch.toLowerCase())) &&
+                                  (!emRegion || c.region === emRegion) &&
+                                  (!emLevel  || c.level  === emLevel)
+                                );
+                                if (!rows.length) return (
+                                  <tr><td colSpan={7} style={{ padding: 20, textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>No contacts match filters</td></tr>
+                                );
+                                return rows.map((c, i) => (
+                                  <tr key={i} style={{ background: i % 2 === 0 ? '#f8fafc' : '#fff', borderBottom: '1px solid #e2e8f0' }}>
+                                    <td style={{ padding: '7px 10px', fontWeight: 600, color: '#1e1b4b', whiteSpace: 'nowrap' }}>{c.vendorName}</td>
+                                    <td style={{ padding: '7px 10px', color: '#475569', whiteSpace: 'nowrap' }}>{c.region}</td>
+                                    <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                                      <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 4, padding: '2px 7px', fontSize: 10, fontWeight: 700 }}>{c.level}</span>
+                                    </td>
+                                    <td style={{ padding: '7px 10px', color: '#374151' }}>{c.contactPerson || '—'}</td>
+                                    <td style={{ padding: '7px 10px', color: '#374151', whiteSpace: 'nowrap' }}>{c.mobile1 || c.customerCareNo || '—'}</td>
+                                    <td style={{ padding: '7px 10px', color: '#0369a1', wordBreak: 'break-all' }}>{c.email || '—'}</td>
+                                    <td style={{ padding: '7px 10px' }}>
+                                      {c.email && (
+                                        <button
+                                          onClick={() => { setVendorEmail(c.email); setEmTab('form'); }}
+                                          style={{ padding: '3px 10px', fontSize: 11, background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}
+                                        >Use →</button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ));
+                              })()}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                 </div>
               )}

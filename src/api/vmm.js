@@ -31,20 +31,9 @@ export const vmm = {
   getProducts:       ()       => get(BASE, 'vmm-sp-products'),
   getNatures:        ()       => get(BASE, 'vmm-sp-natures'),
   getVendors:        ()       => get(BASE, 'vmm-sp-vendors'),
-  // Reuses the existing AC-AMC / Lift-AMC webhooks (same ones the Facility Complaint Portal calls)
-  getAmcVendor:      (storeCode, product) => {
-    const p = (product || '').trim().toLowerCase();
-    const path = (p === 'ac' || p === 'server room ac') ? 'AC-AMC'
-               : (p === 'lift' || p === 'escalator')     ? 'Lift-AMC'
-               : null;
-    if (!path) return Promise.resolve({ found: false });
-    return post(BASE, path, { store_id: storeCode }).then(data => {
-      const vendor = (data.vendor_name || '').trim();
-      if (!vendor || vendor.toLowerCase() === 'not applicable') return { found: false };
-      return { found: true, vendor };
-    });
-  },
-  logComplaint:        (data)   => post(BASE, 'vmm-log-complaint',       data),
+  getAmcVendor:        (storeCode, product) => get(BASE, 'vmm-sp-amc-vendor', { storeCode, product }),
+  getEscalationMatrix: (params = {})        => get(BASE, 'vmm-sp-escalation-matrix', params),
+  logComplaint:        (data)   => post(BASE, 'vmm-log-complaint',           data),
   sendEscalationEmail: (data)   => graph.sendEscalationEmailDirect(data),
   sendClosureEmail:    (data)   => graph.sendClosureEmailDirect(data),
   polishRemarks:       (text)   => post(BASE, 'vmm-ai-polish',           { text }),
