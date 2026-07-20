@@ -87,6 +87,16 @@ function normalizeText(value) {
   return (value || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+function inferTagFromCategories(cats) {
+  if (!cats || !cats.length) return null;
+  if (cats.some(c => c === 'Case Logged'))  return { type: 'logged',    label: 'Case Logged' };
+  if (cats.some(c => c === 'Escalated'))    return { type: 'escalated', label: 'Escalated' };
+  if (cats.some(c => c === 'Case Closed'))  return { type: 'closed',    label: 'Case Closed' };
+  if (cats.some(c => c === 'Case Updated')) return { type: 'updated',   label: 'Case Updated' };
+  if (cats.some(c => c === 'WIP'))          return { type: 'wip',       label: 'In Progress' };
+  return null;
+}
+
 function stripHtml(html) {
   if (!html) return '';
   return html
@@ -1186,7 +1196,7 @@ export default function EmailComplaints() {
                 : { label: 'Other', cls: 'ec-reply-badge' };
               const claim          = activeClaims[e.id];
               const claimedByOther = claim && claim.agentId !== agentId;
-              const tag            = emailTags[e.id];
+              const tag            = emailTags[e.id] || inferTagFromCategories(e.categories);
               const wipReplyFor    = wipList.find(w =>
                 w.conversationId && e.conversationId && w.conversationId === e.conversationId
               );
@@ -1211,6 +1221,9 @@ export default function EmailComplaints() {
                     <div className={`ec-email-tag-row ec-etag-${tag.type}`}>
                       {tag.type === 'logged'      && <span className="ec-etag-icon">✓</span>}
                       {tag.type === 'updated'     && <span className="ec-etag-icon">↻</span>}
+                      {tag.type === 'escalated'   && <span className="ec-etag-icon">↑</span>}
+                      {tag.type === 'closed'      && <span className="ec-etag-icon">✓</span>}
+                      {tag.type === 'wip'         && <span className="ec-etag-icon">⋯</span>}
                       {tag.type === 'nonrelevant' && <span className="ec-etag-icon">✕</span>}
                       <span className="ec-etag-label">{tag.label}</span>
                     </div>
@@ -1663,7 +1676,11 @@ export default function EmailComplaints() {
                           }
                           const res = await vmm.logEmailActivity(payload);
                           if (res.found) {
-                            tagEmail(selected.id, 'updated', `${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'} • ${updateForm.complaintId.trim()}`);
+                            const tagType  = updateAction === 'escalate' ? 'escalated' : updateAction === 'close' ? 'closed' : 'updated';
+                            const tagLabel = `${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'} • ${updateForm.complaintId.trim()}`;
+                            const graphCat = updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Case Closed' : 'Case Updated';
+                            tagEmail(selected.id, tagType, tagLabel);
+                            vmm.categorizeEmail(selected.id, [graphCat, 'New CRM']).catch(() => {});
                             showToast(`${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'}: ${updateForm.complaintId.trim()}`, 'ok');
                             setActiveAction(null);
                             setUpdateForm({ complaintId: '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' }); setUpdateAction(null);

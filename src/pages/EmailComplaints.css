@@ -411,10 +411,16 @@
 
 .ec-etag-logged      { color: #15803d; }
 .ec-etag-updated     { color: #1d4ed8; }
+.ec-etag-escalated   { color: #b45309; }
+.ec-etag-closed      { color: #15803d; }
+.ec-etag-wip         { color: #7c3aed; }
 .ec-etag-nonrelevant { color: #94a3b8; }
 
 .ec-email-row.tagged-logged      { opacity: .82; border-left: 3px solid #86efac; }
 .ec-email-row.tagged-updated     { opacity: .82; border-left: 3px solid #93c5fd; }
+.ec-email-row.tagged-escalated   { opacity: .82; border-left: 3px solid #fcd34d; }
+.ec-email-row.tagged-closed      { opacity: .82; border-left: 3px solid #6ee7b7; }
+.ec-email-row.tagged-wip         { opacity: .82; border-left: 3px solid #c4b5fd; }
 .ec-email-row.tagged-nonrelevant { opacity: .55; border-left: 3px solid #e2e8f0; }
 .ec-email-row.tagged-nonrelevant .ec-email-subject { color: #94a3b8; text-decoration: line-through; }
 
