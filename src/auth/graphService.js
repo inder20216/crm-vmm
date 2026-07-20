@@ -17,9 +17,10 @@ function authHeader(token) {
   return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 }
 
-function buildRecipients(emailStr) {
-  if (!emailStr) return [];
-  return emailStr.split(/[;,]/).map(e => e.trim()).filter(Boolean).map(address => {
+function buildRecipients(input) {
+  if (!input) return [];
+  const raw = Array.isArray(input) ? input.join(',') : input;
+  return raw.split(/[;,]/).map(e => e.trim()).filter(Boolean).map(address => {
     const m = address.match(/^(.+?)\s*<(.+?)>$/);
     return m
       ? { emailAddress: { name: m[1].trim(), address: m[2].trim() } }
@@ -277,13 +278,17 @@ export async function replyOnThread({ messageId, htmlBody, toEmail, ccEmails }) 
     headers: authHeader(token),
     body: JSON.stringify({
       message: {
+        body: { contentType: 'HTML', content: htmlBody },
         toRecipients: buildRecipients(toEmail),
         ccRecipients: buildRecipients(ccEmails),
       },
-      comment: htmlBody,
+      comment: '',
     }),
   });
-  if (!res.ok) throw new Error(`Reply failed: ${res.status}`);
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Reply failed: ${res.status} ${errText}`);
+  }
   return { success: true };
 }
 

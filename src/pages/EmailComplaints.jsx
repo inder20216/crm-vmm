@@ -1751,7 +1751,7 @@ export default function EmailComplaints() {
                         showToast('Reply sent', 'ok');
                         setActiveAction(null);
                         setQuickReplyBody('');
-                      } catch { showToast('Could not send reply', 'err'); }
+                      } catch (e) { showToast(e?.message || 'Could not send reply', 'err'); }
                       finally { setSendingQuickReply(false); }
                     }}
                   >
