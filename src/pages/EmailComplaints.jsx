@@ -155,6 +155,8 @@ export default function EmailComplaints() {
   const [emLevel,         setEmLevel]         = useState('');
   const [confirmModal,    setConfirmModal]    = useState(false);
   const [activeClaims,    setActiveClaims]    = useState({});
+  const [recentCases,     setRecentCases]     = useState([]);
+  const [loadingRecent,   setLoadingRecent]   = useState(false);
   const [logSuccess,      setLogSuccess]      = useState(null); // { results, payload } after successful log
   const [emailTags,       setEmailTags]       = useState(() => JSON.parse(localStorage.getItem('vmm_email_tags') || '{}')); // { [emailId]: { type, label, time } }
   const [tagFilter,       setTagFilter]       = useState(null); // null | 'wip' | 'logged'
@@ -401,7 +403,7 @@ export default function EmailComplaints() {
     setParsed(null);
     setReplyBody('');
     setActiveAction(null);
-    setUpdateForm({ complaintId: email.complaintId || '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' }); setUpdateAction(null); setFoundComplaint(null);
+    setUpdateForm({ complaintId: email.complaintId || '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' }); setUpdateAction(null); setFoundComplaint(null); setRecentCases([]); setLoadingRecent(false);
     // Restore cached attachments so the Load button doesn't reappear after refresh
     const cached = email.id ? localStorage.getItem(`vmm_attach_${email.id}`) : null;
     setAttachmentData(cached ? JSON.parse(cached) : null);
@@ -1412,8 +1414,21 @@ export default function EmailComplaints() {
                       <button
                         className={`ec-action-btn ec-action-update ${activeAction === 'update-case' ? 'selected' : ''}`}
                         onClick={() => {
-                          setActiveAction(activeAction === 'update-case' ? null : 'update-case');
+                          const next = activeAction === 'update-case' ? null : 'update-case';
+                          setActiveAction(next);
                           setUpdateForm(f => ({ ...f, complaintId: detectedId }));
+                          if (next === 'update-case' && !detectedId) {
+                            const sc = selected?.storeCode;
+                            if (sc) {
+                              setLoadingRecent(true);
+                              vmm.getRecentComplaints(sc)
+                                .then(r => setRecentCases(r.complaints || []))
+                                .catch(() => setRecentCases([]))
+                                .finally(() => setLoadingRecent(false));
+                            }
+                          } else if (next === null) {
+                            setRecentCases([]);
+                          }
                         }}
                       >
                         ↻ Update a Case
@@ -1474,6 +1489,46 @@ export default function EmailComplaints() {
                     </div>
                   </div>
 
+                  {/* Recent active complaints — shown when no complaint ID typed yet */}
+                  {!updateForm.complaintId && !foundComplaint && (
+                    <div style={{ marginBottom: 8 }}>
+                      {loadingRecent ? (
+                        <div style={{ fontSize: 12, color: '#94a3b8', padding: '6px 0' }}>Loading recent complaints…</div>
+                      ) : recentCases.length > 0 ? (
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                            Recent open complaints for this store
+                          </div>
+                          <div style={{ border: '1px solid #e2e8f0', borderRadius: 6, overflow: 'hidden' }}>
+                            {recentCases.slice(0, 8).map((c, i) => (
+                              <div
+                                key={c.id || i}
+                                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderBottom: i < Math.min(recentCases.length, 8) - 1 ? '1px solid #f1f5f9' : 'none', background: i % 2 ? '#f8fafc' : '#fff', cursor: 'pointer', fontSize: 12 }}
+                                onClick={async () => {
+                                  const no = c.complaintno || c.id;
+                                  setUpdateForm(f => ({ ...f, complaintId: no }));
+                                  setSearchingComplaint(true); setFoundComplaint(null);
+                                  try {
+                                    const res = await vmm.getComplaintDetail(no);
+                                    setFoundComplaint(res?.complaint ? res : { notFound: true });
+                                  } catch { setFoundComplaint({ notFound: true }); }
+                                  finally { setSearchingComplaint(false); }
+                                }}
+                              >
+                                <span style={{ fontWeight: 600, color: '#334155', flex: '0 0 auto' }}>{c.complaintno}</span>
+                                <span style={{ color: '#64748b', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.productname}</span>
+                                <span style={{ flex: '0 0 auto', padding: '2px 7px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: c.current_status === 'Open' ? '#dbeafe' : c.current_status === 'Escalated' ? '#fef3c7' : '#f1f5f9', color: c.current_status === 'Open' ? '#1d4ed8' : c.current_status === 'Escalated' ? '#b45309' : '#475569' }}>
+                                  {c.current_status || 'Open'}
+                                </span>
+                                <span style={{ fontSize: 11, color: '#94a3b8', flex: '0 0 auto' }}>Select →</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+
                   {/* Search result */}
                   {foundComplaint?.notFound && (
                     <div style={{ padding: '8px 12px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, fontSize: 12, color: '#dc2626', marginBottom: 8 }}>
@@ -1482,10 +1537,20 @@ export default function EmailComplaints() {
                   )}
                   {foundComplaint?.complaint && (
                     <div style={{ padding: '10px 12px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 6, fontSize: 12, marginBottom: 8 }}>
-                      <div style={{ fontWeight: 700, color: '#15803d', marginBottom: 4 }}>✓ Complaint Found</div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <div style={{ fontWeight: 700, color: '#15803d' }}>✓ Complaint Found</div>
+                        <a
+                          href={`${window.location.origin}/crm-vmm/complaints/${foundComplaint.complaint.complaintno}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ fontSize: 11, color: '#2563eb', textDecoration: 'none', fontWeight: 600, padding: '2px 8px', background: '#dbeafe', borderRadius: 4 }}
+                        >
+                          View full ↗
+                        </a>
+                      </div>
                       <div style={{ color: '#374151' }}><strong>Store:</strong> {foundComplaint.complaint.storecode} — {foundComplaint.complaint.storename}</div>
                       <div style={{ color: '#374151' }}><strong>Product:</strong> {foundComplaint.complaint.productname}</div>
-                      <div style={{ color: '#374151' }}><strong>Status:</strong> {foundComplaint.complaint.status} &nbsp;|&nbsp; <strong>EDC:</strong> {foundComplaint.complaint.edcdate || '—'}</div>
+                      <div style={{ color: '#374151' }}><strong>Status:</strong> {foundComplaint.complaint.current_status || foundComplaint.complaint.status} &nbsp;|&nbsp; <strong>EDC:</strong> {foundComplaint.complaint.edc || foundComplaint.complaint.edcdate || '—'}</div>
                     </div>
                   )}
 
