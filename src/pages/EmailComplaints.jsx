@@ -1248,14 +1248,19 @@ export default function EmailComplaints() {
                     {e.subject}
                   </div>
                   {tag && (
-                    <div className={`ec-email-tag-row ec-etag-${tag.type}`}>
-                      {tag.type === 'logged'      && <span className="ec-etag-icon">✓</span>}
-                      {tag.type === 'updated'     && <span className="ec-etag-icon">↻</span>}
-                      {tag.type === 'escalated'   && <span className="ec-etag-icon">↑</span>}
-                      {tag.type === 'closed'      && <span className="ec-etag-icon">✓</span>}
-                      {tag.type === 'wip'         && <span className="ec-etag-icon">⋯</span>}
-                      {tag.type === 'nonrelevant' && <span className="ec-etag-icon">✕</span>}
-                      <span className="ec-etag-label">{tag.label}</span>
+                    <div className="ec-tag-badge-row">
+                      <span className={`ec-tag-badge ec-tag-badge-${tag.type}`}>
+                        {tag.type === 'logged'      && '✓ '}
+                        {tag.type === 'updated'     && '↻ '}
+                        {tag.type === 'escalated'   && '↑ '}
+                        {tag.type === 'closed'      && '✓ '}
+                        {tag.type === 'wip'         && '⋯ '}
+                        {tag.type === 'nonrelevant' && '✕ '}
+                        {tag.label}
+                      </span>
+                      {tag.time && (
+                        <span className="ec-tag-time">{fmtTime(tag.time)}</span>
+                      )}
                     </div>
                   )}
                   {!tag && (
