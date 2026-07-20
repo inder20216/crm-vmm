@@ -5,11 +5,7 @@ import './EmailComplaints.css';
 function fmtTime(dt) {
   if (!dt) return '';
   const d = new Date(dt);
-  const now = new Date();
-  const diff = now - d;
-  if (diff < 3600000)  return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
 const HO_EMAIL = 'ho.vmm@openmind.in';
@@ -176,6 +172,8 @@ export default function EmailComplaints() {
   const [quantity,        setQuantity]        = useState(1);
   const [contractType,    setContractType]    = useState('');   // 'AMC' | 'Warranty' | 'NotApplicable'
   const [vendorEmail,     setVendorEmail]     = useState('');   // For Warranty/NotApplicable — agent-entered vendor email (To)
+  const [extraEscTo,      setExtraEscTo]      = useState('');   // Extra To recipients for escalation email
+  const [extraEscCc,      setExtraEscCc]      = useState('');   // Extra CC recipients for escalation email
   const [amcLookup,       setAmcLookup]       = useState('idle'); // 'idle' | 'loading' | 'found' | 'not-found'
   const [emTab,           setEmTab]           = useState('form');  // 'form' | 'matrix'
   const [escalationMatrix, setEscalationMatrix] = useState([]);
@@ -453,6 +451,8 @@ export default function EmailComplaints() {
     setQuantity(1);
     setContractType('');
     setVendorEmail('');
+    setExtraEscTo('');
+    setExtraEscCc('');
     setAmcLookup('idle');
     setEmTab('form');
     setEmSearch('');
@@ -485,7 +485,6 @@ export default function EmailComplaints() {
         setEmpLookupStatus('idle');
         setResolvedEmpName('');
       }
-      if (p.quantity && p.quantity > 1) setQuantity(Math.min(20, p.quantity));
       if (p.suggestedReply) setReplyBody(p.suggestedReply);
     } else {
       setEmpLookupStatus('idle');
@@ -584,7 +583,6 @@ export default function EmailComplaints() {
       }));
       setParsed(res);
       setSelectedTemplateId(res.selectedTemplateId || null);
-      setQuantity(Math.max(1, Math.min(20, Math.round(Number(res.quantity) || 1))));
       if (res.suggestedReply) setReplyBody(res.suggestedReply);
     } catch {
       showToast('AI parsing failed. Please try again.', 'err');
@@ -782,6 +780,8 @@ export default function EmailComplaints() {
             edcDate:         r.edcDate,
           })),
           attachmentLinks: driveAttachments,
+          extraToEmails: extraEscTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
+          extraCcEmails: extraEscCc.split(/[;,]/).map(s => s.trim()).filter(Boolean),
         }).catch(() => {});
         claimEmail(selected.id, 'release');
         tagEmail(selected.id, 'logged', `Logged • ${nos} • Agent ${agentId.slice(-4)}`);
@@ -2096,6 +2096,21 @@ export default function EmailComplaints() {
                             Store Manager (auto)
                           </div>
                         </div>
+
+                        {/* Extra CC for FM/HO path */}
+                        <div style={{ marginTop: 10 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+                            Extra CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span>
+                          </div>
+                          <input
+                            className="ec-field-input"
+                            type="text"
+                            placeholder="email1@example.com, email2@example.com"
+                            value={extraEscCc}
+                            onChange={e => setExtraEscCc(e.target.value)}
+                            style={{ background: '#fff' }}
+                          />
+                        </div>
                       </div>
                     )}
                     {showVendorSection && <div className={`ec-field ${parsedEdits.vendorName ? 'filled' : 'missing'}`}>
@@ -2166,6 +2181,36 @@ export default function EmailComplaints() {
                             </div>
                           </div>
                         </div>
+
+                        {/* Extra To */}
+                        <div style={{ marginTop: 10 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+                            Extra To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span>
+                          </div>
+                          <input
+                            className="ec-field-input"
+                            type="text"
+                            placeholder="email1@example.com, email2@example.com"
+                            value={extraEscTo}
+                            onChange={e => setExtraEscTo(e.target.value)}
+                            style={{ background: '#fff' }}
+                          />
+                        </div>
+
+                        {/* Extra CC */}
+                        <div style={{ marginTop: 8 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+                            Extra CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span>
+                          </div>
+                          <input
+                            className="ec-field-input"
+                            type="text"
+                            placeholder="email1@example.com, email2@example.com"
+                            value={extraEscCc}
+                            onChange={e => setExtraEscCc(e.target.value)}
+                            style={{ background: '#fff' }}
+                          />
+                        </div>
                       </div>
                     )}
                     {/* Nature of Problem — searchable fixed list */}
@@ -2203,19 +2248,17 @@ export default function EmailComplaints() {
                         </div>
                       );
                     })()}
-                    {/* Number of Units — disabled for AC (1 complaint logs for entire store) */}
+                    {/* Number of Units — always 1 for email complaints (one complaint per email) */}
                     <div className="ec-field filled">
                       <span className="ec-field-label">Number of Units</span>
                       <input
                         type="number"
                         className="ec-field-qty-input"
-                        min={1} max={20}
-                        value={isAC ? 1 : quantity}
-                        disabled={isAC}
-                        onChange={e => !isAC && setQuantity(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-                        style={isAC ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                        value={1}
+                        disabled
+                        style={{ opacity: 0.5, cursor: 'not-allowed' }}
                       />
-                      {isAC && <span style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>1 complaint per store for all AC units</span>}
+                      <span style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>1 complaint per email</span>
                     </div>
                   </div>
 
