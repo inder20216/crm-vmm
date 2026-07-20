@@ -5,6 +5,13 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>vmm-crm</title>
+  <script>
+    // Restore path encoded by 404.html redirect
+    (function() {
+      var r = new URLSearchParams(window.location.search).get('r');
+      if (r) window.history.replaceState(null, null, '/' + r);
+    })();
+  </script>
   </head>
   <body>
     <div id="root"></div>

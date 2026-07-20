@@ -117,7 +117,7 @@ export default function App() {
   const isAdmin = currentUser.role === 'admin';
 
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/crm-vmm">
       <div className="app-shell">
         <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} role={currentUser.role} />
         <div className="app-body">

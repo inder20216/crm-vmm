@@ -41,7 +41,7 @@ export const vmm = {
   emailClaim:          (data)   => post(BASE, 'vmm-email-claim',         data),
   searchComplaints:    (params) => get(BASE, 'vmm-search-complaints',    params),
   dashboardStats:    ()       => get(BASE, 'vmm-dashboard-stats'),
-  getComplaintDetail:(id)     => get(BASE, 'vmm-complaint-detail',   { id }),
+  getComplaintDetail:(ref)    => get(BASE, 'vmm-complaint-detail',   { no: ref }),
   getReports:        ()       => get(BASE, 'vmm-reports'),
 
   // ── Email — direct Graph API (no n8n / Power Automate) ─────────────────────
