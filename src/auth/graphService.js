@@ -379,22 +379,65 @@ function resolveVendorEmail(storeCode, productName, vendorName, storeState, stor
   return null;
 }
 
+// ── Resolve escalation recipients (exported so form can preview before sending) ─
+export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity }) {
+  const vendorResolved = resolveVendorEmail(storeCode, productName, vendorName, storeState, storeCity);
+  const smEmail        = getSmEmail(storeCode);
+  const hoPoc          = HO_POC[productName] || HO_POC['DEFAULT'];
+  const resolvedVendor = vendorResolved?.name || vendorName || '—';
+  const isVendorCase   = !!vendorResolved?.email;
+
+  const makeAddr = (email, name) => ({ emailAddress: { address: email, name: name || '' } });
+  const addUniq  = (list, email, name) => {
+    if (email && !list.some(x => x.emailAddress.address === email)) list.push(makeAddr(email, name));
+  };
+
+  let toAddresses, ccAddresses;
+  if (isVendorCase) {
+    toAddresses = [makeAddr(vendorResolved.email, resolvedVendor)];
+    ccAddresses = [];
+    if (storeEmail) addUniq(ccAddresses, storeEmail, storeName);
+    if (fmEmail)    addUniq(ccAddresses, fmEmail, fmName);
+    if (smEmail)    addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
+    if (hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
+    ESCALATION_TEAM.forEach(a => addUniq(ccAddresses, a, ''));
+  } else {
+    toAddresses = [];
+    if (fmEmail)      addUniq(toAddresses, fmEmail, fmName);
+    if (hoPoc?.email) addUniq(toAddresses, hoPoc.email, hoPoc.name);
+    if (!toAddresses.length) toAddresses = ESCALATION_TEAM.map(a => makeAddr(a, ''));
+    ccAddresses = [];
+    if (storeEmail) addUniq(ccAddresses, storeEmail, storeName);
+    if (smEmail)    addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
+    ESCALATION_TEAM.forEach(a => addUniq(ccAddresses, a, ''));
+  }
+
+  return { toAddresses, ccAddresses, isVendorCase, resolvedVendor };
+}
+
 // ── Escalation email ──────────────────────────────────────────────────────────
 export async function sendEscalationEmailDirect({
   storeCode, storeName, storeEmail, fmName, fmEmail, region, zone, storeState, storeCity,
   vendorName, productName, natureOfComplaint, complaints = [],
+  extraToEmails = [], extraCcEmails = [],
+  attachmentLinks = [],
 }) {
   const nos = complaints.map(c => c.complaintno).join(', ');
   const isMultiple = complaints.length > 1;
 
-  // Resolve routing: vendor email, SM email, HO contact
-  const vendorResolved  = resolveVendorEmail(storeCode, productName, vendorName, storeState, storeCity);
-  const smEmail         = getSmEmail(storeCode);
-  const hoPoc           = HO_POC[productName] || HO_POC['DEFAULT'];
-  const resolvedVendor  = vendorResolved?.name || vendorName || '—';
+  // Resolve routing via the shared function
+  const { toAddresses, ccAddresses, isVendorCase, resolvedVendor } = resolveEscalationRecipients({
+    storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity,
+  });
 
-  // Determine routing mode
-  const isVendorCase = !!vendorResolved?.email;
+  // Merge any user-added extras
+  const addUniq = (list, email, name) => {
+    if (email && !list.some(x => x.emailAddress.address === email))
+      list.push({ emailAddress: { address: email, name: name || '' } });
+  };
+  const extrasInput = v => (Array.isArray(v) ? v.join(',') : (v || ''));
+  buildRecipients(extrasInput(extraToEmails)).forEach(r => addUniq(toAddresses, r.emailAddress.address, r.emailAddress.name));
+  buildRecipients(extrasInput(extraCcEmails)).forEach(r => addUniq(ccAddresses, r.emailAddress.address, r.emailAddress.name));
 
   const subject = isMultiple
     ? `[VMM] New Complaints — ${storeCode} | ${productName} | ${complaints.length} Units`
@@ -439,40 +482,16 @@ export async function sendEscalationEmailDirect({
         ? 'Please attend the complaint and confirm assignment within 24 hours.'
         : 'Please coordinate with the concerned team and update the status within 24 hours.'}
     </div>
+    ${attachmentLinks.length > 0 ? `
+    <div style="margin-top:16px;padding:12px 16px;background:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:0 6px 6px 0;font-size:13px">
+      <div style="font-weight:700;color:#0369a1;margin-bottom:8px">📎 Images / Attachments from original complaint:</div>
+      ${attachmentLinks.map(a => `<div style="margin-bottom:4px"><a href="${a.viewLink}" style="color:#0284c7;text-decoration:none">🖼 ${a.name}</a></div>`).join('')}
+    </div>` : ''}
   </div>
   <div style="padding:12px 28px;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;font-size:11px;color:#94a3b8">
     Open Mind Services Limited &nbsp;·&nbsp; VMM CRM &nbsp;·&nbsp; vmm.helpdesk@openmind.in
   </div>
 </div>`;
-
-  // Build TO / CC based on routing
-  const makeAddr = (email, name) => ({ emailAddress: { address: email, name: name || '' } });
-  const addUniq = (list, email, name) => {
-    if (email && !list.some(x => x.emailAddress.address === email)) list.push(makeAddr(email, name));
-  };
-
-  let toAddresses, ccAddresses;
-
-  if (isVendorCase) {
-    // Vendor case: TO vendor, CC Store + FM + SM + HO + internal
-    toAddresses = [makeAddr(vendorResolved.email, resolvedVendor)];
-    ccAddresses = [];
-    if (storeEmail) addUniq(ccAddresses, storeEmail, storeName);
-    if (fmEmail)    addUniq(ccAddresses, fmEmail, fmName);
-    if (smEmail)    addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
-    if (hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
-    ESCALATION_TEAM.forEach(a => addUniq(ccAddresses, a, ''));
-  } else {
-    // Non-vendor case: TO FM + HO, CC Store + SM + internal
-    toAddresses = [];
-    if (fmEmail)      addUniq(toAddresses, fmEmail, fmName);
-    if (hoPoc?.email) addUniq(toAddresses, hoPoc.email, hoPoc.name);
-    if (!toAddresses.length) toAddresses = ESCALATION_TEAM.map(a => makeAddr(a, ''));
-    ccAddresses = [];
-    if (storeEmail) addUniq(ccAddresses, storeEmail, storeName);
-    if (smEmail)    addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
-    ESCALATION_TEAM.forEach(a => addUniq(ccAddresses, a, ''));
-  }
 
   return sendFromSharedMailbox({ subject, htmlBody, toAddresses, ccAddresses });
 }

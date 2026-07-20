@@ -160,6 +160,10 @@ export default function CaseLoggingForm() {
   const [showConfirm,      setShowConfirm]      = useState(false);
   const [amcStatus,        setAmcStatus]        = useState('idle'); // idle|loading|found|not-found|error
   const [gensetChoice,     setGensetChoice]     = useState('');
+  const [resolvedTo,       setResolvedTo]       = useState([]);
+  const [resolvedCc,       setResolvedCc]       = useState([]);
+  const [extraTo,          setExtraTo]          = useState('');
+  const [extraCc,          setExtraCc]          = useState('');
   const amcLookupKeyRef = useRef('');
 
   const [products, setProducts]   = useState([]);
@@ -356,7 +360,22 @@ export default function CaseLoggingForm() {
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
     setErrors({});
-    // Show confirmation step instead of submitting immediately
+    // Resolve escalation recipients so user can preview/edit in confirm modal
+    try {
+      const resolved = vmm.resolveEscalationRecipients({
+        storeCode:  form.storeCode,
+        storeEmail: form.storeEmail,
+        storeName:  form.storeName,
+        fmEmail:    form.fmEmail,
+        fmName:     form.fmName,
+        vendorName: form.vendorName,
+        productName: form.productName,
+        storeState: form.state,
+        storeCity:  form.city,
+      });
+      setResolvedTo(resolved.toAddresses || []);
+      setResolvedCc(resolved.ccAddresses || []);
+    } catch { setResolvedTo([]); setResolvedCc([]); }
     setShowConfirm(true);
   };
 
@@ -431,22 +450,24 @@ export default function CaseLoggingForm() {
       if (allResults.length === qty) {
         // Send ONE consolidated escalation email for all units
         vmm.sendEscalationEmail({
-          escalationType:  form.fmEmail && !form.vendorName ? 'fm' : 'vendor',
-          storeCode:       form.storeCode,
-          storeName:       form.storeName,
-          smEmail:         form.smEmail      || form.storeEmail || '',
-          fmEmail:         form.fmEmail      || '',
-          hoEmail:         form.hoEmail      || '',
-          vendorEmail:     form.vendorEmail  || '',
-          vendorName:      form.vendorName   || '',
-          productName:     form.productName  || '',
-          contractType:    form.contractType || '',
+          storeCode:        form.storeCode,
+          storeName:        form.storeName,
+          storeEmail:       form.storeEmail       || '',
+          fmName:           form.fmName           || '',
+          fmEmail:          form.fmEmail          || '',
+          vendorName:       form.vendorName        || '',
+          productName:      form.productName       || '',
+          natureOfComplaint: form.natureOfComplaint || '',
+          storeState:       form.state             || '',
+          storeCity:        form.city              || '',
           complaints: allResults.map(r => ({
             complaintno:     r.complaintno,
             productLocation: r.productLocation,
             natureOfProblem: r._nature        || '',
             edcDate:         r.edcDate,
           })),
+          extraToEmails: extraTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
+          extraCcEmails: extraCc.split(/[;,]/).map(s => s.trim()).filter(Boolean),
         }).catch(() => {});
         setResults(allResults);
         setResult(allResults[0]);
@@ -476,6 +497,10 @@ export default function CaseLoggingForm() {
     setUnitNatures([]);
     setPolishing(false);
     setRecentComplaints([]);
+    setExtraTo('');
+    setExtraCc('');
+    setResolvedTo([]);
+    setResolvedCc([]);
   };
 
   // AC/HVAC product detection — quantity and warranty only apply to these
@@ -582,6 +607,61 @@ export default function CaseLoggingForm() {
                 </div>
               ))}
             </div>
+            {/* Escalation email recipients preview + extra To/CC */}
+            <div className="clf-email-section">
+              <div className="clf-email-section-title">Escalation Email</div>
+
+              <div className="clf-recip-row">
+                <span className="clf-recip-label">To</span>
+                <div className="clf-recip-tags">
+                  {resolvedTo.length > 0
+                    ? resolvedTo.map((r, i) => (
+                        <span key={i} className="clf-recip-tag clf-recip-tag-to">
+                          {r.emailAddress.name || r.emailAddress.address}
+                        </span>
+                      ))
+                    : <span className="clf-recip-none">No recipient resolved — add one below</span>
+                  }
+                </div>
+              </div>
+
+              <div className="clf-recip-row">
+                <span className="clf-recip-label">CC</span>
+                <div className="clf-recip-tags">
+                  {resolvedCc.length > 0
+                    ? resolvedCc.map((r, i) => (
+                        <span key={i} className="clf-recip-tag clf-recip-tag-cc">
+                          {r.emailAddress.name || r.emailAddress.address}
+                        </span>
+                      ))
+                    : <span className="clf-recip-none">None</span>
+                  }
+                </div>
+              </div>
+
+              <div className="clf-recip-row clf-recip-extra">
+                <span className="clf-recip-label">+ Add To</span>
+                <input
+                  type="text"
+                  className="clf-extra-input"
+                  placeholder="email1@domain.com, email2@domain.com"
+                  value={extraTo}
+                  onChange={e => setExtraTo(e.target.value)}
+                />
+              </div>
+
+              <div className="clf-recip-row clf-recip-extra">
+                <span className="clf-recip-label">+ Add CC</span>
+                <input
+                  type="text"
+                  className="clf-extra-input"
+                  placeholder="email1@domain.com, email2@domain.com"
+                  value={extraCc}
+                  onChange={e => setExtraCc(e.target.value)}
+                />
+              </div>
+            </div>
+
             <div className="clf-confirm-actions">
               <button type="button" className="clf-confirm-cancel" onClick={() => setShowConfirm(false)}>Go Back &amp; Edit</button>
               <button type="button" className="clf-confirm-ok" onClick={doSubmit}>

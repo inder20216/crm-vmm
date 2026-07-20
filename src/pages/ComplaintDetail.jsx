@@ -389,7 +389,7 @@ export default function ComplaintDetail() {
                       const hasEdc  = !!row.edc;
                       const hasTkt  = !!row.ticketno;
                       return (
-                        <tr key={`esc-${row.id || i}`} style={{ background: '#faf5ff' }}>
+                        <tr key={`esc-${i}`} style={{ background: '#faf5ff' }}>
                           <td className="cd-log-date">{fmtDateTime(row.created)}</td>
                           <td>
                             <span className="cd-esc-level">↑ L{level} Escalation</span>

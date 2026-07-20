@@ -765,22 +765,23 @@ export default function EmailComplaints() {
         }
         // Send consolidated escalation email (one email for all units)
         vmm.sendEscalationEmail({
-          escalationType:    isFMProduct ? 'fm' : 'vendor',
-          storeCode:         payload.storeCode   || '',
-          storeName:         payload.storeName   || '',
-          smEmail:           payload.smEmail     || payload.storeEmail || '',
-          fmEmail:           payload.fmEmail     || '',
-          hoEmail:           hoEmailForProduct,
-          vendorEmail:       vendorEmail         || '',
-          vendorName:        payload.vendorName  || '',
-          productName:       payload.productName || '',
-          contractType:      contractType        || '',
+          storeCode:         payload.storeCode        || '',
+          storeName:         payload.storeName        || '',
+          storeEmail:        payload.storeEmail       || '',
+          fmName:            payload.fmName           || '',
+          fmEmail:           payload.fmEmail          || '',
+          vendorName:        payload.vendorName       || '',
+          productName:       payload.productName      || '',
+          natureOfComplaint: parsedEdits.natureOfProblem || '',
+          storeState:        store.state              || '',
+          storeCity:         store.city               || '',
           complaints: allResults.map(r => ({
             complaintno:     r.complaintno,
             productLocation: payload.productLocation,
             natureOfProblem: parsedEdits.natureOfProblem || '',
             edcDate:         r.edcDate,
           })),
+          attachmentLinks: driveAttachments,
         }).catch(() => {});
         claimEmail(selected.id, 'release');
         tagEmail(selected.id, 'logged', `Logged • ${nos} • Agent ${agentId.slice(-4)}`);

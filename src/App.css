@@ -401,6 +401,43 @@ body {
 }
 .clf-confirm-ok:hover { background: #6d28d9; }
 
+/* Escalation email preview inside confirm modal */
+.clf-email-section {
+  margin: 4px 0 18px;
+  border: 1.5px solid #e0e7ff;
+  border-radius: 8px;
+  background: #f5f3ff;
+  padding: 12px 14px;
+}
+.clf-email-section-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: #6d28d9; margin-bottom: 10px;
+}
+.clf-recip-row {
+  display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px;
+}
+.clf-recip-label {
+  font-size: 11px; font-weight: 700; color: #475569;
+  min-width: 60px; padding-top: 3px; white-space: nowrap;
+}
+.clf-recip-tags { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+.clf-recip-tag {
+  display: inline-block; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 20px; white-space: nowrap;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+}
+.clf-recip-tag-to { background: #ede9fe; color: #5b21b6; border: 1px solid #c4b5fd; }
+.clf-recip-tag-cc { background: #dbeafe; color: #1d4ed8; border: 1px solid #93c5fd; }
+.clf-recip-none   { font-size: 11px; color: #94a3b8; font-style: italic; padding-top: 3px; }
+.clf-recip-extra  { margin-top: 6px; }
+.clf-extra-input {
+  flex: 1; font-size: 12px; padding: 5px 10px;
+  border: 1.5px solid #c4b5fd; border-radius: 6px;
+  background: #fff; color: #1e293b; outline: none;
+}
+.clf-extra-input:focus { border-color: #7c3aed; }
+.clf-extra-input::placeholder { color: #94a3b8; }
+
 /* Success screen — warranty/regular tags */
 .multi-id-tag { font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 700; }
 .multi-id-tag.warranty { background: #fee2e2; color: #991b1b; }
