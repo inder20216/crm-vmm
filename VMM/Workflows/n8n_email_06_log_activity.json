@@ -1,5 +1,5 @@
 {
-  "name": "VMM Email - Log Activity on Complaint",
+  "name": "VMM Email - Log Activity",
   "nodes": [
     {
       "parameters": {
@@ -10,20 +10,20 @@
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 352],
-      "id": "email06-node-0001",
-      "name": "Webhook POST vmm-email-log-activity",
+      "position": [-5360, 1024],
+      "id": "a1b2c3d4-e5f6-7890-aaaa-000000000001",
+      "name": "LogAct Webhook",
       "webhookId": "vmm-email-log-activity"
     },
     {
       "parameters": {
-        "jsCode": "const b   = $input.first().json.body || {};\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst complaintNo = esc(b.complaintNo || b.complaintId || '').trim();\nconst remarks     = esc(b.remarks || '');\nconst newStatus   = esc(b.newStatus || '');\nconst newEdc      = esc(b.newEdc || '');\nconst uid         = parseInt(b.uid || 1);\n\nif (!complaintNo) return [{ json: { error: 'complaintNo required' } }];\n\nconst sqlFind = `SELECT c.id FROM vmm_complaints c WHERE c.complaintno = '${complaintNo}' AND c.is_deleted = 'No' LIMIT 1`;\n\nreturn [{ json: { sqlFind, complaintNo, remarks, newStatus, newEdc, uid } }];"
+        "jsCode": "const b   = $input.first().json.body || {};\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst complaintNo     = esc(b.complaintNo || b.complaintId || '').trim();\nconst remarks         = esc(b.remarks || '');\nconst newStatus       = esc(b.newStatus || '');\nconst newEdc          = esc(b.newEdc || '');\nconst escalationLevel = esc(b.escalationLevel || '');\nconst reasonForDelay  = esc(b.reasonForDelay || '');\nconst uid             = parseInt(b.uid || 1);\n\nif (!complaintNo) return [{ json: { error: 'complaintNo required' } }];\n\n// Also fetch current status so we can preserve it on plain updates\nconst sqlFind = `SELECT c.id, COALESCE(cl.status, 'Open') AS current_status FROM vmm_complaints c LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.complaintno = '${complaintNo}' AND c.is_deleted = 'No' LIMIT 1`;\n\nreturn [{ json: { sqlFind, complaintNo, remarks, newStatus, newEdc, escalationLevel, reasonForDelay, uid } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [460, 352],
-      "id": "email06-node-0002",
-      "name": "Prepare"
+      "position": [-5136, 1024],
+      "id": "a1b2c3d4-e5f6-7890-aaaa-000000000002",
+      "name": "LogAct Prepare"
     },
     {
       "parameters": {
@@ -33,20 +33,20 @@
       },
       "type": "n8n-nodes-base.mySql",
       "typeVersion": 2.4,
-      "position": [680, 352],
-      "id": "email06-node-0003",
-      "name": "Find Complaint",
+      "position": [-4912, 1024],
+      "id": "a1b2c3d4-e5f6-7890-aaaa-000000000003",
+      "name": "LogAct Find",
       "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
     },
     {
       "parameters": {
-        "jsCode": "const prev  = $('Prepare').first().json;\nconst row   = $input.first()?.json;\n\nif (!row || !row.id) {\n  return [{ json: { found: false, message: `Complaint ${prev.complaintNo} not found`, insertLog: 'SELECT 1', updateEdc: null } }];\n}\n\nconst cid = row.id;\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\nconst statusToLog = prev.newStatus || 'Open';\nconst logRemarks  = prev.remarks || 'Update received';\n\nconst insertLog = `INSERT INTO vmm_complaintlogs (complaintid, remarks, status, uid, created, is_deleted) VALUES (${cid}, '${esc(logRemarks)}', '${esc(statusToLog)}', ${prev.uid}, NOW(), 'No')`;\n\nconst updateEdc = prev.newEdc\n  ? `UPDATE vmm_vendorescalations SET closuredate = '${esc(prev.newEdc)}' WHERE id = (SELECT MAX(id) FROM vmm_vendorescalations WHERE complaintid = ${cid})`\n  : null;\n\nreturn [{ json: { found: true, cid, complaintNo: prev.complaintNo, insertLog, updateEdc, statusToLog } }];"
+        "jsCode": "const prev = $('LogAct Prepare').first().json;\nconst row  = $input.first()?.json;\n\nif (!row || !row.id) {\n  return [{ json: { found: false, message: `Complaint ${prev.complaintNo} not found`, insertLog: 'SELECT 1', updateSql: 'SELECT 1' } }];\n}\n\nconst cid = row.id;\nconst esc = v => (v || '').toString().replace(/'/g, \"''\");\n\n// Preserve current DB status on plain updates; override for escalate/close\nconst statusToLog = prev.newStatus || row.current_status || 'Open';\nconst logRemarks  = prev.remarks || 'Update received';\n\nconst insertLog = `INSERT INTO vmm_complaintlogs (complaintid, remarks, status, uid, created, is_deleted) VALUES (${cid}, '${esc(logRemarks)}', '${esc(statusToLog)}', ${prev.uid}, NOW(), 'No')`;\n\n// Build UPDATE for EDC / escalation level on vmm_vendorescalations\nlet updateSql = 'SELECT 1';\nif (prev.newEdc || prev.escalationLevel) {\n  const setParts = [];\n  if (prev.newEdc)          setParts.push(`closuredate = '${esc(prev.newEdc)}'`);\n  if (prev.escalationLevel) setParts.push(`escalationlevel = '${esc(prev.escalationLevel)}'`);\n  // MySQL requires subquery alias to UPDATE from same table\n  updateSql = `UPDATE vmm_vendorescalations SET ${setParts.join(', ')} WHERE id = (SELECT max_id FROM (SELECT MAX(id) AS max_id FROM vmm_vendorescalations WHERE complaintid = ${cid}) t)`;\n}\n\nreturn [{ json: { found: true, cid, complaintNo: prev.complaintNo, insertLog, updateSql, statusToLog } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [900, 352],
-      "id": "email06-node-0004",
-      "name": "Build Queries"
+      "position": [-4688, 1024],
+      "id": "a1b2c3d4-e5f6-7890-aaaa-000000000004",
+      "name": "LogAct Build SQL"
     },
     {
       "parameters": {
@@ -56,33 +56,33 @@
       },
       "type": "n8n-nodes-base.mySql",
       "typeVersion": 2.4,
-      "position": [1120, 352],
-      "id": "email06-node-0005",
-      "name": "Insert Log",
+      "position": [-4464, 1024],
+      "id": "a1b2c3d4-e5f6-7890-aaaa-000000000005",
+      "name": "LogAct Insert Log",
       "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "={{ $('Build Queries').first().json.updateEdc || 'SELECT 1' }}",
+        "query": "={{ $('LogAct Build SQL').first().json.updateSql }}",
         "options": {}
       },
       "type": "n8n-nodes-base.mySql",
       "typeVersion": 2.4,
-      "position": [1340, 352],
-      "id": "email06-node-0006",
-      "name": "Update EDC",
+      "position": [-4240, 1024],
+      "id": "a1b2c3d4-e5f6-7890-aaaa-000000000006",
+      "name": "LogAct Update",
       "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
     },
     {
       "parameters": {
-        "jsCode": "const d = $('Build Queries').first().json;\nreturn [{ json: { success: d.found, found: d.found, complaintNo: d.complaintNo, status: d.statusToLog, message: d.found ? 'Activity logged successfully' : d.message } }];"
+        "jsCode": "const d = $('LogAct Build SQL').first().json;\nreturn [{ json: { success: d.found, found: d.found, complaintNo: d.complaintNo, status: d.statusToLog, message: d.found ? 'Activity logged successfully' : d.message } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1560, 352],
-      "id": "email06-node-0007",
-      "name": "Build Response"
+      "position": [-4016, 1024],
+      "id": "a1b2c3d4-e5f6-7890-aaaa-000000000007",
+      "name": "LogAct Build Response"
     },
     {
       "parameters": {
@@ -95,19 +95,19 @@
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1780, 352],
-      "id": "email06-node-0008",
-      "name": "Respond"
+      "position": [-3792, 1024],
+      "id": "a1b2c3d4-e5f6-7890-aaaa-000000000008",
+      "name": "LogAct Respond"
     }
   ],
   "connections": {
-    "Webhook POST vmm-email-log-activity": { "main": [[{ "node": "Prepare",        "type": "main", "index": 0 }]] },
-    "Prepare":        { "main": [[{ "node": "Find Complaint", "type": "main", "index": 0 }]] },
-    "Find Complaint": { "main": [[{ "node": "Build Queries",  "type": "main", "index": 0 }]] },
-    "Build Queries":  { "main": [[{ "node": "Insert Log",     "type": "main", "index": 0 }]] },
-    "Insert Log":     { "main": [[{ "node": "Update EDC",     "type": "main", "index": 0 }]] },
-    "Update EDC":     { "main": [[{ "node": "Build Response", "type": "main", "index": 0 }]] },
-    "Build Response": { "main": [[{ "node": "Respond",        "type": "main", "index": 0 }]] }
+    "LogAct Webhook":        { "main": [[{ "node": "LogAct Prepare",        "type": "main", "index": 0 }]] },
+    "LogAct Prepare":        { "main": [[{ "node": "LogAct Find",           "type": "main", "index": 0 }]] },
+    "LogAct Find":           { "main": [[{ "node": "LogAct Build SQL",      "type": "main", "index": 0 }]] },
+    "LogAct Build SQL":      { "main": [[{ "node": "LogAct Insert Log",     "type": "main", "index": 0 }]] },
+    "LogAct Insert Log":     { "main": [[{ "node": "LogAct Update",         "type": "main", "index": 0 }]] },
+    "LogAct Update":         { "main": [[{ "node": "LogAct Build Response", "type": "main", "index": 0 }]] },
+    "LogAct Build Response": { "main": [[{ "node": "LogAct Respond",        "type": "main", "index": 0 }]] }
   },
   "pinData": {},
   "meta": {
