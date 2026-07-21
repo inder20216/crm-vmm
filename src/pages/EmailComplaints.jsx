@@ -90,6 +90,8 @@ function inferTagFromCategories(cats) {
   if (cats.some(c => c === 'Case Closed'))  return { type: 'closed',    label: 'Case Closed' };
   if (cats.some(c => c === 'Case Updated')) return { type: 'updated',   label: 'Case Updated' };
   if (cats.some(c => c === 'WIP'))          return { type: 'wip',       label: 'In Progress' };
+  const extra = cats.filter(c => c !== 'New CRM');
+  if (extra.length) return { type: 'other', label: extra.join(', ') };
   return null;
 }
 
@@ -172,8 +174,8 @@ export default function EmailComplaints() {
   const itemIdRef = useRef(1);
   const [complaintItems, setComplaintItems] = useState([{
     id: 1, productName: '', vendorName: '', contractType: '', vendorEmail: '',
-    natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '',
-    amcLookup: 'idle', selectedAttachIndices: null,
+    natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '', removedAutoCC: [],
+    amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [],
   }]);
   const [emTab,           setEmTab]           = useState('form');  // 'form' | 'matrix'
   const [escalationMatrix, setEscalationMatrix] = useState([]);
@@ -376,7 +378,7 @@ export default function EmailComplaints() {
   // Re-run employee lookup whenever the employee code field is edited
   useEffect(() => {
     if (!parsed) return;
-    const code = (parsedEdits.employeeCode || '').trim().toUpperCase();
+    const code = (parsedEdits.employeeCode || '').toString().trim().toUpperCase();
     if (!code) { setEmpLookupStatus('idle'); setResolvedEmpName(''); return; }
     setEmpLookupStatus('loading');
     const t = setTimeout(async () => {
@@ -393,6 +395,26 @@ export default function EmailComplaints() {
     return () => clearTimeout(t);
   }, [parsedEdits.employeeCode]); // eslint-disable-line
 
+  // Fallback: if no employee code but mobile is present, try lookup by mobile
+  useEffect(() => {
+    if (!parsed) return;
+    if (parsedEdits.employeeCode) return; // code-based lookup already handles this
+    const mobile = (parsedEdits.contactNumber || '').replace(/\D/g, '');
+    if (mobile.length !== 10) return;
+    setEmpLookupStatus('loading');
+    const t = setTimeout(async () => {
+      try {
+        const empRes = await vmm.lookupEmployeeByMobile(mobile);
+        if (empRes?.found && empRes.employee?.name) {
+          setResolvedEmpName(empRes.employee.name);
+          setEmpLookupStatus('found');
+          if (empRes.employee.code)
+            setParsedEdits(prev => ({ ...prev, employeeCode: String(empRes.employee.code) }));
+        } else { setResolvedEmpName(''); setEmpLookupStatus('not-found'); }
+      } catch { setResolvedEmpName(''); setEmpLookupStatus('not-found'); }
+    }, 800);
+    return () => clearTimeout(t);
+  }, [parsedEdits.contactNumber, parsedEdits.employeeCode]); // eslint-disable-line
 
   const switchTab = (tab) => {
     if (tab === activeTab) return;
@@ -430,7 +452,7 @@ export default function EmailComplaints() {
     setToInput('');
     setCcInput('');
     setShowReplyEditor(false);
-    setComplaintItems([{ id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null }]);
+    setComplaintItems([{ id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [] }]);
     setEmTab('form');
     setEmSearch('');
     setEmRegion('');
@@ -457,7 +479,7 @@ export default function EmailComplaints() {
         vendorName:      p.vendorName      || '',
         natureOfProblem: matchedNature?.nature  || p.natureOfProblem || '',
         complaintType:   matchedNature?.type    || p.complaintType   || '',
-        contractType: '', vendorEmail: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null,
+        contractType: '', vendorEmail: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [],
       }]);
       if (p.employeeCode) {
         setEmpLookupStatus(p.employeeName ? 'found' : 'idle');
@@ -645,7 +667,7 @@ export default function EmailComplaints() {
   const removeItem = (id) => setComplaintItems(prev => prev.filter(x => x.id !== id));
   const addItem = () => setComplaintItems(prev => [
     ...prev,
-    { id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null },
+    { id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [] },
   ]);
   const lookupAmcForItem = async (id, productName) => {
     const storeCode = parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode || '';
@@ -798,15 +820,15 @@ export default function EmailComplaints() {
           + '<p style="font-size:11px;color:#64748b">Open Mind Services Limited — VMM CRM</p></div>';
         const OWN = 'vmm.helpdesk@openmind.in';
         const threadCCs = [...new Set(threadMessages.flatMap(m => m.cc || []).filter(cc => cc && cc.toLowerCase() !== OWN))].join(';');
-        const sortedMsgs = [...threadMessages].sort((a, b) => new Date(b.receivedDateTime) - new Date(a.receivedDateTime));
-        const replyMsgId = sortedMsgs[0]?.id || selected.id;
-        await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, ccRecipients: threadCCs }).catch(() => {});
+        // Always reply to the selected (incoming) email, not the latest thread message which may be outbound
+        const replyMsgId = selected.id;
+        await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, ccRecipients: threadCCs })
+          .catch(err => { console.warn('Confirmation reply failed:', err); showToast('Complaint logged but confirmation email could not be sent', 'warn'); });
         vmm.categorizeEmail(replyMsgId, ['Case Logged', 'New CRM']).catch(() => {});
         const wipMatch = wipList.find(w =>
           w.id === selected.id ||
           (w.conversationId && selected.conversationId && w.conversationId === selected.conversationId)
         );
-        const wipIdToResolve = wipMatch?.id || selected.id;
         if (wipMatch && wipMatch.id !== replyMsgId) {
           vmm.categorizeEmail(wipMatch.id, ['Case Logged', 'New CRM']).catch(() => {});
         }
@@ -827,15 +849,20 @@ export default function EmailComplaints() {
             attachmentLinks: itemAttachments,
             extraToEmails: item.extraEscTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
             extraCcEmails: item.extraEscCc.split(/[;,]/).map(s => s.trim()).filter(Boolean),
+            skipSM: (item.removedAutoCC || []).includes('SM'),
+            skipHO: (item.removedAutoCC || []).includes('HO'),
+            skipFM: (item.removedAutoCC || []).includes('FM'),
           }).catch(() => {});
         }
         claimEmail(selected.id, 'release');
         tagEmail(selected.id, 'logged', `Logged • ${nos} • Agent ${agentId.slice(-4)}`);
-        setWipList(prev => prev.filter(w =>
-          w.id !== wipIdToResolve &&
-          !(selected.conversationId && w.conversationId && w.conversationId === selected.conversationId)
-        ));
-        vmm.resolveWip(wipIdToResolve).catch(() => {});
+        if (wipMatch) {
+          setWipList(prev => prev.filter(w =>
+            w.id !== wipMatch.id &&
+            !(selected.conversationId && w.conversationId && w.conversationId === selected.conversationId)
+          ));
+          vmm.resolveWip(wipMatch.id).catch(() => {});
+        }
         setInboxEmails(prev => prev.find(e => e.id === selected.id) ? prev : [{ ...selected, hasStoreCode: !!selected.storeCode }, ...prev]);
         setLogSuccess({
           results: allResults.map(r => r.res),
@@ -1286,6 +1313,7 @@ export default function EmailComplaints() {
                         {tag.type === 'closed'      && '✓ '}
                         {tag.type === 'wip'         && '⋯ '}
                         {tag.type === 'nonrelevant' && '✕ '}
+                        {tag.type === 'other'       && '🏷 '}
                         {tag.label}
                       </span>
                       {tag.time && (
@@ -2140,18 +2168,27 @@ export default function EmailComplaints() {
                           <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f0fdf4', margin: '8px 0' }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 8 }}>⚡ Escalation — FM &amp; HO Team</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                              <div style={{ fontSize: 12, color: '#15803d', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ background: '#dcfce7', color: '#166534', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>TO</span>
-                                Facility Manager (auto from store lookup)
-                              </div>
-                              <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
-                                {itemHoEmail} (HO)
-                              </div>
-                              <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
-                                Store Manager (auto)
-                              </div>
+                              {!(item.removedAutoCC || []).includes('FM') && (
+                                <div style={{ fontSize: 12, color: '#15803d', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <span style={{ background: '#dcfce7', color: '#166534', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>TO</span>
+                                  Facility Manager (auto from store lookup)
+                                  <button onClick={() => updateItem(item.id, { removedAutoCC: [...(item.removedAutoCC || []), 'FM'] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title="Remove FM">✕</button>
+                                </div>
+                              )}
+                              {!(item.removedAutoCC || []).includes('HO') && itemHoEmail && (
+                                <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
+                                  {itemHoEmail} (HO)
+                                  <button onClick={() => updateItem(item.id, { removedAutoCC: [...(item.removedAutoCC || []), 'HO'] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title="Remove HO">✕</button>
+                                </div>
+                              )}
+                              {!(item.removedAutoCC || []).includes('SM') && (
+                                <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
+                                  Store Manager (auto)
+                                  <button onClick={() => updateItem(item.id, { removedAutoCC: [...(item.removedAutoCC || []), 'SM'] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title="Remove SM">✕</button>
+                                </div>
+                              )}
                             </div>
                             <div style={{ marginTop: 10 }}>
                               <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>Extra CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span></div>
@@ -2172,10 +2209,13 @@ export default function EmailComplaints() {
                               <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(auto)</span></div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                 {[['SM','#dbeafe','#1d4ed8','Store Manager (auto)'],['HO','#fef3c7','#92400e',itemHoEmail],['FM','#dcfce7','#166534','Facility Manager (auto)']].map(([tag,bg,fg,txt]) => (
-                                  <div key={tag} style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <span style={{ background: bg, color: fg, borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>{tag}</span>
-                                    {txt}
-                                  </div>
+                                  !(item.removedAutoCC || []).includes(tag) && (
+                                    <div key={tag} style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                      <span style={{ background: bg, color: fg, borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>{tag}</span>
+                                      {txt}
+                                      <button onClick={() => updateItem(item.id, { removedAutoCC: [...(item.removedAutoCC || []), tag] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title={`Remove ${tag}`}>✕</button>
+                                    </div>
+                                  )
                                 ))}
                               </div>
                             </div>

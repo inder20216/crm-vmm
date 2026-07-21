@@ -258,3 +258,178 @@
   .ntr-layout { flex-direction: column; }
   .ntr-left   { width: 100%; border-right: none; border-bottom: 1px solid #e2e8f0; max-height: 260px; }
 }
+
+/* ── Primary button ── */
+.ntr-btn-primary {
+  background: #1d4ed8;
+  color: #fff;
+  border: none;
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.ntr-btn-primary:hover:not(:disabled) { background: #1e40af; }
+.ntr-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Upload panel ── */
+.ntr-upload-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  justify-content: center;
+}
+
+.ntr-upload-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 28px 32px;
+  width: 100%;
+  max-width: 860px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.ntr-upload-card-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 12px;
+}
+
+.ntr-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ntr-form-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.ntr-form-input {
+  border: 1px solid #d1d5db;
+  border-radius: 7px;
+  padding: 7px 11px;
+  font-size: 13px;
+  color: #1e293b;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.ntr-form-input:focus { border-color: #2563eb; }
+
+.ntr-store-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.ntr-store-found  { font-size: 13px; font-weight: 600; color: #065f46; }
+.ntr-store-email  { font-weight: 400; color: #374151; }
+.ntr-store-error  { font-size: 13px; color: #dc2626; font-weight: 600; }
+.ntr-store-hint   { font-size: 12px; color: #64748b; }
+
+.ntr-file-input {
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+}
+.ntr-file-input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.ntr-hint-text  { font-size: 12px; color: #64748b; }
+.ntr-form-note  { font-size: 11px; color: #94a3b8; background: #f8fafc; border-radius: 6px; padding: 10px 14px; line-height: 1.6; }
+
+/* ── Preview ── */
+.ntr-preview-card { max-width: 1060px; }
+
+.ntr-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  font-size: 12.5px;
+  color: #374151;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.ntr-preview-meta strong { color: #0f172a; }
+
+.ntr-preview-summary {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.ntr-summary-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  flex: 1;
+  min-width: 220px;
+}
+.ntr-summary-valid   { background: #d1fae5; border: 1px solid #6ee7b7; }
+.ntr-summary-invalid { background: #fee2e2; border: 1px solid #fca5a5; }
+.ntr-summary-count   { font-size: 26px; font-weight: 800; color: #0f172a; }
+.ntr-summary-label   { font-size: 12px; font-weight: 600; color: #374151; line-height: 1.4; }
+
+.ntr-preview-section { display: flex; flex-direction: column; gap: 8px; }
+.ntr-preview-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.ntr-invalid-title { color: #991b1b; }
+
+.ntr-invalid-list { display: flex; flex-direction: column; gap: 4px; }
+.ntr-invalid-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+.ntr-invalid-artno {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #991b1b;
+  font-size: 12px;
+  min-width: 110px;
+}
+.ntr-invalid-name { font-size: 13px; color: #7f1d1d; }
+
+.ntr-preview-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid #f1f5f9;
+}
+
+/* ── Success ── */
+.ntr-success-card {
+  align-items: center;
+  text-align: center;
+  max-width: 520px;
+  padding: 48px 40px;
+  margin: 0 auto;
+}
+.ntr-success-icon  { font-size: 48px; color: #059669; background: #d1fae5; width: 72px; height: 72px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto; }
+.ntr-success-title { font-size: 20px; font-weight: 800; color: #0f172a; }
+.ntr-success-reqno { font-size: 22px; font-weight: 700; color: #0f766e; letter-spacing: 1px; }
+.ntr-success-sub   { font-size: 13px; color: #64748b; line-height: 1.6; margin: 0; }
+.ntr-success-actions { display: flex; gap: 10px; justify-content: center; margin-top: 4px; }

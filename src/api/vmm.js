@@ -27,7 +27,8 @@ async function post(base, path, body) {
 export const vmm = {
   // ── Self-hosted n8n ──────────────────────────────────
   lookupStore:       (code)   => get(BASE, 'vmm-sp-store',          { code }),
-  lookupEmployee:    (code)   => get(BASE, 'vmm-sp-employee',        { code }),
+  lookupEmployee:         (code)   => get(BASE, 'vmm-sp-employee', { code }),
+  lookupEmployeeByMobile: (mobile) => get(BASE, 'vmm-sp-employee', { mobile }),
   getProducts:       ()       => get(BASE, 'vmm-sp-products'),
   getNatures:        ()       => get(BASE, 'vmm-sp-natures'),
   getVendors:        ()       => get(BASE, 'vmm-sp-vendors'),
@@ -69,8 +70,12 @@ export const vmm = {
   resolveWip:     (emailId) => post(BASE, 'vmm-wip-resolve', { emailId }),
 
   // ── Non-Trading Requests ─────────────────────────────
-  listNtr:     ()    => get(BASE,  'vmm-ntr-list'),
-  getNtrItems: (id)  => get(BASE,  'vmm-ntr-items', { requestId: id }),
+  listNtr:             ()      => get(BASE,  'vmm-ntr-list'),
+  getNtrItems:         (id)    => get(BASE,  'vmm-ntr-items', { requestId: id }),
+  validateNtrArticles: (items) => post(BASE, 'vmm-ntr-validate', { items }),
+  saveNtr:             (data)  => post(BASE, 'vmm-ntr-save',     data),
+  fetchNtrMasterXlsx:  ()      => post(BASE, 'vmm-ntr-fetch-xlsx', {}),
+  sendNtrEmail:        (data)  => graph.sendNtrEmailDirect(data),
 
   // ── User Management (MySQL-backed roles) ─────────────
   getUserRole:  (email)  => get(BASE, 'vmm-user-role',   { email }),

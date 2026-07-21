@@ -303,6 +303,7 @@
 .ec-toast-ok   { background: #dcfce7; color: #166534; }
 .ec-toast-err  { background: #fee2e2; color: #991b1b; }
 .ec-toast-info { background: #dbeafe; color: #1e40af; }
+.ec-toast-warn { background: #fef9c3; color: #854d0e; }
 
 .ec-layout {
   display: grid;
@@ -429,6 +430,7 @@
 .ec-tag-badge-closed      { background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7; }
 .ec-tag-badge-wip         { background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd; }
 .ec-tag-badge-nonrelevant { background: #f1f5f9; color: #94a3b8; border: 1px solid #e2e8f0; }
+.ec-tag-badge-other       { background: #f0f9ff; color: #0369a1; border: 1px solid #bae6fd; }
 
 .ec-email-row.tagged-logged      { border-left: 4px solid #22c55e; }
 .ec-email-row.tagged-updated     { border-left: 4px solid #3b82f6; }
@@ -436,6 +438,7 @@
 .ec-email-row.tagged-closed      { border-left: 4px solid #10b981; }
 .ec-email-row.tagged-wip         { border-left: 4px solid #8b5cf6; }
 .ec-email-row.tagged-nonrelevant { opacity: .55; border-left: 4px solid #cbd5e1; }
+.ec-email-row.tagged-other       { border-left: 4px solid #0ea5e9; }
 .ec-email-row.tagged-nonrelevant .ec-email-subject { color: #94a3b8; text-decoration: line-through; }
 .ec-email-row.active.tagged-logged    { border-left: 4px solid #22c55e; }
 .ec-email-row.active.tagged-updated   { border-left: 4px solid #3b82f6; }

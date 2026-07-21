@@ -4,8 +4,8 @@ import { vmm } from '../api/vmm';
 
 const AuthContext = createContext(null);
 
-// Hardcoded super-admin — bypasses MySQL, always has full access
-const SUPER_ADMIN_EMAIL = 'inder@openmind.in';
+// Hardcoded super-admins — bypass MySQL, always have full access
+const SUPER_ADMIN_EMAILS = ['inder@openmind.in', 'amandeep@openmind.in'];
 
 export function AuthProvider({ children }) {
   const { accounts } = useMsal();
@@ -21,8 +21,8 @@ export function AuthProvider({ children }) {
     const msEmail = accounts[0].username;
     const msName  = accounts[0].name || msEmail;
 
-    // Super admin gets in immediately without a DB lookup
-    if (msEmail.toLowerCase() === SUPER_ADMIN_EMAIL) {
+    // Super admins get in immediately without a DB lookup
+    if (SUPER_ADMIN_EMAILS.includes(msEmail.toLowerCase())) {
       setCurrentUser({ id: 0, name: msName, email: msEmail, role: 'admin', type: 'superadmin' });
       return;
     }

@@ -3,6 +3,10 @@ import { AC_VENDOR_MAP, LIFT_VENDOR_MAP, getSmEmail, HO_POC, getVendorEscalation
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 
+// ── TEST MODE — set true to redirect ALL outbound emails to TEST_EMAIL ────────
+const TEST_MODE  = false;
+const TEST_EMAIL = 'inder@openmind.in';
+
 // Delta link persisted in sessionStorage so refresh survives page reloads within the session
 const DELTA_KEY = 'vmm_inbox_delta_link';
 
@@ -273,14 +277,19 @@ export async function replyOnThread({ messageId, htmlBody, toEmail, ccEmails }) 
   const token = await getAccessToken();
   const base = `${GRAPH}/users/${encodeURIComponent(SHARED_MAILBOX)}`;
 
+  const toList = TEST_MODE
+    ? [{ emailAddress: { address: TEST_EMAIL, name: 'Test Redirect' } }]
+    : buildRecipients(toEmail);
+  const ccList = TEST_MODE ? [] : buildRecipients(ccEmails);
+
   const res = await fetch(`${base}/messages/${messageId}/reply`, {
     method: 'POST',
     headers: authHeader(token),
     body: JSON.stringify({
       message: {
         body: { contentType: 'HTML', content: htmlBody },
-        toRecipients: buildRecipients(toEmail),
-        ccRecipients: buildRecipients(ccEmails),
+        ...(toList.length ? { toRecipients: toList } : {}),
+        ...(ccList.length ? { ccRecipients: ccList } : {}),
       },
       comment: '',
     }),
@@ -326,16 +335,24 @@ const ESCALATION_TEAM = ['inder@openmind.in', 'deepansh@openmind.in'];
 async function sendFromSharedMailbox({ subject, htmlBody, toAddresses, ccAddresses = [] }) {
   const token = await getAccessToken();
   const base = `${GRAPH}/users/${encodeURIComponent(SHARED_MAILBOX)}`;
+
+  let finalTo = toAddresses, finalCc = ccAddresses, finalSubject = subject;
+  if (TEST_MODE) {
+    finalSubject = `[TEST] ${subject}`;
+    finalTo = [{ emailAddress: { address: TEST_EMAIL, name: 'Test Redirect' } }];
+    finalCc = [];
+  }
+
   const draftRes = await fetch(`${base}/messages`, {
     method: 'POST',
     headers: authHeader(token),
     body: JSON.stringify({
-      subject,
+      subject: finalSubject,
       body: { contentType: 'HTML', content: htmlBody },
-      toRecipients: toAddresses.map(a =>
+      toRecipients: finalTo.map(a =>
         typeof a === 'string' ? { emailAddress: { address: a } } : a
       ),
-      ccRecipients: ccAddresses.map(a =>
+      ccRecipients: finalCc.map(a =>
         typeof a === 'string' ? { emailAddress: { address: a } } : a
       ),
     }),
@@ -380,7 +397,7 @@ function resolveVendorEmail(storeCode, productName, vendorName, storeState, stor
 }
 
 // ── Resolve escalation recipients (exported so form can preview before sending) ─
-export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity }) {
+export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity, skipSM = false, skipHO = false, skipFM = false }) {
   const vendorResolved = resolveVendorEmail(storeCode, productName, vendorName, storeState, storeCity);
   const smEmail        = getSmEmail(storeCode);
   const hoPoc          = HO_POC[productName] || HO_POC['DEFAULT'];
@@ -394,19 +411,17 @@ export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, 
 
   let toAddresses, ccAddresses;
   if (isVendorCase) {
-    // Vendor escalation: TO vendor, CC FM + SM + HO
     toAddresses = [makeAddr(vendorResolved.email, resolvedVendor)];
     ccAddresses = [];
-    if (fmEmail)      addUniq(ccAddresses, fmEmail, fmName);
-    if (smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
-    if (hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
+    if (!skipFM && fmEmail)      addUniq(ccAddresses, fmEmail, fmName);
+    if (!skipSM && smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
+    if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
   } else {
-    // FM/HO escalation: TO FM, CC SM + HO
     toAddresses = [];
-    if (fmEmail) addUniq(toAddresses, fmEmail, fmName);
+    if (!skipFM && fmEmail) addUniq(toAddresses, fmEmail, fmName);
     ccAddresses = [];
-    if (smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
-    if (hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
+    if (!skipSM && smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
+    if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
   }
 
   return { toAddresses, ccAddresses, isVendorCase, resolvedVendor };
@@ -418,6 +433,7 @@ export async function sendEscalationEmailDirect({
   vendorName, productName, natureOfComplaint, complaints = [],
   extraToEmails = [], extraCcEmails = [],
   attachmentLinks = [],
+  skipSM = false, skipHO = false, skipFM = false,
 }) {
   const nos = complaints.map(c => c.complaintno).join(', ');
   const isMultiple = complaints.length > 1;
@@ -425,6 +441,7 @@ export async function sendEscalationEmailDirect({
   // Resolve routing via the shared function
   const { toAddresses, ccAddresses, isVendorCase, resolvedVendor } = resolveEscalationRecipients({
     storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity,
+    skipSM, skipHO, skipFM,
   });
 
   // Merge any user-added extras
@@ -491,6 +508,88 @@ export async function sendEscalationEmailDirect({
 </div>`;
 
   return sendFromSharedMailbox({ subject, htmlBody, toAddresses, ccAddresses });
+}
+
+// ── NTR confirmation email ────────────────────────────────────────────────────
+export async function sendNtrEmailDirect({
+  storeCode, storeName, storeEmail,
+  requestNo, invalidItems = [],
+  attachmentBase64 = '',
+}) {
+  const invalidBlock = invalidItems.length
+    ? `<p style="margin:16px 0 6px">The following article numbers were not found in the non-trading master file:</p>
+       <table style="border-collapse:collapse;margin-bottom:16px">
+         ${invalidItems.map(i =>
+           `<tr>
+              <td style="background:#fef2f2;color:#991b1b;padding:5px 12px;border:1px solid #fecaca;font-variant-numeric:tabular-nums;font-weight:600">${i.articleNo}</td>
+              <td style="background:#fef2f2;color:#991b1b;padding:5px 12px;border:1px solid #fecaca">${i.itemName}</td>
+            </tr>`
+         ).join('')}
+       </table>`
+    : '';
+
+  const htmlBody = `<div style="font-family:Arial,sans-serif;font-size:13px;line-height:1.7;color:#1e293b;max-width:680px">
+  <p>Dear SM,</p>
+  <p>Your request for <strong>NON-TRADING CONSUMABLES</strong> articles has been logged and forwarded to the HO team. You will receive the STO number within the next 7 to 10 days from the HO team.</p>
+  <p>Your request number is: <strong style="font-size:15px;color:#0f766e">${requestNo}</strong></p>
+  <p>Please note that carry bags, cash rolls, packing pouches, and shopping baskets are directly sent from the HO team based on system stock and will not be forwarded as per the company policy.</p>
+  <p>All hangers and uniforms will be allocated by the procurement team after the approval of ZFM.</p>
+  ${invalidBlock}
+  <p>Regards,<br/><strong>VMM Helpdesk</strong><br/>Open Mind Services Limited</p>
+</div>`;
+
+  const subject = `Re: NT consumables Requirement - ${storeCode} ${storeName}`;
+
+  const toAddresses = TEST_MODE
+    ? [{ emailAddress: { address: TEST_EMAIL, name: 'Test Redirect' } }]
+    : [{ emailAddress: { address: storeEmail } }];
+
+  const ccAddresses = TEST_MODE
+    ? []
+    : [{ emailAddress: { address: 'Pooja@vishalretail.co.in' } }];
+
+  const finalSubject = TEST_MODE ? `[TEST] ${subject}` : subject;
+
+  const token = await getAccessToken();
+  const base  = `${GRAPH}/users/${encodeURIComponent(SHARED_MAILBOX)}`;
+
+  // 1. Create draft
+  const draftRes = await fetch(`${base}/messages`, {
+    method:  'POST',
+    headers: authHeader(token),
+    body:    JSON.stringify({
+      subject:      finalSubject,
+      body:         { contentType: 'HTML', content: htmlBody },
+      toRecipients: toAddresses,
+      ccRecipients: ccAddresses,
+    }),
+  });
+  if (!draftRes.ok) throw new Error(`NTR draft failed: ${draftRes.status}`);
+  const draft = await draftRes.json();
+
+  // 2. Attach XLSX if available
+  if (attachmentBase64) {
+    const attRes = await fetch(`${base}/messages/${draft.id}/attachments`, {
+      method:  'POST',
+      headers: authHeader(token),
+      body:    JSON.stringify({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name:          'Non Trading Master File.xlsx',
+        contentType:   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        contentBytes:  attachmentBase64,
+      }),
+    });
+    if (!attRes.ok) throw new Error(`NTR attachment failed: ${attRes.status}`);
+  }
+
+  // 3. Send
+  const sendRes = await fetch(`${base}/messages/${draft.id}/send`, {
+    method:  'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!sendRes.ok) throw new Error(`NTR send failed: ${sendRes.status}`);
+
+  return { success: true };
 }
 
 // ── Closure email ─────────────────────────────────────────────────────────────
