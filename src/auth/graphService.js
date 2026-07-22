@@ -292,6 +292,7 @@ export async function replyOnThread({ messageId, htmlBody, toEmail, ccEmails }) 
     return true;
   });
 
+  // Graph API: do NOT send both message.body and comment — use one or the other
   const res = await fetch(`${base}/messages/${messageId}/reply`, {
     method: 'POST',
     headers: authHeader(token),
@@ -301,7 +302,6 @@ export async function replyOnThread({ messageId, htmlBody, toEmail, ccEmails }) 
         ...(toList.length ? { toRecipients: toList } : {}),
         ...(ccList.length ? { ccRecipients: ccList } : {}),
       },
-      comment: '',
     }),
   });
   if (!res.ok) {
@@ -443,32 +443,48 @@ export async function sendEscalationEmailDirect({
 }) {
   const nos = complaints.map(c => c.complaintno).join(', ');
   const isMultiple = complaints.length > 1;
-
-  // No vendor email entered — skip escalation silently
-  if (!manualVendorEmail) return;
-
-  // Resolve routing via the shared function
-  const { toAddresses, ccAddresses, isVendorCase, resolvedVendor } = resolveEscalationRecipients({
-    storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity,
-    skipSM, skipHO, skipFM, manualVendorEmail,
-  });
-
-  // Merge any user-added extras
+  const makeAddr = (email, name) => ({ emailAddress: { address: email, name: name || '' } });
   const addUniq = (list, email, name) => {
     if (email && !list.some(x => x.emailAddress.address.toLowerCase() === email.toLowerCase()))
-      list.push({ emailAddress: { address: email, name: name || '' } });
+      list.push(makeAddr(email, name));
   };
+
+  const isVendorCase = !!manualVendorEmail;
+  let toAddresses = [];
+  let ccAddresses = [];
+
+  if (isVendorCase) {
+    // Vendor-based: TO = vendor email(s), CC = SM + FM + HO
+    const resolved = resolveEscalationRecipients({
+      storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity,
+      skipSM, skipHO, skipFM, manualVendorEmail,
+    });
+    toAddresses = resolved.toAddresses;
+    ccAddresses = resolved.ccAddresses;
+  } else {
+    // FM-based: TO = FM email, CC = store email + HO POC
+    if (!fmEmail) return; // no FM email — nothing to send
+    const hoPoc = HO_POC[productName] || HO_POC['DEFAULT'];
+    toAddresses = [makeAddr(fmEmail, fmName || '')];
+    if (!skipSM) { const smEmail = getSmEmail(storeCode); if (smEmail) addUniq(ccAddresses, smEmail, `SM ${storeCode}`); }
+    if (storeEmail) addUniq(ccAddresses, storeEmail, storeName || '');
+    if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
+  }
+
+  // Merge any user-added extras
   const extrasInput = v => (Array.isArray(v) ? v.join(',') : (v || ''));
   buildRecipients(extrasInput(extraToEmails)).forEach(r => addUniq(toAddresses, r.emailAddress.address, r.emailAddress.name));
   buildRecipients(extrasInput(extraCcEmails)).forEach(r => addUniq(ccAddresses, r.emailAddress.address, r.emailAddress.name));
 
-  // Strip from CC any address already in TO (no duplicates across lists)
+  // Strip from CC any address already in TO
   const toSet = new Set(toAddresses.map(r => r.emailAddress.address.toLowerCase()));
   const finalCC = ccAddresses.filter(r => !toSet.has(r.emailAddress.address.toLowerCase()));
 
   const subject = isMultiple
     ? `[VMM] New Complaints — ${storeCode} | ${productName} | ${complaints.length} Units`
     : `[VMM] New Complaint — ${storeCode} | ${productName} | ${nos}`;
+
+  const resolvedVendor = isVendorCase ? (vendorName || '—') : (fmName || 'FM');
 
   const rows = complaints.map((c, i) => `
     <tr style="background:${i % 2 === 0 ? '#fff' : '#f8fafc'}">
@@ -490,8 +506,8 @@ export async function sendEscalationEmailDirect({
       ${region ? `<tr><td style="padding:5px 0;color:#64748b">Region / Zone</td><td style="padding:5px 0">${region}${zone ? ' / ' + zone : ''}</td></tr>` : ''}
       <tr><td style="padding:5px 0;color:#64748b">Product</td><td style="padding:5px 0">${productName}</td></tr>
       ${natureOfComplaint ? `<tr><td style="padding:5px 0;color:#64748b">Nature</td><td style="padding:5px 0">${natureOfComplaint}</td></tr>` : ''}
-      <tr><td style="padding:5px 0;color:#64748b">Vendor</td><td style="padding:5px 0;font-weight:600;color:#1e1b4b">${resolvedVendor}</td></tr>
-      ${fmName ? `<tr><td style="padding:5px 0;color:#64748b">FM</td><td style="padding:5px 0">${fmName}${fmEmail ? ' &lt;' + fmEmail + '&gt;' : ''}</td></tr>` : ''}
+      <tr><td style="padding:5px 0;color:#64748b">${isVendorCase ? 'Vendor' : 'Assigned FM'}</td><td style="padding:5px 0;font-weight:600;color:#1e1b4b">${resolvedVendor}</td></tr>
+      ${isVendorCase && fmName ? `<tr><td style="padding:5px 0;color:#64748b">FM</td><td style="padding:5px 0">${fmName}${fmEmail ? ' &lt;' + fmEmail + '&gt;' : ''}</td></tr>` : ''}
     </table>
 
     <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -508,7 +524,7 @@ export async function sendEscalationEmailDirect({
     <div style="margin-top:20px;padding:12px 16px;background:#fef9c3;border-left:4px solid #f59e0b;border-radius:0 6px 6px 0;font-size:13px;color:#92400e">
       ${isVendorCase
         ? 'Please attend the complaint and confirm assignment within 24 hours.'
-        : 'Please coordinate with the concerned team and update the status within 24 hours.'}
+        : 'Please attend to this complaint and coordinate with the store within 24 hours.'}
     </div>
     ${attachmentLinks.length > 0 ? `
     <div style="margin-top:16px;padding:12px 16px;background:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:0 6px 6px 0;font-size:13px">

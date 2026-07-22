@@ -885,12 +885,14 @@ export default function EmailComplaints() {
           + '<p style="font-size:11px;color:#64748b">Open Mind Services Limited — VMM CRM</p></div>';
         const OWN = 'vmm.helpdesk@openmind.in';
         const origMsg = [...threadMessages].sort((a, b) => new Date(a.receivedDateTime) - new Date(b.receivedDateTime))[0];
-        const threadCCs = [...new Set((origMsg?.cc || '').split(',').map(c => c.trim()).filter(Boolean).filter(cc => cc.toLowerCase() !== OWN))].join(';');
-        // Collect HO POC emails for each product logged in this complaint
-        const hoCCs = [...new Set(
+        const threadCCList = (origMsg?.cc || '').split(',').map(c => c.trim()).filter(Boolean).filter(cc => cc.toLowerCase() !== OWN);
+        const hoCCList = [...new Set(
           allResults.map(({ item }) => (HO_POC[item.productName] || HO_POC['DEFAULT'])?.email).filter(Boolean)
         )];
-        const allCCs = [...new Set([...threadCCs.split(';').filter(Boolean), ...hoCCs])].join(';');
+        // Case-insensitive dedup: thread CCs first, then add HO only if not already present
+        const seenCC = new Map();
+        [...threadCCList, ...hoCCList].forEach(e => { if (e && !seenCC.has(e.toLowerCase())) seenCC.set(e.toLowerCase(), e); });
+        const allCCs = [...seenCC.values()].join(';');
         // Always reply to the selected (incoming) email, not the latest thread message which may be outbound
         const replyMsgId = selected.id;
         await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, toRecipients: selected.fromAddr || sharedPayload.storeEmail, ccRecipients: allCCs })
