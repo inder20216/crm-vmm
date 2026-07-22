@@ -832,7 +832,7 @@ export default function EmailComplaints() {
         const threadCCs = [...new Set((origMsg?.cc || '').split(',').map(c => c.trim()).filter(Boolean).filter(cc => cc.toLowerCase() !== OWN))].join(';');
         // Always reply to the selected (incoming) email, not the latest thread message which may be outbound
         const replyMsgId = selected.id;
-        await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, ccRecipients: threadCCs })
+        await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, toRecipients: selected.fromAddr || sharedPayload.storeEmail, ccRecipients: threadCCs })
           .catch(err => { console.warn('Confirmation reply failed:', err); showToast('Complaint logged but confirmation email could not be sent', 'warn'); });
         vmm.categorizeEmail(replyMsgId, ['Case Logged', 'New CRM']).catch(() => {});
         const wipMatch = wipList.find(w =>
@@ -863,7 +863,10 @@ export default function EmailComplaints() {
             skipSM: (item.removedAutoCC || []).includes('SM'),
             skipHO: (item.removedAutoCC || []).includes('HO'),
             skipFM: (item.removedAutoCC || []).includes('FM'),
-          }).catch(() => {});
+          }).catch(err => {
+            console.error('Escalation email failed:', err);
+            showToast(`Escalation email failed for ${item.vendorName || item.vendorEmail || 'vendor'} — ${err?.message || 'unknown error'}`, 'warn');
+          });
         }
         claimEmail(selected.id, 'release');
         tagEmail(selected.id, 'logged', `Logged • ${nos} • Agent ${agentId.slice(-4)}`);
@@ -1935,8 +1938,7 @@ export default function EmailComplaints() {
                           + quickReplyBody.split('\n').map(l => l.trim() ? `<p style="margin:0 0 8px">${l}</p>` : '<br/>').join('')
                           + '<hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0"/>'
                           + '<p style="font-size:11px;color:#64748b">Open Mind Services Limited — VMM CRM</p></div>';
-                        const sortedMsgs = [...threadMessages].sort((a, b) => new Date(b.receivedDateTime) - new Date(a.receivedDateTime));
-                        const replyMsgId = sortedMsgs[0]?.id || selected.id;
+                        const replyMsgId = selected.id;
                         await vmm.sendEmailReply({
                           messageId:    replyMsgId,
                           htmlBody,
@@ -2303,25 +2305,11 @@ export default function EmailComplaints() {
                                   ))}
                                 </div>
                               )}
-                              {/* Manual input — press Enter or blur to add */}
-                              <input className="ec-field-input" type="text" placeholder="Type email + Enter, or use Escalation tab…"
-                                onKeyDown={e => {
-                                  if (e.key === 'Enter' && e.target.value.trim()) {
-                                    e.preventDefault();
-                                    const newEmail = e.target.value.trim();
-                                    const current = (item.vendorEmail || '').split(',').map(x => x.trim()).filter(Boolean);
-                                    if (!current.includes(newEmail)) updateItem(item.id, { vendorEmail: [...current, newEmail].join(', ') });
-                                    e.target.value = '';
-                                  }
-                                }}
-                                onBlur={e => {
-                                  if (e.target.value.trim()) {
-                                    const newEmail = e.target.value.trim();
-                                    const current = (item.vendorEmail || '').split(',').map(x => x.trim()).filter(Boolean);
-                                    if (!current.includes(newEmail)) updateItem(item.id, { vendorEmail: [...current, newEmail].join(', ') });
-                                    e.target.value = '';
-                                  }
-                                }}
+                              {/* Controlled input — every keystroke saves; supports comma-separated for direct paste */}
+                              <input className="ec-field-input" type="text"
+                                placeholder="vendor@email.com  (comma-separate for multiple, or use Escalation tab above)"
+                                value={item.vendorEmail}
+                                onChange={e => updateItem(item.id, { vendorEmail: e.target.value })}
                                 style={{ background: '#fff' }} />
                               {!item.vendorEmail && <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 3 }}>⚠ No escalation email will be sent without a vendor email</div>}
                             </div>
