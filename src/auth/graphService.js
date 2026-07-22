@@ -177,7 +177,7 @@ export async function searchEmails(q) {
 export async function fetchThread(conversationId) {
   const token = await getAccessToken();
   const mailbox = encodeURIComponent(SHARED_MAILBOX);
-  const SELECT = 'id,subject,from,sender,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,bodyPreview,body,conversationId,isRead,hasAttachments,categories';
+  const SELECT = 'id,subject,from,sender,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,bodyPreview,body,uniqueBody,conversationId,isRead,hasAttachments,categories';
 
   // Use URLSearchParams so conversationId (contains +/=/etc.) is properly encoded
   const params = new URLSearchParams({
@@ -235,6 +235,7 @@ function buildThreadResult(raw) {
         bodyPreview:      m.bodyPreview || '',
         body:             m.body?.content || m.bodyPreview || '',
         bodyHtml:         m.body?.content || '',
+        uniqueBodyHtml:   m.uniqueBody?.content || '',
         conversationId:   m.conversationId || '',
         isRead:           m.isRead || false,
         hasAttachments:   m.hasAttachments || false,
@@ -280,7 +281,16 @@ export async function replyOnThread({ messageId, htmlBody, toEmail, ccEmails }) 
   const toList = TEST_MODE
     ? [{ emailAddress: { address: TEST_EMAIL, name: 'Test Redirect' } }]
     : buildRecipients(toEmail);
-  const ccList = TEST_MODE ? [] : buildRecipients(ccEmails);
+
+  // Deduplicate CC: remove addresses already in TO, then remove duplicates within CC
+  const toAddrSet = new Set(toList.map(r => r.emailAddress.address.toLowerCase()));
+  const ccSeen = new Set();
+  const ccList = TEST_MODE ? [] : buildRecipients(ccEmails).filter(r => {
+    const addr = r.emailAddress.address.toLowerCase();
+    if (toAddrSet.has(addr) || ccSeen.has(addr)) return false;
+    ccSeen.add(addr);
+    return true;
+  });
 
   const res = await fetch(`${base}/messages/${messageId}/reply`, {
     method: 'POST',
@@ -397,32 +407,25 @@ function resolveVendorEmail(storeCode, productName, vendorName, storeState, stor
 }
 
 // ── Resolve escalation recipients (exported so form can preview before sending) ─
-export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity, skipSM = false, skipHO = false, skipFM = false }) {
-  const vendorResolved = resolveVendorEmail(storeCode, productName, vendorName, storeState, storeCity);
+export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity, skipSM = false, skipHO = false, skipFM = false, manualVendorEmail = '' }) {
   const smEmail        = getSmEmail(storeCode);
   const hoPoc          = HO_POC[productName] || HO_POC['DEFAULT'];
-  const resolvedVendor = vendorResolved?.name || vendorName || '—';
-  const isVendorCase   = !!vendorResolved?.email;
+  const resolvedVendor = vendorName || '—';
+  const isVendorCase   = !!manualVendorEmail;
 
   const makeAddr = (email, name) => ({ emailAddress: { address: email, name: name || '' } });
   const addUniq  = (list, email, name) => {
     if (email && !list.some(x => x.emailAddress.address === email)) list.push(makeAddr(email, name));
   };
 
-  let toAddresses, ccAddresses;
-  if (isVendorCase) {
-    toAddresses = [makeAddr(vendorResolved.email, resolvedVendor)];
-    ccAddresses = [];
-    if (!skipFM && fmEmail)      addUniq(ccAddresses, fmEmail, fmName);
-    if (!skipSM && smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
-    if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
-  } else {
-    toAddresses = [];
-    if (!skipFM && fmEmail) addUniq(toAddresses, fmEmail, fmName);
-    ccAddresses = [];
-    if (!skipSM && smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
-    if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
-  }
+  // TO = vendor email entered manually (or from matrix) — nothing else
+  const toAddresses = manualVendorEmail ? [makeAddr(manualVendorEmail, vendorName || '')] : [];
+
+  // CC = always SM + FM + HO (auto from store lookup)
+  const ccAddresses = [];
+  if (!skipSM && smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
+  if (!skipFM && fmEmail)      addUniq(ccAddresses, fmEmail, fmName);
+  if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
 
   return { toAddresses, ccAddresses, isVendorCase, resolvedVendor };
 }
@@ -434,24 +437,32 @@ export async function sendEscalationEmailDirect({
   extraToEmails = [], extraCcEmails = [],
   attachmentLinks = [],
   skipSM = false, skipHO = false, skipFM = false,
+  manualVendorEmail = '',
 }) {
   const nos = complaints.map(c => c.complaintno).join(', ');
   const isMultiple = complaints.length > 1;
 
+  // No vendor email entered — skip escalation silently
+  if (!manualVendorEmail) return;
+
   // Resolve routing via the shared function
   const { toAddresses, ccAddresses, isVendorCase, resolvedVendor } = resolveEscalationRecipients({
     storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity,
-    skipSM, skipHO, skipFM,
+    skipSM, skipHO, skipFM, manualVendorEmail,
   });
 
   // Merge any user-added extras
   const addUniq = (list, email, name) => {
-    if (email && !list.some(x => x.emailAddress.address === email))
+    if (email && !list.some(x => x.emailAddress.address.toLowerCase() === email.toLowerCase()))
       list.push({ emailAddress: { address: email, name: name || '' } });
   };
   const extrasInput = v => (Array.isArray(v) ? v.join(',') : (v || ''));
   buildRecipients(extrasInput(extraToEmails)).forEach(r => addUniq(toAddresses, r.emailAddress.address, r.emailAddress.name));
   buildRecipients(extrasInput(extraCcEmails)).forEach(r => addUniq(ccAddresses, r.emailAddress.address, r.emailAddress.name));
+
+  // Strip from CC any address already in TO (no duplicates across lists)
+  const toSet = new Set(toAddresses.map(r => r.emailAddress.address.toLowerCase()));
+  const finalCC = ccAddresses.filter(r => !toSet.has(r.emailAddress.address.toLowerCase()));
 
   const subject = isMultiple
     ? `[VMM] New Complaints — ${storeCode} | ${productName} | ${complaints.length} Units`
@@ -507,7 +518,7 @@ export async function sendEscalationEmailDirect({
   </div>
 </div>`;
 
-  return sendFromSharedMailbox({ subject, htmlBody, toAddresses, ccAddresses });
+  return sendFromSharedMailbox({ subject, htmlBody, toAddresses, ccAddresses: finalCC });
 }
 
 // ── NTR confirmation email ────────────────────────────────────────────────────

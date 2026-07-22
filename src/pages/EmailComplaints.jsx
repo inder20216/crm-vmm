@@ -174,8 +174,8 @@ export default function EmailComplaints() {
   const itemIdRef = useRef(1);
   const [complaintItems, setComplaintItems] = useState([{
     id: 1, productName: '', vendorName: '', contractType: '', vendorEmail: '',
-    natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '', removedAutoCC: [],
-    amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [],
+    natureOfProblem: '', complaintType: '', description: '', extraEscTo: '', extraEscCc: '', removedAutoCC: [],
+    amcLookup: 'idle', selectedAttachIndices: null,
   }]);
   const [emTab,           setEmTab]           = useState('form');  // 'form' | 'matrix'
   const [escalationMatrix, setEscalationMatrix] = useState([]);
@@ -341,9 +341,9 @@ export default function EmailComplaints() {
         const originalFrom = sorted[0]?.from;
         if (originalFrom && originalFrom.toLowerCase() !== OWN) setReplyTo([originalFrom]);
         const allCCs = new Set();
-        msgs.forEach(m => (m.cc || '').split(',').map(c => c.trim()).filter(Boolean).forEach(cc => {
+        (sorted[0]?.cc || '').split(',').map(c => c.trim()).filter(Boolean).forEach(cc => {
           if (cc.toLowerCase() !== OWN && cc.toLowerCase() !== (originalFrom || '').toLowerCase()) allCCs.add(cc);
-        }));
+        });
         setReplyCc([...allCCs]);
       })
       .catch(() => {})
@@ -366,9 +366,9 @@ export default function EmailComplaints() {
         if (originalFrom && originalFrom.toLowerCase() !== OWN) setReplyTo([originalFrom]);
         // CC = all unique CCs across every message in thread (excluding our own address and original sender)
         const allCCs = new Set();
-        msgs.forEach(m => (m.cc || []).forEach(cc => {
-          if (cc && cc.toLowerCase() !== OWN && cc.toLowerCase() !== (originalFrom || '').toLowerCase()) allCCs.add(cc);
-        }));
+        (sorted[0]?.cc || '').split(',').map(c => c.trim()).filter(Boolean).forEach(cc => {
+          if (cc.toLowerCase() !== OWN && cc.toLowerCase() !== (originalFrom || '').toLowerCase()) allCCs.add(cc);
+        });
         setReplyCc([...allCCs]);
       })
       .catch(() => setThreadMessages([]))
@@ -452,7 +452,7 @@ export default function EmailComplaints() {
     setToInput('');
     setCcInput('');
     setShowReplyEditor(false);
-    setComplaintItems([{ id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [] }]);
+    setComplaintItems([{ id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', description: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [] }]);
     setEmTab('form');
     setEmSearch('');
     setEmRegion('');
@@ -479,7 +479,7 @@ export default function EmailComplaints() {
         vendorName:      p.vendorName      || '',
         natureOfProblem: matchedNature?.nature  || p.natureOfProblem || '',
         complaintType:   matchedNature?.type    || p.complaintType   || '',
-        contractType: '', vendorEmail: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [],
+        contractType: '', vendorEmail: '', description: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [],
       }]);
       if (p.employeeCode) {
         setEmpLookupStatus(p.employeeName ? 'found' : 'idle');
@@ -667,7 +667,7 @@ export default function EmailComplaints() {
   const removeItem = (id) => setComplaintItems(prev => prev.filter(x => x.id !== id));
   const addItem = () => setComplaintItems(prev => [
     ...prev,
-    { id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [] },
+    { id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', description: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [] },
   ]);
   const lookupAmcForItem = async (id, productName) => {
     const storeCode = parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode || '';
@@ -785,7 +785,7 @@ export default function EmailComplaints() {
           complaintType:     item.complaintType || nature.type       || 'Repair',
           contractType:      item.contractType  || '',
           tatDays:           nature.tatDays     || 7,
-          remarks:           `${parsedEdits.description || parsed.description || ''}${providedText}${attachmentText}`.trim(),
+          remarks:           `${item.description || parsedEdits.description || parsed.description || ''}${providedText}${attachmentText}`.trim(),
           attachmentLinks:   itemAttachments,
         };
         const res = await vmm.logComplaint(payload);
@@ -819,7 +819,8 @@ export default function EmailComplaints() {
           + '<hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0"/>'
           + '<p style="font-size:11px;color:#64748b">Open Mind Services Limited — VMM CRM</p></div>';
         const OWN = 'vmm.helpdesk@openmind.in';
-        const threadCCs = [...new Set(threadMessages.flatMap(m => m.cc || []).filter(cc => cc && cc.toLowerCase() !== OWN))].join(';');
+        const origMsg = [...threadMessages].sort((a, b) => new Date(a.receivedDateTime) - new Date(b.receivedDateTime))[0];
+        const threadCCs = [...new Set((origMsg?.cc || '').split(',').map(c => c.trim()).filter(Boolean).filter(cc => cc.toLowerCase() !== OWN))].join(';');
         // Always reply to the selected (incoming) email, not the latest thread message which may be outbound
         const replyMsgId = selected.id;
         await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, ccRecipients: threadCCs })
@@ -845,6 +846,7 @@ export default function EmailComplaints() {
             natureOfComplaint: item.natureOfProblem     || '',
             storeState:        store.state              || '',
             storeCity:         store.city               || '',
+            manualVendorEmail: item.vendorEmail         || '',
             complaints: [{ complaintno: res.complaintno, productLocation: iPayload.productLocation, natureOfProblem: item.natureOfProblem || '', edcDate: res.edcDate }],
             attachmentLinks: itemAttachments,
             extraToEmails: item.extraEscTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
@@ -1543,7 +1545,16 @@ export default function EmailComplaints() {
                           if (next === 'update-case') {
                             const from = selected?.fromDisplay || selected?.fromAddr || '';
                             const to   = selected?.toDisplay   || '';
-                            const body = (selected?.body || stripHtml(selected?.bodyHtml) || selected?.bodyPreview || '').slice(0, 1500);
+                            const OWN_ADDR = 'vmm.helpdesk@openmind.in';
+                            const latestInbound = [...threadMessages]
+                              .sort((a, b) => new Date(b.receivedDateTime) - new Date(a.receivedDateTime))
+                              .find(m => (m.from || '').toLowerCase() !== OWN_ADDR);
+                            const body = (
+                              stripHtml(latestInbound?.uniqueBodyHtml || '')
+                              || latestInbound?.bodyPreview
+                              || selected?.bodyPreview
+                              || ''
+                            ).replace(/\n{3,}/g, '\n\n').trim();
                             const autoRemarks = `Email received from ${from} and sent to ${to}\n\n${body}`.trim();
                             setUpdateForm(f => ({ ...f, complaintId: detectedId, remarks: autoRemarks }));
                           } else {
@@ -2163,53 +2174,41 @@ export default function EmailComplaints() {
                             </div>
                           )}
                         </div>
-                        {/* FM/HO escalation */}
-                        {!itemShowVendor && item.contractType && (
-                          <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f0fdf4', margin: '8px 0' }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 8 }}>⚡ Escalation — FM &amp; HO Team</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                              {!(item.removedAutoCC || []).includes('FM') && (
-                                <div style={{ fontSize: 12, color: '#15803d', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <span style={{ background: '#dcfce7', color: '#166534', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>TO</span>
-                                  Facility Manager (auto from store lookup)
-                                  <button onClick={() => updateItem(item.id, { removedAutoCC: [...(item.removedAutoCC || []), 'FM'] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title="Remove FM">✕</button>
-                                </div>
-                              )}
-                              {!(item.removedAutoCC || []).includes('HO') && itemHoEmail && (
-                                <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
-                                  {itemHoEmail} (HO)
-                                  <button onClick={() => updateItem(item.id, { removedAutoCC: [...(item.removedAutoCC || []), 'HO'] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title="Remove HO">✕</button>
-                                </div>
-                              )}
-                              {!(item.removedAutoCC || []).includes('SM') && (
-                                <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>CC</span>
-                                  Store Manager (auto)
-                                  <button onClick={() => updateItem(item.id, { removedAutoCC: [...(item.removedAutoCC || []), 'SM'] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title="Remove SM">✕</button>
-                                </div>
-                              )}
-                            </div>
-                            <div style={{ marginTop: 10 }}>
-                              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>Extra CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span></div>
-                              <input className="ec-field-input" type="text" placeholder="email1@example.com, email2@example.com" value={item.extraEscCc} onChange={e => updateItem(item.id, { extraEscCc: e.target.value })} style={{ background: '#fff' }} />
-                            </div>
+                        {/* Per-complaint description */}
+                        <div style={{ marginTop: 8 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+                            Description
+                            <span style={{ color: '#9ca3af', fontWeight: 400 }}> (specific to this product / vendor)</span>
                           </div>
-                        )}
-                        {/* Vendor escalation email */}
-                        {itemShowVendor && item.vendorName && (
+                          <textarea
+                            className="ec-field-input"
+                            rows={2}
+                            placeholder="Describe the issue for this product…"
+                            value={item.description}
+                            onChange={e => updateItem(item.id, { description: e.target.value })}
+                            style={{ resize: 'vertical', background: '#fff', borderRadius: 6 }}
+                          />
+                        </div>
+                        {/* Escalation Email */}
+                        {item.contractType && (
                           <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f5f3ff', margin: '8px 0' }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 10 }}>✉ Escalation Email</div>
+                            {/* TO — manual vendor email */}
                             <div style={{ marginBottom: 10 }}>
                               <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(Vendor)</span></div>
                               <input className="ec-field-input" type="email" placeholder="vendor@email.com" value={item.vendorEmail} onChange={e => updateItem(item.id, { vendorEmail: e.target.value.trim() })} style={{ background: '#fff' }} />
-                              {!item.vendorEmail && <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 3 }}>⚠ Enter vendor email to send escalation</div>}
+                              {!item.vendorEmail && <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 3 }}>⚠ No escalation email will be sent without a vendor email</div>}
                             </div>
+                            {/* CC — auto SM + FM + HO */}
                             <div style={{ marginBottom: 8 }}>
                               <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(auto)</span></div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                {[['SM','#dbeafe','#1d4ed8','Store Manager (auto)'],['HO','#fef3c7','#92400e',itemHoEmail],['FM','#dcfce7','#166534','Facility Manager (auto)']].map(([tag,bg,fg,txt]) => (
-                                  !(item.removedAutoCC || []).includes(tag) && (
+                                {[
+                                  ['SM', '#dbeafe', '#1d4ed8', 'Store Manager (auto)'],
+                                  ['FM', '#dcfce7', '#166534', 'Facility Manager (auto)'],
+                                  ['HO', '#fef3c7', '#92400e', itemHoEmail],
+                                ].map(([tag, bg, fg, txt]) => (
+                                  !(item.removedAutoCC || []).includes(tag) && txt && (
                                     <div key={tag} style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
                                       <span style={{ background: bg, color: fg, borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>{tag}</span>
                                       {txt}
@@ -2219,10 +2218,7 @@ export default function EmailComplaints() {
                                 ))}
                               </div>
                             </div>
-                            <div style={{ marginBottom: 8 }}>
-                              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>Extra To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span></div>
-                              <input className="ec-field-input" type="text" placeholder="email1@example.com, email2@example.com" value={item.extraEscTo} onChange={e => updateItem(item.id, { extraEscTo: e.target.value })} style={{ background: '#fff' }} />
-                            </div>
+                            {/* Extra CC */}
                             <div>
                               <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>Extra CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span></div>
                               <input className="ec-field-input" type="text" placeholder="email1@example.com, email2@example.com" value={item.extraEscCc} onChange={e => updateItem(item.id, { extraEscCc: e.target.value })} style={{ background: '#fff' }} />
