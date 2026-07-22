@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { vmm } from '../api/vmm';
+import { HO_POC } from '../auth/escalationMatrix';
 import './EmailComplaints.css';
 
 function fmtTime(dt) {
@@ -830,9 +831,14 @@ export default function EmailComplaints() {
         const OWN = 'vmm.helpdesk@openmind.in';
         const origMsg = [...threadMessages].sort((a, b) => new Date(a.receivedDateTime) - new Date(b.receivedDateTime))[0];
         const threadCCs = [...new Set((origMsg?.cc || '').split(',').map(c => c.trim()).filter(Boolean).filter(cc => cc.toLowerCase() !== OWN))].join(';');
+        // Collect HO POC emails for each product logged in this complaint
+        const hoCCs = [...new Set(
+          allResults.map(({ item }) => (HO_POC[item.productName] || HO_POC['DEFAULT'])?.email).filter(Boolean)
+        )];
+        const allCCs = [...new Set([...threadCCs.split(';').filter(Boolean), ...hoCCs])].join(';');
         // Always reply to the selected (incoming) email, not the latest thread message which may be outbound
         const replyMsgId = selected.id;
-        await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, toRecipients: selected.fromAddr || sharedPayload.storeEmail, ccRecipients: threadCCs })
+        await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, toRecipients: selected.fromAddr || sharedPayload.storeEmail, ccRecipients: allCCs })
           .catch(err => { console.warn('Confirmation reply failed:', err); showToast('Complaint logged but confirmation email could not be sent', 'warn'); });
         vmm.categorizeEmail(replyMsgId, ['Case Logged', 'New CRM']).catch(() => {});
         const wipMatch = wipList.find(w =>
