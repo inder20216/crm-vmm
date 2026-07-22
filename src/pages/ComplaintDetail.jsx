@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { vmm } from '../api/vmm';
 import './ComplaintDetail.css';
+import { useAuth } from '../context/AuthContext';
 
 const STATUS_COLORS = {
   Logged: 'blue', Open: 'blue', Escalated: 'red',
@@ -101,6 +102,7 @@ function Field({ label, value, mono, span2 }) {
 }
 
 export default function ComplaintDetail() {
+  const { currentUser } = useAuth();
   const { id }    = useParams();
   const navigate  = useNavigate();
   const [data,    setData]    = useState(null);
@@ -192,7 +194,8 @@ export default function ComplaintDetail() {
           complaintId: c.id,
           complaintno: c.complaintno,
           remarks: updRemarks,
-          uid: 1,
+          uid: currentUser?.id || 1,
+          agentName: currentUser?.name || '',
           txnId: updTxnId,
           mobileCalled: updMobile,
           newClosureDate: updEdc,
@@ -215,7 +218,8 @@ export default function ComplaintDetail() {
         delayMain: updDelayMain,
         delaySub: updDelaySub,
         remarks: updRemarks,
-        uid: 1,
+        uid: currentUser?.id || 1,
+        agentName: currentUser?.name || '',
         escalationLevel: nextLevel,
         newClosureDate: (effectiveStatus === 'Partially Closed' || effectiveStatus === 'Escalated') ? updEdc : '',
         closureDate: effectiveStatus === 'Closed' ? updEdc : '',
@@ -381,7 +385,7 @@ export default function ComplaintDetail() {
                             )}
                           </td>
                           <td><span className={`status-tag status-${sc}`}>{row.status || 'Open'}</span></td>
-                          <td className="cd-log-by">{row.uid ? `uid ${row.uid}` : 'CRM'}</td>
+                          <td className="cd-log-by">{row.agentname || (row.uid ? `uid ${row.uid}` : 'CRM')}</td>
                         </tr>
                       );
                     } else {

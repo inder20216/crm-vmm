@@ -43,7 +43,33 @@
     },
     {
       "parameters": {
-        "jsCode": "return [{ json: { success: true, message: 'Migration complete: description added to vmm_complaints, vendoremail added to vmm_vendorescalations' } }];"
+        "operation": "executeQuery",
+        "query": "ALTER TABLE vmm_complaintlogs ADD COLUMN IF NOT EXISTS agentname VARCHAR(200) DEFAULT ''",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 520],
+      "id": "mig-node-0006",
+      "name": "Add agentname column",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "ALTER TABLE vmm_complaintstores ADD COLUMN IF NOT EXISTS agentname VARCHAR(200) DEFAULT ''",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 660],
+      "id": "mig-node-0007",
+      "name": "Add agentname to stores",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { success: true, message: 'Migration complete: description, vendoremail, agentname columns added' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -68,9 +94,11 @@
     }
   ],
   "connections": {
-    "Webhook - POST /vmm-run-migration": { "main": [[{ "node": "Add description column", "type": "main", "index": 0 }, { "node": "Add vendoremail column", "type": "main", "index": 0 }]] },
+    "Webhook - POST /vmm-run-migration": { "main": [[{ "node": "Add description column", "type": "main", "index": 0 }, { "node": "Add vendoremail column", "type": "main", "index": 0 }, { "node": "Add agentname column", "type": "main", "index": 0 }, { "node": "Add agentname to stores", "type": "main", "index": 0 }]] },
     "Add description column":            { "main": [[{ "node": "Done",    "type": "main", "index": 0 }]] },
     "Add vendoremail column":            { "main": [[{ "node": "Done",    "type": "main", "index": 0 }]] },
+    "Add agentname column":              { "main": [[{ "node": "Done",    "type": "main", "index": 0 }]] },
+    "Add agentname to stores":           { "main": [[{ "node": "Done",    "type": "main", "index": 0 }]] },
     "Done":                              { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
   },
   "pinData": {},

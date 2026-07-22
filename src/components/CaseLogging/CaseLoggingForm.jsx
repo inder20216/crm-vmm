@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { vmm } from '../../api/vmm';
+import { useAuth } from '../../context/AuthContext';
 
 const ATTACHMENT_MANDATORY = ['Breakdown', 'Repair'];
 
@@ -139,6 +140,7 @@ const emptyForm = {
 };
 
 export default function CaseLoggingForm() {
+  const { currentUser } = useAuth();
   const [form, setForm]           = useState(emptyForm);
   const [errors, setErrors]       = useState({});
   const [storeErr, setStoreErr]   = useState('');
@@ -411,7 +413,8 @@ export default function CaseLoggingForm() {
       source:            form.source,
       emailSubject:      form.emailSubject,
       callTxnId:         form.callTxnId,
-      uid: 1,
+      uid: currentUser?.id || 1,
+      agentName: currentUser?.name || '',
     };
     try {
       const qty         = Math.max(1, Math.min(quantity, 20));

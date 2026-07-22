@@ -44,7 +44,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT cs.uid, COUNT(DISTINCT c.id) AS logged, SUM(CASE WHEN cl.status IN ('Closed','Resolved') THEN 1 ELSE 0 END) AS closed, SUM(CASE WHEN cl.status IS NULL OR cl.status NOT IN ('Closed','Resolved') THEN 1 ELSE 0 END) AS open FROM vmm_complaints c LEFT JOIN vmm_complaintstores cs ON cs.id = c.storerefid LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND YEAR(c.created) = YEAR(CURDATE()) AND MONTH(c.created) = MONTH(CURDATE()) GROUP BY cs.uid ORDER BY logged DESC",
+        "query": "SELECT cs.uid, MAX(cs.agentname) AS agent_name, COUNT(DISTINCT c.id) AS logged, SUM(CASE WHEN cl.status IN ('Closed','Resolved') THEN 1 ELSE 0 END) AS closed, SUM(CASE WHEN cl.status IS NULL OR cl.status NOT IN ('Closed','Resolved') THEN 1 ELSE 0 END) AS open FROM vmm_complaints c LEFT JOIN vmm_complaintstores cs ON cs.id = c.storerefid LEFT JOIN vmm_complaintlogs cl ON cl.id = (SELECT MAX(id) FROM vmm_complaintlogs WHERE complaintid = c.id) WHERE c.is_deleted = 'No' AND YEAR(c.created) = YEAR(CURDATE()) AND MONTH(c.created) = MONTH(CURDATE()) GROUP BY cs.uid ORDER BY logged DESC",
         "options": {}
       },
       "type": "n8n-nodes-base.mySql",

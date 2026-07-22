@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { vmm } from '../api/vmm';
+import { useAuth } from '../context/AuthContext';
 import { HO_POC } from '../auth/escalationMatrix';
 import './EmailComplaints.css';
 
@@ -135,6 +136,7 @@ function findBestByText(items, text, fields) {
 }
 
 export default function EmailComplaints() {
+  const { currentUser } = useAuth();
   const [activeTab,    setActiveTab]    = useState('inbox'); // 'inbox' | 'sent'
   const [inboxEmails,  setInboxEmails]  = useState(() => {
     try { const c = sessionStorage.getItem('vmm_inbox_list'); return c ? JSON.parse(c) : []; } catch { return []; }
@@ -822,7 +824,8 @@ export default function EmailComplaints() {
         emailConversationId: selected.conversationId || '',
         emailFrom:           selected.fromAddr || '',
         emailTo:             selected.toDisplay || '',
-        uid: 1,
+        uid: currentUser?.id || 1,
+        agentName: currentUser?.name || '',
       };
 
       const allResults = [];
@@ -2060,7 +2063,8 @@ export default function EmailComplaints() {
                           const payload = {
                             complaintNo: updateForm.complaintId.trim(),
                             remarks:     updateForm.remarks,
-                            uid:         1,
+                            uid:         currentUser?.id || 1,
+                            agentName:   currentUser?.name || '',
                           };
                           if (updateAction === 'escalate') {
                             payload.newStatus       = 'Escalated';
