@@ -35,6 +35,7 @@ export const vmm = {
   getAmcVendor:        (storeCode, product) => get(BASE, 'vmm-sp-amc-vendor', { storeCode, product }),
   getEscalationMatrix: (params = {})        => get(BASE, 'vmm-sp-escalation-matrix', params),
   logComplaint:        (data)   => post(BASE, 'vmm-log-complaint',           data),
+  getComplaint:        (complaintno) => get(BASE, 'vmm-get-complaint',       { complaintno }),
   sendEscalationEmail:          (data) => graph.sendEscalationEmailDirect(data),
   resolveEscalationRecipients: (data) => graph.resolveEscalationRecipients(data),
   sendClosureEmail:    (data)   => graph.sendClosureEmailDirect(data),

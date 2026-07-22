@@ -153,6 +153,13 @@ export default function EmailComplaints() {
   const [loggingActivity, setLoggingActivity] = useState(false);
   const [toast,         setToast]         = useState('');
   const [activeAction,    setActiveAction]    = useState(null);
+  const [resendModal,     setResendModal]     = useState(false);
+  const [resendNo,        setResendNo]        = useState('');
+  const [resendData,      setResendData]      = useState(null);   // complaint data from DB
+  const [resendLoading,   setResendLoading]   = useState(false);
+  const [resendVendorEmail, setResendVendorEmail] = useState('');
+  const [resendDescription, setResendDescription] = useState('');
+  const [resendSending,   setResendSending]   = useState(false);
   const [updateForm,      setUpdateForm]      = useState({ complaintId: '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' });
   const [updateAction,    setUpdateAction]    = useState(null); // 'escalate' | 'close' | 'update'
   const [searchingComplaint, setSearchingComplaint] = useState(false);
@@ -504,6 +511,49 @@ export default function EmailComplaints() {
     vmm.emailClaim({ operation: op, emailId, agentId, agentLabel: `Agent ${agentId.slice(-4)}` })
       .then(r => setActiveClaims(r.claims || {}))
       .catch(() => {});
+  };
+
+  const lookupResendComplaint = async () => {
+    if (!resendNo.trim()) return;
+    setResendLoading(true); setResendData(null); setResendVendorEmail(''); setResendDescription('');
+    try {
+      const r = await vmm.getComplaint(resendNo.trim());
+      if (!r.success) { showToast('Complaint not found', 'warn'); return; }
+      setResendData(r.complaint);
+    } catch { showToast('Lookup failed — check n8n is running', 'warn'); }
+    finally { setResendLoading(false); }
+  };
+
+  const sendResendEscalation = async () => {
+    if (!resendData || !resendVendorEmail.trim()) return;
+    setResendSending(true);
+    try {
+      await vmm.sendEscalationEmail({
+        storeCode:         resendData.storecode   || '',
+        storeName:         resendData.storename   || '',
+        storeEmail:        resendData.storeemail  || '',
+        fmName:            resendData.fmname      || '',
+        fmEmail:           resendData.fmemail     || '',
+        region:            resendData.storeregion || '',
+        storeState:        resendData.statename   || '',
+        storeCity:         resendData.storecity   || '',
+        vendorName:        resendData.vendorname  || '',
+        productName:       resendData.productname || '',
+        natureOfComplaint: resendData.natureofproblem || '',
+        manualVendorEmail: resendVendorEmail.trim(),
+        complaints: [{
+          complaintno:     resendData.complaintno,
+          productLocation: resendData.productlocation || '',
+          natureOfProblem: resendData.natureofproblem || '',
+          edcDate:         resendData.edcdate        || '',
+          description:     resendDescription.trim(),
+        }],
+      });
+      showToast(`Escalation email sent for ${resendData.complaintno}`, 'ok');
+      setResendModal(false); setResendNo(''); setResendData(null);
+    } catch(err) {
+      showToast(`Failed to send: ${err?.message || 'unknown error'}`, 'warn');
+    } finally { setResendSending(false); }
   };
 
   const parseEmail = async () => {
@@ -953,6 +1003,118 @@ export default function EmailComplaints() {
     <div className="ec-page">
       {toast && <div className={`ec-toast ec-toast-${toast.type}`}>{toast.msg}</div>}
 
+      {/* Resend Escalation Modal */}
+      {resendModal && (
+        <div className="ec-modal-overlay" onClick={() => !resendSending && setResendModal(false)}>
+          <div className="ec-modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
+            <div className="ec-modal-header">
+              <div className="ec-modal-subject">↗ Resend Escalation Email</div>
+              <button className="ec-modal-close" onClick={() => setResendModal(false)} disabled={resendSending}>✕</button>
+            </div>
+            <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {/* Complaint number lookup */}
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Complaint Number</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    style={{ flex: 1, padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
+                    value={resendNo}
+                    onChange={e => { setResendNo(e.target.value); setResendData(null); }}
+                    placeholder="e.g. 26072222305"
+                    onKeyDown={e => e.key === 'Enter' && lookupResendComplaint()}
+                  />
+                  <button
+                    onClick={lookupResendComplaint}
+                    disabled={resendLoading || !resendNo.trim()}
+                    style={{ padding: '7px 16px', background: '#1e1b4b', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                  >
+                    {resendLoading ? 'Looking up…' : 'Look Up'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Complaint details */}
+              {resendData && (() => {
+                const { toAddresses, ccAddresses } = vmm.resolveEscalationRecipients({
+                  storeCode: resendData.storecode, storeEmail: resendData.storeemail, storeName: resendData.storename,
+                  fmEmail: resendData.fmemail, fmName: resendData.fmname,
+                  vendorName: resendData.vendorname, productName: resendData.productname,
+                  storeState: resendData.statename, storeCity: resendData.storecity,
+                  manualVendorEmail: resendVendorEmail.trim(),
+                });
+                return (
+                  <>
+                    <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '12px 14px', fontSize: 13 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 16px' }}>
+                        <div><span style={{ color: '#6b7280' }}>Store</span><br/><strong>{resendData.storename} ({resendData.storecode})</strong></div>
+                        <div><span style={{ color: '#6b7280' }}>Product</span><br/><strong>{resendData.productname}</strong></div>
+                        <div><span style={{ color: '#6b7280' }}>Vendor</span><br/><strong>{resendData.vendorname || '—'}</strong></div>
+                        <div><span style={{ color: '#6b7280' }}>EDC</span><br/><strong>{resendData.edcdate || '—'}</strong></div>
+                        <div><span style={{ color: '#6b7280' }}>Nature</span><br/><strong>{resendData.natureofproblem || '—'}</strong></div>
+                        <div><span style={{ color: '#6b7280' }}>Status</span><br/><strong>{resendData.current_status || '—'}</strong></div>
+                      </div>
+                    </div>
+
+                    {/* Vendor email */}
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+                        Vendor Email <span style={{ color: '#ef4444' }}>*</span>
+                        <span style={{ color: '#6b7280', fontWeight: 400, marginLeft: 6 }}>(not stored — enter manually)</span>
+                      </div>
+                      <input
+                        style={{ width: '100%', padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
+                        value={resendVendorEmail}
+                        onChange={e => setResendVendorEmail(e.target.value)}
+                        placeholder="vendor@example.com  (comma-separate for multiple)"
+                      />
+                    </div>
+
+                    {/* Description */}
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+                        Description / Remarks <span style={{ color: '#6b7280', fontWeight: 400 }}>(optional — not stored in DB)</span>
+                      </div>
+                      <textarea
+                        style={{ width: '100%', padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, minHeight: 60, resize: 'vertical', boxSizing: 'border-box' }}
+                        value={resendDescription}
+                        onChange={e => setResendDescription(e.target.value)}
+                        placeholder="Paste the complaint description here if needed…"
+                      />
+                    </div>
+
+                    {/* Recipient preview */}
+                    <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>
+                      <div style={{ fontWeight: 600, color: '#374151', marginBottom: 6 }}>Will send to:</div>
+                      <div style={{ marginBottom: 4 }}>
+                        <span style={{ color: '#6b7280' }}>TO: </span>
+                        {toAddresses.length
+                          ? toAddresses.map(r => r.emailAddress.address).join(', ')
+                          : <span style={{ color: '#ef4444' }}>No vendor email entered</span>}
+                      </div>
+                      <div>
+                        <span style={{ color: '#6b7280' }}>CC: </span>
+                        {ccAddresses.length ? ccAddresses.map(r => r.emailAddress.address).join(', ') : '—'}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4 }}>
+                      <button onClick={() => setResendModal(false)} disabled={resendSending}
+                        style={{ padding: '8px 18px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', fontSize: 13, cursor: 'pointer' }}>
+                        Cancel
+                      </button>
+                      <button onClick={sendResendEscalation} disabled={resendSending || !resendVendorEmail.trim()}
+                        style={{ padding: '8px 18px', background: !resendVendorEmail.trim() ? '#94a3b8' : '#059669', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: resendVendorEmail.trim() ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
+                        {resendSending ? 'Sending…' : '↗ Send Escalation Email'}
+                      </button>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Full Email / Thread Popup */}
       {emailModal && (
         <div className="ec-modal-overlay" onClick={() => setEmailModal(null)}>
@@ -1136,6 +1298,14 @@ export default function EmailComplaints() {
               )}
             </button>
           </div>
+          <button
+            className="ec-refresh-btn"
+            style={{ marginRight: 6 }}
+            onClick={() => { setResendModal(true); setResendNo(''); setResendData(null); }}
+            title="Resend escalation email for a logged complaint"
+          >
+            ↗ Resend Escalation
+          </button>
           <button
             className="ec-refresh-btn"
             onClick={() => fetchEmails()}
