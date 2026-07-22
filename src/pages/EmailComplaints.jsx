@@ -419,9 +419,12 @@ export default function EmailComplaints() {
   const switchTab = (tab) => {
     if (tab === activeTab) return;
     setActiveTab(tab);
-    setSelected(null);
-    setParsed(null);
+    if (tab !== 'matrix') { setSelected(null); setParsed(null); }
     if (tab === 'sent') fetchEmails('sent');
+    if (tab === 'matrix' && !escalationMatrix.length && !emLoading) {
+      setEmLoading(true);
+      vmm.getEscalationMatrix().then(r => setEscalationMatrix(r.contacts || [])).catch(() => {}).finally(() => setEmLoading(false));
+    }
   };
 
   // Reply counts: inbox emails with the same conversationId as a WIP, but NOT the original email and NOT our own sent messages
@@ -669,6 +672,12 @@ export default function EmailComplaints() {
     ...prev,
     { id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', description: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [] },
   ]);
+  const toggleVendorEmail = (id, email) => setComplaintItems(prev => prev.map(x => {
+    if (x.id !== id) return x;
+    const emails = (x.vendorEmail || '').split(',').map(e => e.trim()).filter(Boolean);
+    const next = emails.includes(email) ? emails.filter(e => e !== email) : [...emails, email];
+    return { ...x, vendorEmail: next.join(', ') };
+  }));
   const lookupAmcForItem = async (id, productName) => {
     const storeCode = parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode || '';
     if (!storeCode || !productName) return;
@@ -847,7 +856,7 @@ export default function EmailComplaints() {
             storeState:        store.state              || '',
             storeCity:         store.city               || '',
             manualVendorEmail: item.vendorEmail         || '',
-            complaints: [{ complaintno: res.complaintno, productLocation: iPayload.productLocation, natureOfProblem: item.natureOfProblem || '', edcDate: res.edcDate }],
+            complaints: [{ complaintno: res.complaintno, productLocation: iPayload.productLocation, natureOfProblem: item.natureOfProblem || '', edcDate: res.edcDate, description: (item.description || parsedEdits.description || parsed.description || '').replace(/\n+/g, ' ').trim() }],
             attachmentLinks: itemAttachments,
             extraToEmails: item.extraEscTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
             extraCcEmails: item.extraEscCc.split(/[;,]/).map(s => s.trim()).filter(Boolean),
@@ -1106,6 +1115,17 @@ export default function EmailComplaints() {
                 <span className="ec-tab-count">{emails.length}</span>
               )}
             </button>
+            <button
+              className={`ec-tab ${activeTab === 'matrix' ? 'active' : ''}`}
+              onClick={() => switchTab('matrix')}
+            >
+              📋 Escalation
+              {activeTab === 'matrix' && complaintItems[0]?.vendorEmail && (
+                <span className="ec-tab-count">
+                  {complaintItems[0].vendorEmail.split(',').map(e => e.trim()).filter(Boolean).length}
+                </span>
+              )}
+            </button>
           </div>
           <button
             className="ec-refresh-btn"
@@ -1124,20 +1144,52 @@ export default function EmailComplaints() {
         <div className="ec-left">
           <div className="ec-left-head">
             <span className="ec-folder-label">
-              {activeTab === 'sent' ? '↑ Sent Items' : activeTab === 'wip' ? '⏳ WIP Cases' : '✉ Inbox'}
+              {activeTab === 'sent' ? '↑ Sent Items' : activeTab === 'wip' ? '⏳ WIP Cases' : activeTab === 'matrix' ? '📋 Escalation Matrix' : '✉ Inbox'}
             </span>
-            {activeTab === 'wip'
-              ? <span className="ec-count">{wipList.length} pending</span>
-              : fetching
-                ? <span className="ec-loading-dot">Loading…</span>
-                : emails.length > 0 && (
-                    <span className="ec-count">{emails.length} {activeTab === 'sent' ? 'emails' : 'unread'}</span>
-                  )
+            {activeTab === 'matrix'
+              ? (() => {
+                  const cnt = (complaintItems[0]?.vendorEmail || '').split(',').map(e => e.trim()).filter(Boolean).length;
+                  return cnt > 0 ? <span className="ec-count">{cnt} selected</span> : null;
+                })()
+              : activeTab === 'wip'
+                ? <span className="ec-count">{wipList.length} pending</span>
+                : fetching
+                  ? <span className="ec-loading-dot">Loading…</span>
+                  : emails.length > 0 && (
+                      <span className="ec-count">{emails.length} {activeTab === 'sent' ? 'emails' : 'unread'}</span>
+                    )
             }
           </div>
 
-          {/* Search bar */}
-          <div className="ec-search-bar">
+          {/* Matrix filter bar — only when escalation tab is active */}
+          {activeTab === 'matrix' && (
+            <div style={{ padding: '8px 12px', borderBottom: '1px solid #f1f5f9', display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
+              <input
+                placeholder="Search vendor, contact…"
+                value={emSearch}
+                onChange={e => setEmSearch(e.target.value)}
+                style={{ flex: '1 1 120px', padding: '5px 9px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, outline: 'none' }}
+              />
+              <select value={emRegion} onChange={e => setEmRegion(e.target.value)}
+                style={{ padding: '5px 7px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer' }}>
+                <option value="">All Regions</option>
+                {['Pan India','North','South','East','West'].map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+              <select value={emLevel} onChange={e => setEmLevel(e.target.value)}
+                style={{ padding: '5px 7px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer' }}>
+                <option value="">All Levels</option>
+                {['First Call','Level 1','Level 2','Level 3','Level 4','Level 5'].map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </div>
+          )}
+          {activeTab === 'matrix' && !parsed && (
+            <div style={{ padding: '5px 14px', background: '#fef3c7', fontSize: 11, color: '#92400e', borderBottom: '1px solid #fcd34d', flexShrink: 0 }}>
+              ⚠ Parse an email complaint first — selections will apply to that TO field
+            </div>
+          )}
+
+          {/* Search bar — only for inbox/wip/sent tabs */}
+          {activeTab !== 'matrix' && <div className="ec-search-bar">
             <div className="ec-search-input-wrap">
               <span className="ec-search-icon">🔍</span>
               <input
@@ -1160,7 +1212,7 @@ export default function EmailComplaints() {
             >
               {searching ? '…' : 'Go'}
             </button>
-          </div>
+          </div>}
 
           {searchMode && (
             <div className="ec-search-result-bar">
@@ -1210,6 +1262,48 @@ export default function EmailComplaints() {
 
 
           <div className="ec-email-list">
+
+            {/* ── ESCALATION MATRIX TAB: contact list with multi-select ── */}
+            {activeTab === 'matrix' && (() => {
+              const first = complaintItems[0];
+              const selectedEmailSet = new Set((first?.vendorEmail || '').split(',').map(e => e.trim()).filter(Boolean));
+              if (emLoading) return <div className="ec-empty">Loading escalation matrix…</div>;
+              const rows = escalationMatrix.filter(c =>
+                (!emSearch || (c.vendorName || '').toLowerCase().includes(emSearch.toLowerCase()) || (c.contactPerson || '').toLowerCase().includes(emSearch.toLowerCase()) || (c.email || '').toLowerCase().includes(emSearch.toLowerCase())) &&
+                (!emRegion || c.region === emRegion) &&
+                (!emLevel  || c.level  === emLevel)
+              );
+              if (!rows.length) return <div className="ec-empty">No contacts match filters</div>;
+              return rows.map((c, i) => {
+                const isSel = c.email && selectedEmailSet.has(c.email);
+                return (
+                  <div key={i}
+                    onClick={() => c.email && first && toggleVendorEmail(first.id, c.email)}
+                    style={{
+                      padding: '10px 14px', cursor: c.email && first ? 'pointer' : 'default',
+                      borderBottom: '1px solid #f1f5f9',
+                      background: isSel ? '#f0fdf4' : 'transparent',
+                      borderLeft: `3px solid ${isSel ? '#22c55e' : 'transparent'}`,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <input type="checkbox" checked={isSel} readOnly
+                        style={{ marginTop: 3, cursor: c.email && first ? 'pointer' : 'default', accentColor: '#22c55e', flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: '#1e293b' }}>{c.vendorName}</span>
+                          <span style={{ fontSize: 10, background: '#dbeafe', color: '#1d4ed8', borderRadius: 4, padding: '1px 5px', fontWeight: 700, flexShrink: 0 }}>{c.level}</span>
+                          <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 'auto' }}>{c.region}</span>
+                        </div>
+                        {c.contactPerson && <div style={{ fontSize: 11, color: '#475569', marginTop: 1 }}>{c.contactPerson}</div>}
+                        {c.email && <div style={{ fontSize: 11, color: '#0369a1', marginTop: 1 }}>{c.email}</div>}
+                        {(c.mobile1 || c.customerCareNo) && <div style={{ fontSize: 11, color: '#64748b' }}>{c.mobile1 || c.customerCareNo}</div>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
 
             {/* ── WIP TAB: dedicated WIP panel ── */}
             {activeTab === 'wip' && (
@@ -2193,10 +2287,42 @@ export default function EmailComplaints() {
                         {item.contractType && (
                           <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f5f3ff', margin: '8px 0' }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 10 }}>✉ Escalation Email</div>
-                            {/* TO — manual vendor email */}
+                            {/* TO — vendor email(s), multi-select via matrix or manual entry */}
                             <div style={{ marginBottom: 10 }}>
-                              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(Vendor)</span></div>
-                              <input className="ec-field-input" type="email" placeholder="vendor@email.com" value={item.vendorEmail} onChange={e => updateItem(item.id, { vendorEmail: e.target.value.trim() })} style={{ background: '#fff' }} />
+                              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+                                To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(Vendor — select from 📋 Escalation tab or type below)</span>
+                              </div>
+                              {/* Chips for selected emails */}
+                              {item.vendorEmail && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                                  {item.vendorEmail.split(',').map(e => e.trim()).filter(Boolean).map(email => (
+                                    <span key={email} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#dbeafe', color: '#1d4ed8', borderRadius: 12, fontSize: 11, fontWeight: 500, border: '1px solid #93c5fd' }}>
+                                      {email}
+                                      <button onClick={() => toggleVendorEmail(item.id, email)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#1d4ed8', padding: '0 0 0 2px', fontSize: 13, lineHeight: 1, fontWeight: 700 }}>×</button>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {/* Manual input — press Enter or blur to add */}
+                              <input className="ec-field-input" type="text" placeholder="Type email + Enter, or use Escalation tab…"
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter' && e.target.value.trim()) {
+                                    e.preventDefault();
+                                    const newEmail = e.target.value.trim();
+                                    const current = (item.vendorEmail || '').split(',').map(x => x.trim()).filter(Boolean);
+                                    if (!current.includes(newEmail)) updateItem(item.id, { vendorEmail: [...current, newEmail].join(', ') });
+                                    e.target.value = '';
+                                  }
+                                }}
+                                onBlur={e => {
+                                  if (e.target.value.trim()) {
+                                    const newEmail = e.target.value.trim();
+                                    const current = (item.vendorEmail || '').split(',').map(x => x.trim()).filter(Boolean);
+                                    if (!current.includes(newEmail)) updateItem(item.id, { vendorEmail: [...current, newEmail].join(', ') });
+                                    e.target.value = '';
+                                  }
+                                }}
+                                style={{ background: '#fff' }} />
                               {!item.vendorEmail && <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 3 }}>⚠ No escalation email will be sent without a vendor email</div>}
                             </div>
                             {/* CC — auto SM + FM + HO */}
@@ -2315,9 +2441,9 @@ export default function EmailComplaints() {
                       </div>
 
                       {complaintItems[0]?.vendorEmail && (
-                        <div style={{ marginBottom: 8, fontSize: 11, color: '#16a34a', background: '#dcfce7', borderRadius: 6, padding: '5px 10px', fontWeight: 600 }}>
-                          ✓ To: {complaintItems[0].vendorEmail}
-                          <button onClick={() => updateItem(complaintItems[0].id, { vendorEmail: '' })} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>×</button>
+                        <div style={{ marginBottom: 8, fontSize: 11, color: '#16a34a', background: '#dcfce7', borderRadius: 6, padding: '6px 10px', fontWeight: 600 }}>
+                          ✓ TO ({complaintItems[0].vendorEmail.split(',').map(e => e.trim()).filter(Boolean).length}): {complaintItems[0].vendorEmail}
+                          <button onClick={() => updateItem(complaintItems[0].id, { vendorEmail: '' })} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>× Clear all</button>
                         </div>
                       )}
 
@@ -2354,12 +2480,15 @@ export default function EmailComplaints() {
                                     <td style={{ padding: '7px 10px', color: '#374151', whiteSpace: 'nowrap' }}>{c.mobile1 || c.customerCareNo || '—'}</td>
                                     <td style={{ padding: '7px 10px', color: '#0369a1', wordBreak: 'break-all' }}>{c.email || '—'}</td>
                                     <td style={{ padding: '7px 10px' }}>
-                                      {c.email && (
-                                        <button
-                                          onClick={() => { updateItem(complaintItems[0].id, { vendorEmail: c.email }); setEmTab('form'); }}
-                                          style={{ padding: '3px 10px', fontSize: 11, background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}
-                                        >Use →</button>
-                                      )}
+                                      {c.email && (() => {
+                                        const isAdded = (complaintItems[0]?.vendorEmail || '').split(',').map(e => e.trim()).includes(c.email);
+                                        return (
+                                          <button
+                                            onClick={() => complaintItems[0] && toggleVendorEmail(complaintItems[0].id, c.email)}
+                                            style={{ padding: '3px 10px', fontSize: 11, background: isAdded ? '#dcfce7' : '#4f46e5', color: isAdded ? '#16a34a' : '#fff', border: `1px solid ${isAdded ? '#86efac' : '#4f46e5'}`, borderRadius: 5, cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}
+                                          >{isAdded ? '✓ Added' : 'Add →'}</button>
+                                        );
+                                      })()}
                                     </td>
                                   </tr>
                                 ));

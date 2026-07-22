@@ -418,8 +418,10 @@ export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, 
     if (email && !list.some(x => x.emailAddress.address === email)) list.push(makeAddr(email, name));
   };
 
-  // TO = vendor email entered manually (or from matrix) — nothing else
-  const toAddresses = manualVendorEmail ? [makeAddr(manualVendorEmail, vendorName || '')] : [];
+  // TO = all vendor emails (comma-separated or single) entered manually / from matrix
+  const toAddresses = manualVendorEmail
+    ? manualVendorEmail.split(',').map(e => e.trim()).filter(Boolean).map(e => makeAddr(e, vendorName || ''))
+    : [];
 
   // CC = always SM + FM + HO (auto from store lookup)
   const ccAddresses = [];
@@ -470,10 +472,11 @@ export async function sendEscalationEmailDirect({
 
   const rows = complaints.map((c, i) => `
     <tr style="background:${i % 2 === 0 ? '#fff' : '#f8fafc'}">
-      <td style="padding:9px 14px;border-bottom:1px solid #e2e8f0">${c.complaintno}</td>
-      <td style="padding:9px 14px;border-bottom:1px solid #e2e8f0">${c.productLocation || '—'}</td>
-      <td style="padding:9px 14px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#059669">${c.edcDate || '—'}</td>
-    </tr>`).join('');
+      <td style="padding:9px 14px;border-bottom:${c.description ? 'none' : '1px solid #e2e8f0'}">${c.complaintno}</td>
+      <td style="padding:9px 14px;border-bottom:${c.description ? 'none' : '1px solid #e2e8f0'}">${c.productLocation || '—'}</td>
+      <td style="padding:9px 14px;border-bottom:${c.description ? 'none' : '1px solid #e2e8f0'};font-weight:600;color:#059669">${c.edcDate || '—'}</td>
+    </tr>
+    ${c.description ? `<tr style="background:${i % 2 === 0 ? '#fff' : '#f8fafc'}"><td colspan="3" style="padding:4px 14px 10px;border-bottom:1px solid #e2e8f0;color:#374151;font-size:12px;font-style:italic">${c.description.replace(/\n/g, '<br/>')}</td></tr>` : ''}`).join('');
 
   const htmlBody = `
 <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:640px;margin:0 auto">

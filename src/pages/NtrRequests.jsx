@@ -111,7 +111,7 @@ export default function NtrRequests() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { if (mode === 'list') load(); }, [mode]); // eslint-disable-line
 
   useEffect(() => {
     if (!selected) { setItems([]); return; }
