@@ -1,0 +1,81 @@
+{
+  "name": "VMM CRM - Migration: Add description + vendoremail columns",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vmm-run-migration",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "mig-node-0001",
+      "name": "Webhook - POST /vmm-run-migration",
+      "webhookId": "vmm-run-migration"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "ALTER TABLE vmm_complaints ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 240],
+      "id": "mig-node-0002",
+      "name": "Add description column",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "ALTER TABLE vmm_vendorescalations ADD COLUMN IF NOT EXISTS vendoremail VARCHAR(500) DEFAULT ''",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [460, 380],
+      "id": "mig-node-0003",
+      "name": "Add vendoremail column",
+      "credentials": { "mySql": { "id": "VS3fKdoPCMa1Ik21", "name": "MySQL account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { success: true, message: 'Migration complete: description added to vmm_complaints, vendoremail added to vmm_vendorescalations' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300],
+      "id": "mig-node-0004",
+      "name": "Done"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [920, 300],
+      "id": "mig-node-0005",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Webhook - POST /vmm-run-migration": { "main": [[{ "node": "Add description column", "type": "main", "index": 0 }, { "node": "Add vendoremail column", "type": "main", "index": 0 }]] },
+    "Add description column":            { "main": [[{ "node": "Done",    "type": "main", "index": 0 }]] },
+    "Add vendoremail column":            { "main": [[{ "node": "Done",    "type": "main", "index": 0 }]] },
+    "Done":                              { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c"
+  }
+}

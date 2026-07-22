@@ -520,6 +520,8 @@ export default function EmailComplaints() {
       const r = await vmm.getComplaint(resendNo.trim());
       if (!r.success) { showToast('Complaint not found', 'warn'); return; }
       setResendData(r.complaint);
+      setResendVendorEmail(r.complaint.vendoremail || '');
+      setResendDescription(r.complaint.description || '');
     } catch { showToast('Lookup failed — check n8n is running', 'warn'); }
     finally { setResendLoading(false); }
   };
@@ -836,6 +838,7 @@ export default function EmailComplaints() {
         const attachmentText = itemAttachments.length
           ? '\n\nAttachments:\n' + itemAttachments.map(a => `- ${a.name}: ${a.viewLink}`).join('\n')
           : '';
+        const itemDescription = (item.description || parsedEdits.description || parsed.description || '').replace(/\n+/g, ' ').trim();
         const payload = {
           ...sharedPayload,
           productName:       product.name    || item.productName    || '',
@@ -845,7 +848,9 @@ export default function EmailComplaints() {
           complaintType:     item.complaintType || nature.type       || 'Repair',
           contractType:      item.contractType  || '',
           tatDays:           nature.tatDays     || 7,
-          remarks:           `${item.description || parsedEdits.description || parsed.description || ''}${providedText}${attachmentText}`.trim(),
+          description:       itemDescription,
+          vendorEmail:       item.vendorEmail   || '',
+          remarks:           `${itemDescription}${providedText}${attachmentText}`.trim(),
           attachmentLinks:   itemAttachments,
         };
         const res = await vmm.logComplaint(payload);
@@ -1042,6 +1047,8 @@ export default function EmailComplaints() {
                   storeState: resendData.statename, storeCity: resendData.storecity,
                   manualVendorEmail: resendVendorEmail.trim(),
                 });
+                const toSet = new Set(toAddresses.map(r => r.emailAddress.address.toLowerCase()));
+                const previewCC = ccAddresses.filter(r => !toSet.has(r.emailAddress.address.toLowerCase()));
                 return (
                   <>
                     <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '12px 14px', fontSize: 13 }}>
@@ -1093,7 +1100,7 @@ export default function EmailComplaints() {
                       </div>
                       <div>
                         <span style={{ color: '#6b7280' }}>CC: </span>
-                        {ccAddresses.length ? ccAddresses.map(r => r.emailAddress.address).join(', ') : '—'}
+                        {previewCC.length ? previewCC.map(r => r.emailAddress.address).join(', ') : '—'}
                       </div>
                     </div>
 
