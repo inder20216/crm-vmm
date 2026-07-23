@@ -624,14 +624,10 @@ export async function sendNtrEmailDirect({
 
 // ── Closure email ─────────────────────────────────────────────────────────────
 export async function sendClosureEmailDirect({
-  storeCode, storeName, storeEmail, fmEmail, fmName,
-  vendorName, productName, complaintno, closureStatus, closureDate, remarks,
+  messageId, storeCode, storeName, storeEmail, fmEmail, fmName,
+  vendorName, productName, complaintno, closureStatus, closureDate, closedBy, remarks,
 }) {
   const subject = `[VMM] Complaint ${closureStatus} — ${complaintno} | ${storeCode}`;
-
-  const statusColor = closureStatus === 'Closed' ? '#059669'
-    : closureStatus === 'Resolved'  ? '#0284c7'
-    : '#d97706';
 
   const htmlBody = `
 <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:600px;margin:0 auto">
@@ -642,20 +638,16 @@ export async function sendClosureEmailDirect({
   <div style="background:#fff;padding:24px 28px;border:1px solid #e2e8f0;border-top:none">
     <p style="margin:0 0 16px">Dear Store Team,</p>
     <p style="margin:0 0 20px">
-      Your complaint has been <strong style="color:${statusColor}">${closureStatus}</strong> by the VMM Helpdesk team.
+      We are pleased to inform you that your store ticket, <strong>${complaintno}</strong>, for
+      <strong>${productName || 'the reported issue'}</strong> has successfully been ${closureStatus === 'Closed' ? 'closed' : closureStatus.toLowerCase()}.${fmName && closureDate ? ` The same was confirmed by FM <strong>${fmName}</strong> on <strong>${closureDate}</strong>.` : ''}
     </p>
-
-    <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
-      <tr style="background:#f8fafc"><td style="padding:8px 14px;color:#64748b;width:150px">Complaint No</td><td style="padding:8px 14px;font-weight:700">${complaintno}</td></tr>
-      <tr><td style="padding:8px 14px;color:#64748b">Store</td><td style="padding:8px 14px">${storeName || ''} (${storeCode})</td></tr>
-      <tr style="background:#f8fafc"><td style="padding:8px 14px;color:#64748b">Product</td><td style="padding:8px 14px">${productName || '—'}</td></tr>
-      <tr><td style="padding:8px 14px;color:#64748b">Vendor</td><td style="padding:8px 14px">${vendorName || '—'}</td></tr>
-      <tr style="background:#f8fafc"><td style="padding:8px 14px;color:#64748b">Status</td><td style="padding:8px 14px;font-weight:600;color:${statusColor}">${closureStatus}</td></tr>
-      ${closureDate ? `<tr><td style="padding:8px 14px;color:#64748b">Closure Date</td><td style="padding:8px 14px">${closureDate}</td></tr>` : ''}
-      ${remarks ? `<tr style="background:#f8fafc"><td style="padding:8px 14px;color:#64748b;vertical-align:top">Remarks</td><td style="padding:8px 14px">${remarks}</td></tr>` : ''}
-    </table>
-
-    <p style="margin:0;font-size:13px;color:#64748b">If you have any further queries, please write to us at vmm.helpdesk@openmind.in</p>
+    ${closedBy ? `<p style="margin:0 0 16px">Closed by: <strong>${closedBy}</strong></p>` : ''}
+    ${remarks ? `<p style="margin:0 0 20px;padding:12px 14px;background:#f8fafc;border-left:3px solid #6366f1;font-size:13px"><strong>Remarks:</strong> ${remarks}</p>` : ''}
+    <p style="margin:0;font-size:13px;color:#64748b">
+      If you require any further assistance or have additional queries, please feel free to reach out to us at
+      <a href="mailto:vmm.helpdesk@openmind.in" style="color:#4f46e5">vmm.helpdesk@openmind.in</a>
+      or call us on <strong>9711 772 722</strong>.
+    </p>
     <p style="margin:16px 0 0;font-size:13px">Regards,<br/><strong>VMM Helpdesk Team</strong><br/>Open Mind Services Limited</p>
   </div>
   <div style="padding:12px 28px;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;font-size:11px;color:#94a3b8">
@@ -663,13 +655,18 @@ export async function sendClosureEmailDirect({
   </div>
 </div>`;
 
+  const smEmail = getSmEmail(storeCode);
+  const hoPoc   = HO_POC[productName] || HO_POC['DEFAULT'];
+
+  if (messageId) {
+    const ccEmails = [fmEmail, smEmail, hoPoc?.email].filter(Boolean);
+    return replyOnThread({ messageId, htmlBody, toEmail: storeEmail, ccEmails });
+  }
+
   const makeAddr = (email, name) => ({ emailAddress: { address: email, name: name || '' } });
   const addUniq = (list, email, name) => {
     if (email && !list.some(x => x.emailAddress.address === email)) list.push(makeAddr(email, name));
   };
-
-  const smEmail = getSmEmail(storeCode);
-  const hoPoc   = HO_POC[productName] || HO_POC['DEFAULT'];
 
   const toList = [];
   if (storeEmail) addUniq(toList, storeEmail, storeName);

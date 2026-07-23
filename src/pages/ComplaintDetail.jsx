@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { vmm } from '../api/vmm';
+import { sendClosureEmailDirect } from '../auth/graphService';
 import './ComplaintDetail.css';
 import { useAuth } from '../context/AuthContext';
 
@@ -229,6 +230,15 @@ export default function ComplaintDetail() {
 
       if (res?.success !== false && !res?.error) {
         showUpdMsg('Update saved successfully', 'ok');
+        if (effectiveStatus === 'Closed' || effectiveStatus === 'Partially Closed') {
+          sendClosureEmailDirect({
+            messageId: isEmailSourced(c) ? (c.sourceofctxnid || '') : '',
+            storeCode: c.storecode,   storeName: c.storename,   storeEmail: c.storeemail,
+            fmEmail:   c.fmemail,     fmName:    c.fmname,
+            vendorName: c.vendorname, productName: c.productname, complaintno: c.complaintno,
+            closureStatus: effectiveStatus, closureDate: updEdc, closedBy: updClosedBy, remarks: updRemarks,
+          }).catch(err => console.error('[VMM] Closure email failed:', err));
+        }
         setUpdAction(null);
         setUpdTxnId(''); setUpdMobile('');
         setUpdEmailRef(isEmailSourced(c) ? emailRefDefault(c) : '');
