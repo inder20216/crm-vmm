@@ -238,6 +238,26 @@ export default function ComplaintDetail() {
             vendorName: c.vendorname, productName: c.productname, complaintno: c.complaintno,
             closureStatus: effectiveStatus, closureDate: updEdc, closedBy: updClosedBy, remarks: updRemarks,
           }).catch(err => console.error('[VMM] Closure email failed:', err));
+        } else if (effectiveStatus === 'Escalated') {
+          vmm.sendEscalationEmail({
+            storeCode: c.storecode,
+            storeName: c.storename,
+            storeEmail: c.storeemail || '',
+            fmName:    c.fmname,
+            fmEmail:   c.fmemail,
+            region:    c.region,
+            storeState: c.state,
+            storeCity: c.city,
+            vendorName: c.vendorname,
+            productName: c.productname,
+            natureOfComplaint: c.natureofproblem,
+            complaints: [{
+              complaintno:     c.complaintno,
+              productLocation: c.productlocation,
+              edcDate:         updEdc,
+              description:     updRemarks,
+            }],
+          }).catch(err => console.error('[VMM] Escalation email failed:', err));
         }
         setUpdAction(null);
         setUpdTxnId(''); setUpdMobile('');
