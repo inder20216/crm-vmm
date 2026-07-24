@@ -6,7 +6,7 @@
         "httpMethod": "GET",
         "path": "vmm-sp-delay-reasons",
         "responseMode": "responseNode",
-        "options": {}
+        "options": { "allowedOrigins": "*" }
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
@@ -45,7 +45,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const all = $input.all();\n\nconst reasons = all\n  .map(item => ({\n    delayReason:    item.json['Delay Reason'] || '',\n    subDelayReason: item.json['Sub Delay Reason'] || '',\n  }))\n  .filter(r => r.delayReason !== '');\n\n// Group sub-reasons under each main reason\nconst grouped = {};\nfor (const r of reasons) {\n  if (!grouped[r.delayReason]) grouped[r.delayReason] = [];\n  if (r.subDelayReason) grouped[r.delayReason].push(r.subDelayReason);\n}\n\nreturn [{\n  json: {\n    success: true,\n    count: reasons.length,\n    reasons,\n    grouped\n  }\n}];"
+        "jsCode": "const all = $input.all();\n\n// Group sub-reasons under each main reason — each entry is { label, tat }\nconst grouped = {};\n\nfor (const item of all) {\n  const delayReason    = (item.json['Delay Reason']     || '').trim();\n  const subDelayReason = (item.json['Sub Delay Reason'] || '').trim();\n  const tatRaw         = item.json['TAT Days'];\n  const tat            = tatRaw !== undefined && tatRaw !== '' ? (parseInt(tatRaw) || null) : null;\n\n  if (!delayReason) continue;\n  if (!grouped[delayReason]) grouped[delayReason] = [];\n  if (subDelayReason) {\n    grouped[delayReason].push({ label: subDelayReason, tat });\n  }\n}\n\nreturn [{ json: { success: true, grouped } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -57,7 +57,10 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ $json }}",
-        "options": { "responseCode": 200 }
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Access-Control-Allow-Origin", "value": "*" }] }
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,

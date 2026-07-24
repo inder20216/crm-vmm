@@ -468,6 +468,7 @@ export default function CaseLoggingForm() {
             productLocation: r.productLocation,
             natureOfProblem: r._nature        || '',
             edcDate:         r.edcDate,
+            description:     form.remarks     || '',
           })),
           extraToEmails: extraTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
           extraCcEmails: extraCc.split(/[;,]/).map(s => s.trim()).filter(Boolean),

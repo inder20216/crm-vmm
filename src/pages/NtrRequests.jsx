@@ -111,7 +111,7 @@ export default function NtrRequests() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { if (mode === 'list') load(); }, [mode]); // eslint-disable-line
+  // List loads only on explicit Refresh click — not on mount
 
   useEffect(() => {
     if (!selected) { setItems([]); return; }
@@ -460,8 +460,8 @@ export default function NtrRequests() {
                 <div className="ntr-preview-meta">
                   <span><strong>Store:</strong> {storeInfo.name} ({storeInfo.code || storeCode})</span>
                   <span><strong>Date:</strong> {requestDate}</span>
-                  <span><strong>Email TO:</strong> {storeInfo.email || storeInfo.storeEmail || '—'}</span>
-                  <span><strong>CC:</strong> Pooja@vishalretail.co.in</span>
+                  <span><strong>Email TO:</strong> vmm.helpdesk@openmind.in</span>
+                  <span><strong>CC:</strong> inder@openmind.in</span>
                 </div>
               )}
 

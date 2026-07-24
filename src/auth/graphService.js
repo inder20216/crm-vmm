@@ -570,15 +570,10 @@ export async function sendNtrEmailDirect({
 
   const subject = `Re: NT consumables Requirement - ${storeCode} ${storeName}`;
 
-  const toAddresses = TEST_MODE
-    ? [{ emailAddress: { address: TEST_EMAIL, name: 'Test Redirect' } }]
-    : [{ emailAddress: { address: storeEmail } }];
-
-  const ccAddresses = TEST_MODE
-    ? []
-    : [{ emailAddress: { address: 'Pooja@vishalretail.co.in' } }];
-
-  const finalSubject = TEST_MODE ? `[TEST] ${subject}` : subject;
+  // TEST OVERRIDE — change these back to store/Pooja when going live
+  const toAddresses = [{ emailAddress: { address: 'vmm.helpdesk@openmind.in' } }];
+  const ccAddresses = [{ emailAddress: { address: 'inder@openmind.in' } }];
+  const finalSubject = `[TEST] ${subject}`;
 
   const token = await getAccessToken();
   const base  = `${GRAPH}/users/${encodeURIComponent(SHARED_MAILBOX)}`;

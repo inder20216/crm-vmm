@@ -31,6 +31,7 @@ export const vmm = {
   lookupEmployeeByMobile: (mobile) => get(BASE, 'vmm-sp-employee', { mobile }),
   getProducts:       ()       => get(BASE, 'vmm-sp-products'),
   getNatures:        ()       => get(BASE, 'vmm-sp-natures'),
+  getDelayReasons:   ()       => get(BASE, 'vmm-sp-delay-reasons'),
   getVendors:        ()       => get(BASE, 'vmm-sp-vendors'),
   getAmcVendor:        (storeCode, product) => get(BASE, 'vmm-sp-amc-vendor', { storeCode, product }),
   getEscalationMatrix: (params = {})        => get(BASE, 'vmm-sp-escalation-matrix', params),
@@ -43,7 +44,7 @@ export const vmm = {
   getRecentComplaints: (code)   => get(BASE,  'vmm-recent-complaints',   { storeCode: code }),
   emailClaim:          (data)   => post(BASE, 'vmm-email-claim',         data),
   searchComplaints:    (params) => get(BASE, 'vmm-search-complaints',    params),
-  dashboardStats:    ()       => get(BASE, 'vmm-dashboard-stats'),
+  dashboardStats:    (params = {}) => get(BASE, 'vmm-dashboard-stats', params),
   getComplaintDetail:(ref)    => get(BASE, 'vmm-complaint-detail',   { no: ref }),
   getReports:        ()       => get(BASE, 'vmm-reports'),
 

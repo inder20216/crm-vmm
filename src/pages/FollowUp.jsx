@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { vmm } from '../api/vmm';
 import './FollowUp.css';
 
-const DELAY_REASONS = {
+// Fallback used until the API responds — keeps dropdowns populated instantly
+const FALLBACK_DELAY_REASONS = {
   'Delay From Vendor Side': [
     { label: 'Quotation not received',       tat: 1  },
     { label: 'Material/Parts Not Available', tat: 5  },
@@ -77,6 +78,18 @@ export default function FollowUp() {
   const [newEdc,       setNewEdc]       = useState('');
   const [closedBy,     setClosedBy]     = useState('');
   const [remarks,      setRemarks]      = useState('');
+  const [delayReasons, setDelayReasons] = useState(FALLBACK_DELAY_REASONS);
+
+  // Load delay reasons from Google Sheet via n8n — updates TATs without a code deploy
+  useEffect(() => {
+    vmm.getDelayReasons()
+      .then(res => {
+        if (res.success && res.grouped && Object.keys(res.grouped).length > 0) {
+          setDelayReasons(res.grouped);
+        }
+      })
+      .catch(() => {}); // keep fallback on error
+  }, []);
 
   useEffect(() => {
     vmm.getFollowUpComplaints()
@@ -169,9 +182,20 @@ export default function FollowUp() {
           || (c.vendorname  || '').toLowerCase().includes(s);
     });
 
+  // EDC date picker constraints
+  const minDate = new Date().toISOString().split('T')[0];
+  const currentSubTat = delaySub
+    ? ((delayReasons[delayMain] || []).find(r => r.label === delaySub)?.tat ?? null)
+    : null;
+  const maxDate = (() => {
+    if (currentSubTat == null) return undefined;
+    const d = new Date(); d.setDate(d.getDate() + currentSubTat);
+    return d.toISOString().split('T')[0];
+  })();
+
   const handleSubmit = async () => {
     if (!selected) return;
-    if ((action === 'Partially Closed' || action === 'Escalated' || action === 'Closed') && !newEdc) {
+    if ((action === 'Partially Closed' || action === 'Escalated' || action === 'Closed' || action === 'Update EDC') && !newEdc) {
       showToast('Date of closure is required', 'err'); return;
     }
     if (!remarks.trim() && action !== 'Closed' && action !== 'Not Connected') {
@@ -184,7 +208,17 @@ export default function FollowUp() {
       const nextLevel = (selected.escalationlevel || 0) + 1;
       let res;
 
-      if (action === 'Not Connected') {
+      if (action === 'Update EDC') {
+        res = await vmm.updateEdc({
+          complaintId:     selected.id,
+          newClosureDate:  newEdc,
+          escalationLevel: nextLevel,
+          delayMain,
+          delaySub,
+          remarks,
+          uid,
+        });
+      } else if (action === 'Not Connected') {
         res = await vmm.notConnected({
           complaintId: selected.id,
           complaintno: selected.complaintno,
@@ -224,7 +258,6 @@ export default function FollowUp() {
       if (res?.success !== false && !res?.error) {
         showToast(`${selected.complaintno} updated — ${action}`, 'ok');
         if (action === 'Closed' || action === 'Resolved') {
-          // Send closure notification email
           vmm.sendClosureEmail({
             storeCode:     selected.store_code   || '',
             storeName:     bufStr(selected.store_name) || '',
@@ -242,9 +275,16 @@ export default function FollowUp() {
           setSelected(null);
         } else {
           const ncAdd = action === 'Not Connected' ? 1 : 0;
-          setComplaints(prev => prev.map(c => c.id === selected.id
-            ? { ...c, current_status: action, nc_count: (c.nc_count || 0) + ncAdd }
-            : c));
+          setComplaints(prev => prev.map(c => {
+            if (c.id !== selected.id) return c;
+            const edcUpdate = (action === 'Escalated' || action === 'Partially Closed' || action === 'Update EDC') && newEdc
+              ? {
+                  closuredate: newEdc,
+                  days_overdue: Math.round((new Date().setHours(0,0,0,0) - new Date(newEdc).setHours(0,0,0,0)) / 86400000),
+                }
+              : {};
+            return { ...c, current_status: action, nc_count: (c.nc_count || 0) + ncAdd, ...edcUpdate };
+          }));
           resetForm(selected);
           setLogsLoading(true);
           vmm.getComplaintDetail(selected.id)
@@ -448,6 +488,7 @@ export default function FollowUp() {
                       ['Closed',           'Closed / Resolved'],
                       ['Partially Closed', 'Partially Closed'],
                       ['Escalated',        'Escalated'],
+                      ['Update EDC',       'Update EDC'],
                       ['Not Connected',    'Not Connected'],
                       ['Note',             'Add Note Only'],
                     ].map(([val, lbl]) => (
@@ -469,14 +510,14 @@ export default function FollowUp() {
                   </div>
                 )}
 
-                {/* Delay reason — for Partially Closed, Escalated, Closed */}
-                {(action === 'Partially Closed' || action === 'Escalated' || action === 'Closed') && (
+                {/* Delay reason — for Partially Closed, Escalated, Update EDC, Closed */}
+                {(action === 'Partially Closed' || action === 'Escalated' || action === 'Update EDC' || action === 'Closed') && (
                   <div className="fu-two-col">
                     <div className="fu-form-field">
                       <label className="fu-label">Delay Reason — Main</label>
                       <select className="fu-select" value={delayMain} onChange={e => { setDelayMain(e.target.value); setDelaySub(''); if (action !== 'Closed') setNewEdc(''); }}>
                         <option value="">— Select —</option>
-                        {Object.keys(DELAY_REASONS).map(k => <option key={k} value={k}>{k}</option>)}
+                        {Object.keys(delayReasons).map(k => <option key={k} value={k}>{k}</option>)}
                       </select>
                     </div>
                     <div className="fu-form-field">
@@ -485,7 +526,7 @@ export default function FollowUp() {
                         const sub = e.target.value;
                         setDelaySub(sub);
                         if (action !== 'Closed') {
-                          const item = (DELAY_REASONS[delayMain] || []).find(r => r.label === sub);
+                          const item = (delayReasons[delayMain] || []).find(r => r.label === sub);
                           if (item?.tat) {
                             const d = new Date(); d.setDate(d.getDate() + item.tat);
                             setNewEdc(d.toISOString().split('T')[0]);
@@ -493,7 +534,7 @@ export default function FollowUp() {
                         }
                       }}>
                         <option value="">— Select —</option>
-                        {(DELAY_REASONS[delayMain] || []).map(r => (
+                        {(delayReasons[delayMain] || []).map(r => (
                           <option key={r.label} value={r.label}>
                             {r.tat ? `${r.label} (${r.tat}d)` : r.label}
                           </option>
@@ -504,7 +545,7 @@ export default function FollowUp() {
                 )}
 
                 {/* Date field */}
-                {(action === 'Partially Closed' || action === 'Escalated' || action === 'Not Connected' || action === 'Closed') && (
+                {(action === 'Partially Closed' || action === 'Escalated' || action === 'Update EDC' || action === 'Not Connected' || action === 'Closed') && (
                   <div className="fu-form-field">
                     <label className="fu-label">
                       {action === 'Closed'        ? 'Date of Closure (as per info received)'
@@ -516,6 +557,8 @@ export default function FollowUp() {
                       className="fu-input"
                       type="date"
                       value={newEdc}
+                      min={action !== 'Closed' ? minDate : undefined}
+                      max={maxDate}
                       onChange={e => setNewEdc(e.target.value)}
                     />
                   </div>

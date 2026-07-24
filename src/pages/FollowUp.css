@@ -121,6 +121,7 @@
 }
 .fu-action-btn.active.fu-action-closed           { background: #dcfce7; border-color: #16a34a; color: #15803d; }
 .fu-action-btn.active.fu-action-partially-closed { background: #fef3c7; border-color: #d97706; color: #92400e; }
+.fu-action-btn.active.fu-action-update-edc       { background: #ede9fe; border-color: #7c3aed; color: #5b21b6; }
 .fu-action-btn.active.fu-action-not-connected    { background: #ffedd5; border-color: #ea580c; color: #9a3412; }
 .fu-action-btn.active.fu-action-note             { background: #dbeafe; border-color: #2563eb; color: #1d4ed8; }
 

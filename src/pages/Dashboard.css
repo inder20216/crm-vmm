@@ -1,8 +1,46 @@
 .dashboard { padding: 28px 32px; max-width: 1100px; }
 
-.page-heading { margin-bottom: 24px; }
+.page-heading { margin-bottom: 0; }
 .page-heading h2 { font-size: 22px; font-weight: 700; color: #1e1b4b; margin: 0 0 4px; }
 .page-heading p  { font-size: 13px; color: #64748b; margin: 0; }
+
+/* ── Top bar: heading + filter ── */
+.dash-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+/* ── Date filter bar ── */
+.dash-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.dash-filter-btn {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: all .15s;
+}
+.dash-filter-btn:hover  { border-color: #1e1b4b; color: #1e1b4b; }
+.dash-filter-btn.active { background: #1e1b4b; color: #fff; border-color: #1e1b4b; }
+.dash-custom-range { display: flex; align-items: center; gap: 6px; margin-left: 4px; }
+.dash-date-input {
+  border: 1px solid #e2e8f0; border-radius: 8px;
+  padding: 5px 10px; font-size: 12px; color: #374151; outline: none;
+}
+.dash-date-input:focus { border-color: #1e1b4b; }
+.dash-range-sep { font-size: 13px; color: #94a3b8; }
 
 .stats-grid {
   display: grid;
@@ -22,6 +60,15 @@
 .stat-blue   .stat-value { color: #2563eb; }
 .stat-green  .stat-value { color: #16a34a; }
 .stat-red    .stat-value { color: #dc2626; }
+.stat-amber  .stat-value { color: #d97706; }
+.stat-sub { font-size: 11px; color: #94a3b8; margin-top: 6px; }
+
+.dash-error { background:#fee2e2; color:#dc2626; border-radius:8px; padding:10px 16px; margin-bottom:20px; font-size:13px; }
+.dash-empty { padding: 32px 20px; text-align: center; color: #94a3b8; font-size: 13px; }
+.dash-agent-name { font-size: 13px; font-weight: 600; color: #1e293b; }
+.dash-num { text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 600; color: #374151; }
+.dash-num-green  { color: #16a34a; }
+.dash-num-orange { color: #ea580c; }
 
 .dash-card {
   background: #fff;
