@@ -941,10 +941,9 @@ export default function EmailComplaints() {
             w.id !== wipMatch.id &&
             !(selected.conversationId && w.conversationId && w.conversationId === selected.conversationId)
           ));
-          vmm.resolveWip(wipMatch.id).catch(err => {
-            console.warn('WIP resolve failed:', err);
-            showToast('WIP may reappear on reload — dismiss it manually if needed', 'warn');
-          });
+          vmm.resolveWip(wipMatch.id)
+            .then(res => { if (!res?.success) showToast('WIP may reappear on reload — dismiss it manually if needed', 'warn'); })
+            .catch(() => { showToast('WIP may reappear on reload — dismiss it manually if needed', 'warn'); });
         }
         setInboxEmails(prev => prev.find(e => e.id === selected.id) ? prev : [{ ...selected, hasStoreCode: !!selected.storeCode }, ...prev]);
         setLogSuccess({
