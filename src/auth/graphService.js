@@ -13,8 +13,14 @@ const DELTA_KEY = 'vmm_inbox_delta_link';
 async function getAccessToken() {
   const accounts = msalInstance.getAllAccounts();
   if (!accounts.length) throw new Error('Not signed in');
-  const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0] });
-  return res.accessToken;
+  try {
+    const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0] });
+    return res.accessToken;
+  } catch {
+    // Silent renewal failed (expired session, consent needed) — prompt user via popup
+    const res = await msalInstance.acquireTokenPopup({ ...loginRequest, account: accounts[0] });
+    return res.accessToken;
+  }
 }
 
 function authHeader(token) {
