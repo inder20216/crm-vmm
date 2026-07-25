@@ -904,7 +904,7 @@ export default function EmailComplaints() {
         const wipMatch = wipList.find(w =>
           w.id === selected.id ||
           (w.conversationId && selected.conversationId && w.conversationId === selected.conversationId)
-        );
+        ) || (selected.status === 'WIP' ? selected : null);
         if (wipMatch && wipMatch.id !== replyMsgId) {
           vmm.categorizeEmail(wipMatch.id, ['Case Logged', 'New CRM']).catch(() => {});
         }
@@ -941,7 +941,10 @@ export default function EmailComplaints() {
             w.id !== wipMatch.id &&
             !(selected.conversationId && w.conversationId && w.conversationId === selected.conversationId)
           ));
-          vmm.resolveWip(wipMatch.id).catch(() => {});
+          vmm.resolveWip(wipMatch.id).catch(err => {
+            console.warn('WIP resolve failed:', err);
+            showToast('WIP may reappear on reload — dismiss it manually if needed', 'warn');
+          });
         }
         setInboxEmails(prev => prev.find(e => e.id === selected.id) ? prev : [{ ...selected, hasStoreCode: !!selected.storeCode }, ...prev]);
         setLogSuccess({
