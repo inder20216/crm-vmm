@@ -4,7 +4,7 @@ import { AC_VENDOR_MAP, LIFT_VENDOR_MAP, getSmEmail, HO_POC, getVendorEscalation
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 
 // ── TEST MODE — set true to redirect ALL outbound emails to TEST_EMAIL ────────
-const TEST_MODE  = false;
+const TEST_MODE  = true;
 const TEST_EMAIL = 'inder@openmind.in';
 
 // Delta link persisted in sessionStorage so refresh survives page reloads within the session
@@ -537,6 +537,14 @@ export async function sendEscalationEmailDirect({
   </div>
 </div>`;
 
+  if (TEST_MODE) {
+    return sendFromSharedMailbox({
+      subject: `[TEST] ${subject}`,
+      htmlBody,
+      toAddresses: [{ emailAddress: { address: TEST_EMAIL, name: 'Test' } }],
+      ccAddresses: [],
+    });
+  }
   return sendFromSharedMailbox({ subject, htmlBody, toAddresses, ccAddresses: finalCC });
 }
 
