@@ -18,34 +18,39 @@
     {
       "parameters": {
         "operation": "getAll",
-        "tableId": "wip_emails",
+        "documentId": {
+          "__rl": true,
+          "value": "1uzfGESr8kpQ_JKgkSOww2s3WxsH8y1U-YMvM8is31yE",
+          "mode": "list",
+          "cachedResultName": "VMM Master Data"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "WIP Emails",
+          "mode": "list",
+          "cachedResultName": "WIP Emails"
+        },
         "returnAll": true,
-        "filterType": "string",
-        "matchType": "allFilters",
-        "filters": {
-          "conditions": [
-            { "keyName": "status", "condition": "eq", "keyValue": "open" }
-          ]
-        }
+        "options": {}
       },
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
       "position": [-16, 400],
-      "id": "wip02-supabase",
-      "name": "Fetch Open WIPs",
+      "id": "wip02-sheets",
+      "name": "Fetch WIP Rows",
       "credentials": {
-        "supabaseApi": { "id": "SUPABASE_CRED_ID", "name": "Supabase" }
+        "googleSheetsOAuth2Api": { "id": "ltEEeRayxtB2S0lJ", "name": "Inder" }
       }
     },
     {
       "parameters": {
-        "jsCode": "const rows = $input.all().map(i => i.json);\n\nconst wips = rows\n  .sort((a, b) => new Date(b.replied_at || b.received_at || 0) - new Date(a.replied_at || a.received_at || 0))\n  .map(r => ({\n    id:             r.email_id        || '',\n    conversationId: r.conversation_id || '',\n    subject:        r.subject         || '',\n    fromAddr:       r.from_addr       || '',\n    storeCode:      r.store_code      || '',\n    receivedAt:     r.received_at     || '',\n    repliedAt:      r.replied_at      || '',\n    savedBy:        r.saved_by        || '',\n    status:         'WIP',\n    parsed: (() => {\n      try { return typeof r.partial_fields === 'object' ? r.partial_fields : JSON.parse(r.partial_fields || '{}'); }\n      catch { return {}; }\n    })()\n  }));\n\nreturn [{ json: { success: true, wips } }];"
+        "jsCode": "const rows = $input.all().map(i => i.json);\n\n// Only open WIPs, sorted newest-replied first\nconst wips = rows\n  .filter(r => (r.status || '').toLowerCase() === 'open' && r.email_id)\n  .sort((a, b) => new Date(b.replied_at || b.received_at || 0) - new Date(a.replied_at || a.received_at || 0))\n  .map(r => ({\n    id:             r.email_id        || '',\n    conversationId: r.conversation_id || '',\n    subject:        r.subject         || '',\n    fromAddr:       r.from_addr       || '',\n    storeCode:      r.store_code      || '',\n    receivedAt:     r.received_at     || '',\n    repliedAt:      r.replied_at      || '',\n    savedBy:        r.saved_by        || '',\n    status:         'WIP',\n    parsed: (() => {\n      try { return typeof r.partial_fields === 'object' ? r.partial_fields : JSON.parse(r.partial_fields || '{}'); }\n      catch { return {}; }\n    })()\n  }));\n\nreturn [{ json: { success: true, wips } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [208, 400],
       "id": "wip02-code",
-      "name": "Format WIPs"
+      "name": "Filter & Format WIPs"
     },
     {
       "parameters": {
@@ -64,9 +69,9 @@
     }
   ],
   "connections": {
-    "Webhook - GET /vmm-wip-list": { "main": [[{ "node": "Fetch Open WIPs", "type": "main", "index": 0 }]] },
-    "Fetch Open WIPs":             { "main": [[{ "node": "Format WIPs",     "type": "main", "index": 0 }]] },
-    "Format WIPs":                 { "main": [[{ "node": "Respond",         "type": "main", "index": 0 }]] }
+    "Webhook - GET /vmm-wip-list": { "main": [[{ "node": "Fetch WIP Rows",       "type": "main", "index": 0 }]] },
+    "Fetch WIP Rows":              { "main": [[{ "node": "Filter & Format WIPs", "type": "main", "index": 0 }]] },
+    "Filter & Format WIPs":        { "main": [[{ "node": "Respond",              "type": "main", "index": 0 }]] }
   },
   "pinData": {},
   "meta": { "templateCredsSetupCompleted": true, "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c" }

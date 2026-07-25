@@ -17,7 +17,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const raw = $input.first().json;\nconst b = raw.body || raw;\nreturn [{ json: {\n  email_id:        b.emailId        || '',\n  conversation_id: b.conversationId || '',\n  subject:         b.subject        || '',\n  from_addr:       b.fromAddr       || '',\n  store_code:      b.storeCode      || '',\n  received_at:     b.receivedAt     || '',\n  replied_at:      b.repliedAt      || '',\n  partial_fields:  typeof b.parsed === 'object' ? b.parsed : {},\n  saved_by:        b.savedBy        || '',\n  status:          'open'\n} }];"
+        "jsCode": "const raw = $input.first().json;\nconst b = raw.body || raw;\nreturn [{ json: {\n  email_id:        b.emailId        || '',\n  conversation_id: b.conversationId || '',\n  subject:         b.subject        || '',\n  from_addr:       b.fromAddr       || '',\n  store_code:      b.storeCode      || '',\n  received_at:     b.receivedAt     || '',\n  replied_at:      b.repliedAt      || '',\n  partial_fields:  typeof b.parsed === 'object' ? JSON.stringify(b.parsed) : (b.parsed || '{}'),\n  saved_by:        b.savedBy        || '',\n  status:          'open',\n  resolved_at:     ''\n} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -27,99 +27,47 @@
     },
     {
       "parameters": {
-        "operation": "create",
-        "tableId": "wip_emails",
-        "dataToSend": "defineBelow",
-        "fieldsUi": {
-          "fieldValues": [
-            { "fieldId": "email_id",        "fieldValue": "={{ $json.email_id }}" },
-            { "fieldId": "conversation_id", "fieldValue": "={{ $json.conversation_id }}" },
-            { "fieldId": "subject",         "fieldValue": "={{ $json.subject }}" },
-            { "fieldId": "from_addr",       "fieldValue": "={{ $json.from_addr }}" },
-            { "fieldId": "store_code",      "fieldValue": "={{ $json.store_code }}" },
-            { "fieldId": "received_at",     "fieldValue": "={{ $json.received_at }}" },
-            { "fieldId": "replied_at",      "fieldValue": "={{ $json.replied_at }}" },
-            { "fieldId": "partial_fields",  "fieldValue": "={{ JSON.stringify($json.partial_fields) }}" },
-            { "fieldId": "saved_by",        "fieldValue": "={{ $json.saved_by }}" },
-            { "fieldId": "status",          "fieldValue": "open" }
-          ]
-        }
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1uzfGESr8kpQ_JKgkSOww2s3WxsH8y1U-YMvM8is31yE",
+          "mode": "list",
+          "cachedResultName": "VMM Master Data"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "WIP Emails",
+          "mode": "list",
+          "cachedResultName": "WIP Emails"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email_id":        "={{ $json.email_id }}",
+            "conversation_id": "={{ $json.conversation_id }}",
+            "subject":         "={{ $json.subject }}",
+            "from_addr":       "={{ $json.from_addr }}",
+            "store_code":      "={{ $json.store_code }}",
+            "received_at":     "={{ $json.received_at }}",
+            "replied_at":      "={{ $json.replied_at }}",
+            "partial_fields":  "={{ $json.partial_fields }}",
+            "saved_by":        "={{ $json.saved_by }}",
+            "status":          "open"
+          },
+          "matchingColumns": ["email_id"],
+          "schema": []
+        },
+        "options": {}
       },
       "continueOnFail": true,
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
       "position": [208, 400],
-      "id": "wip01-create",
-      "name": "Create WIP",
+      "id": "wip01-sheets",
+      "name": "Save WIP",
       "credentials": {
-        "supabaseApi": { "id": "SUPABASE_CRED_ID", "name": "Supabase" }
+        "googleSheetsOAuth2Api": { "id": "ltEEeRayxtB2S0lJ", "name": "Inder" }
       }
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.error ?? '' }}",
-              "operation": "isNotEmpty"
-            }
-          ]
-        }
-      },
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [432, 400],
-      "id": "wip01-if",
-      "name": "Already Exists?"
-    },
-    {
-      "parameters": {
-        "jsCode": "return [{ json: $('Prepare Fields').first().json }];"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [656, 280],
-      "id": "wip01-relay",
-      "name": "Get Original Data"
-    },
-    {
-      "parameters": {
-        "operation": "update",
-        "tableId": "wip_emails",
-        "filters": {
-          "conditions": [
-            { "keyName": "email_id", "condition": "eq", "keyValue": "={{ $json.email_id }}" }
-          ]
-        },
-        "dataToSend": "defineBelow",
-        "fieldsUi": {
-          "fieldValues": [
-            { "fieldId": "conversation_id", "fieldValue": "={{ $json.conversation_id }}" },
-            { "fieldId": "subject",         "fieldValue": "={{ $json.subject }}" },
-            { "fieldId": "store_code",      "fieldValue": "={{ $json.store_code }}" },
-            { "fieldId": "replied_at",      "fieldValue": "={{ $json.replied_at }}" },
-            { "fieldId": "partial_fields",  "fieldValue": "={{ JSON.stringify($json.partial_fields) }}" },
-            { "fieldId": "saved_by",        "fieldValue": "={{ $json.saved_by }}" },
-            { "fieldId": "status",          "fieldValue": "open" }
-          ]
-        }
-      },
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "position": [880, 280],
-      "id": "wip01-update",
-      "name": "Update WIP",
-      "credentials": {
-        "supabaseApi": { "id": "SUPABASE_CRED_ID", "name": "Supabase" }
-      }
-    },
-    {
-      "parameters": { "mode": "append" },
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 2.1,
-      "position": [1104, 400],
-      "id": "wip01-merge",
-      "name": "Merge"
     },
     {
       "parameters": {
@@ -132,24 +80,15 @@
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1328, 400],
+      "position": [432, 400],
       "id": "wip01-respond",
       "name": "Respond"
     }
   ],
   "connections": {
-    "Webhook - POST /vmm-wip-save": { "main": [[{ "node": "Prepare Fields",    "type": "main", "index": 0 }]] },
-    "Prepare Fields":               { "main": [[{ "node": "Create WIP",        "type": "main", "index": 0 }]] },
-    "Create WIP":                   { "main": [[{ "node": "Already Exists?",   "type": "main", "index": 0 }]] },
-    "Already Exists?": {
-      "main": [
-        [{ "node": "Get Original Data", "type": "main", "index": 0 }],
-        [{ "node": "Merge",             "type": "main", "index": 0 }]
-      ]
-    },
-    "Get Original Data": { "main": [[{ "node": "Update WIP", "type": "main", "index": 0 }]] },
-    "Update WIP":        { "main": [[{ "node": "Merge",      "type": "main", "index": 1 }]] },
-    "Merge":             { "main": [[{ "node": "Respond",    "type": "main", "index": 0 }]] }
+    "Webhook - POST /vmm-wip-save": { "main": [[{ "node": "Prepare Fields", "type": "main", "index": 0 }]] },
+    "Prepare Fields":               { "main": [[{ "node": "Save WIP",       "type": "main", "index": 0 }]] },
+    "Save WIP":                     { "main": [[{ "node": "Respond",        "type": "main", "index": 0 }]] }
   },
   "pinData": {},
   "meta": { "templateCredsSetupCompleted": true, "instanceId": "f9fad0dcada8947f02e42f7bc73ab7aefa92368c9ea1c4bf120cfada06c5c72c" }
