@@ -36,6 +36,17 @@ const FALLBACK_DELAY_REASONS = {
   ],
 };
 
+// Returns the next date from the payment cycle [7, 14, 21, 28].
+// If today is the 25th → 28th this month. If today is ≥28 → 7th next month.
+function nextPaymentCycleDate() {
+  const today = new Date();
+  const d = today.getDate();
+  const next = [7, 14, 21, 28].find(day => day > d);
+  return next
+    ? new Date(today.getFullYear(), today.getMonth(), next)
+    : new Date(today.getFullYear(), today.getMonth() + 1, 7);
+}
+
 function bufStr(v) {
   if (v == null) return '';
   if (typeof v === 'object' && v.type === 'Buffer' && Array.isArray(v.data)) {
@@ -189,10 +200,12 @@ export default function FollowUp() {
 
   // EDC date picker constraints
   const minDate = new Date().toISOString().split('T')[0];
+  const isPaymentCycle = delaySub === 'Payment under process';
   const currentSubTat = delaySub
     ? ((delayReasons[delayMain] || []).find(r => r.label === delaySub)?.tat ?? null)
     : null;
   const maxDate = (() => {
+    if (isPaymentCycle) return nextPaymentCycleDate().toISOString().split('T')[0];
     if (currentSubTat == null) return undefined;
     const d = new Date(); d.setDate(d.getDate() + currentSubTat);
     return d.toISOString().split('T')[0];
@@ -531,10 +544,14 @@ export default function FollowUp() {
                         const sub = e.target.value;
                         setDelaySub(sub);
                         if (action !== 'Closed') {
-                          const item = (delayReasons[delayMain] || []).find(r => r.label === sub);
-                          if (item?.tat) {
-                            const d = new Date(); d.setDate(d.getDate() + item.tat);
-                            setNewEdc(d.toISOString().split('T')[0]);
+                          if (sub === 'Payment under process') {
+                            setNewEdc(nextPaymentCycleDate().toISOString().split('T')[0]);
+                          } else {
+                            const item = (delayReasons[delayMain] || []).find(r => r.label === sub);
+                            if (item?.tat) {
+                              const d = new Date(); d.setDate(d.getDate() + item.tat);
+                              setNewEdc(d.toISOString().split('T')[0]);
+                            }
                           }
                         }
                       }}>
