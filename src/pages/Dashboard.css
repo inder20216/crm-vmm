@@ -68,6 +68,8 @@
 .dash-agent-name { font-size: 13px; font-weight: 600; color: #1e293b; }
 .dash-num { text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 600; color: #374151; }
 .dash-num-green  { color: #16a34a; }
+.dash-num-red    { color: #dc2626; }
+.dash-num-purple { color: #7c3aed; }
 .dash-num-orange { color: #ea580c; }
 
 .dash-card {

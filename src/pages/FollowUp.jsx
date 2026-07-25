@@ -558,7 +558,7 @@ export default function FollowUp() {
                       type="date"
                       value={newEdc}
                       min={action !== 'Closed' ? minDate : undefined}
-                      max={maxDate}
+                      max={action === 'Closed' ? minDate : maxDate}
                       onChange={e => setNewEdc(e.target.value)}
                     />
                   </div>

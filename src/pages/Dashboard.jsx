@@ -141,6 +141,7 @@ export default function Dashboard() {
         <div className="dash-card-head">
           <h3>Agent Productivity</h3>
           {loading && <span className="badge-pill">Loading…</span>}
+          {!loading && <span className="badge-pill" style={{ background: '#ede9fe', color: '#5b21b6' }}>Escalated / Closed / Update EDC = in period · Logged / Open = all-time</span>}
         </div>
         {!loading && productivity.length === 0 && (
           <div className="dash-empty">No activity in this period.</div>
@@ -151,9 +152,11 @@ export default function Dashboard() {
               <tr>
                 <th style={{ width: 36 }}>#</th>
                 <th>Agent</th>
-                <th>Logged</th>
-                <th>Closed</th>
-                <th>Open</th>
+                <th style={{ textAlign: 'right' }}>Logged</th>
+                <th style={{ textAlign: 'right' }}>Escalated</th>
+                <th style={{ textAlign: 'right' }}>Closed</th>
+                <th style={{ textAlign: 'right' }}>Update EDC</th>
+                <th style={{ textAlign: 'right' }}>Open</th>
               </tr>
             </thead>
             <tbody>
@@ -161,9 +164,11 @@ export default function Dashboard() {
                 <tr key={p.agent_name || i}>
                   <td className="dash-num" style={{ color: '#94a3b8', fontSize: 12 }}>{i + 1}</td>
                   <td><div className="dash-agent-name">{p.agent_name || '—'}</div></td>
-                  <td className="dash-num">{p.logged}</td>
-                  <td className="dash-num dash-num-green">{p.closed}</td>
-                  <td className="dash-num dash-num-orange">{p.open}</td>
+                  <td className="dash-num">{p.logged ?? 0}</td>
+                  <td className="dash-num dash-num-red">{p.escalated ?? 0}</td>
+                  <td className="dash-num dash-num-green">{p.closed ?? 0}</td>
+                  <td className="dash-num dash-num-purple">{p.update_edc ?? 0}</td>
+                  <td className="dash-num dash-num-orange">{p.open ?? 0}</td>
                 </tr>
               ))}
             </tbody>
