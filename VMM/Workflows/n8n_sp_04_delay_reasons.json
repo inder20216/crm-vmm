@@ -45,7 +45,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const all = $input.all();\n\n// Group sub-reasons under each main reason — each entry is { label, tat }\nconst grouped = {};\n\nfor (const item of all) {\n  const delayReason    = (item.json['Delay Reason']     || '').trim();\n  const subDelayReason = (item.json['Sub Delay Reason'] || '').trim();\n  const tatRaw         = item.json['TAT Days'];\n  const tat            = tatRaw !== undefined && tatRaw !== '' ? (parseInt(tatRaw) || null) : null;\n\n  if (!delayReason) continue;\n  if (!grouped[delayReason]) grouped[delayReason] = [];\n  if (subDelayReason) {\n    grouped[delayReason].push({ label: subDelayReason, tat });\n  }\n}\n\nreturn [{ json: { success: true, grouped } }];"
+        "jsCode": "const all = $input.all();\n\n// Group sub-reasons under each main reason — each entry is { label, tat }\nconst grouped = {};\n\nfor (const item of all) {\n  const delayReason    = (item.json['Delay Reason']     || '').trim();\n  const subDelayReason = (item.json['Sub Delay Reason'] || '').trim();\n  const tatRaw         = item.json['TAT Days'];\n\n  // Only accept plain integers — rejects values like '7, 14, 21,and 28th of every month'\n  const tatStr = tatRaw !== undefined && tatRaw !== null ? String(tatRaw).trim() : '';\n  const tat    = /^\\d+$/.test(tatStr) ? (parseInt(tatStr) || null) : null;\n\n  if (!delayReason) continue;\n  if (!grouped[delayReason]) grouped[delayReason] = [];\n  if (subDelayReason) {\n    grouped[delayReason].push({ label: subDelayReason, tat });\n  }\n}\n\nreturn [{ json: { success: true, grouped } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
