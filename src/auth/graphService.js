@@ -15,14 +15,8 @@ async function getAccessToken() {
   if (!accounts.length) throw new Error('Not signed in');
   // Use a blank redirect page so the silent-auth iframe doesn't try to navigate the parent window
   const silentRedirectUri = window.location.origin + (import.meta.env.BASE_URL || '/') + 'blank.html';
-  try {
-    const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0], redirectUri: silentRedirectUri });
-    return res.accessToken;
-  } catch {
-    // Silent renewal failed — fall back to popup (requires user gesture; only fires on interaction)
-    const res = await msalInstance.acquireTokenPopup({ ...loginRequest, account: accounts[0] });
-    return res.accessToken;
-  }
+  const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0], redirectUri: silentRedirectUri });
+  return res.accessToken;
 }
 
 function authHeader(token) {
