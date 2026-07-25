@@ -619,10 +619,10 @@ export async function sendNtrEmailDirect({
 
 // ── Closure email ─────────────────────────────────────────────────────────────
 export async function sendClosureEmailDirect({
-  messageId, storeCode, storeName, storeEmail, fmEmail, fmName,
-  vendorName, productName, complaintno, closureStatus, closureDate, closedBy, remarks,
+  storeCode, storeName, storeEmail, fmEmail, fmName,
+  productName, complaintno, closureStatus, closureDate, closedBy, remarks,
 }) {
-  const subject = `[VMM] Complaint ${closureStatus} — ${complaintno} | ${storeCode}`;
+  const subject = `Your store ticket ${complaintno} has been ${closureStatus}`;
 
   const htmlBody = `
 <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:600px;margin:0 auto">
@@ -631,7 +631,7 @@ export async function sendClosureEmailDirect({
     <h2 style="color:#fff;margin:0;font-size:18px">Complaint ${closureStatus}</h2>
   </div>
   <div style="background:#fff;padding:24px 28px;border:1px solid #e2e8f0;border-top:none">
-    <p style="margin:0 0 16px">Dear Store Team,</p>
+    <p style="margin:0 0 16px">Dear Store Manager,</p>
     <p style="margin:0 0 20px">
       We are pleased to inform you that your store ticket, <strong>${complaintno}</strong>, for
       <strong>${productName || 'the reported issue'}</strong> has successfully been ${closureStatus === 'Closed' ? 'closed' : closureStatus.toLowerCase()}.${fmName && closureDate ? ` The same was confirmed by FM <strong>${fmName}</strong> on <strong>${closureDate}</strong>.` : ''}
@@ -641,25 +641,17 @@ export async function sendClosureEmailDirect({
     <p style="margin:0;font-size:13px;color:#64748b">
       If you require any further assistance or have additional queries, please feel free to reach out to us at
       <a href="mailto:vmm.helpdesk@openmind.in" style="color:#4f46e5">vmm.helpdesk@openmind.in</a>
-      or call us on <strong>9711 772 722</strong>.
+      or call us on <strong>9711 772 722</strong>. Thank you for your patience and cooperation.
     </p>
-    <p style="margin:16px 0 0;font-size:13px">Regards,<br/><strong>VMM Helpdesk Team</strong><br/>Open Mind Services Limited</p>
+    <p style="margin:16px 0 0;font-size:13px">Regards,<br/><strong>VMM Helpdesk</strong><br/>9711 772 722</p>
   </div>
   <div style="padding:12px 28px;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;font-size:11px;color:#94a3b8">
     Open Mind Services Limited &nbsp;·&nbsp; VMM CRM &nbsp;·&nbsp; vmm.helpdesk@openmind.in
   </div>
 </div>`;
 
-  const smEmail = getSmEmail(storeCode);
-  const hoPoc   = HO_POC[productName] || HO_POC['DEFAULT'];
-
-  if (messageId) {
-    const ccEmails = [fmEmail, smEmail, hoPoc?.email].filter(Boolean);
-    return replyOnThread({ messageId, htmlBody, toEmail: storeEmail, ccEmails });
-  }
-
   const makeAddr = (email, name) => ({ emailAddress: { address: email, name: name || '' } });
-  const addUniq = (list, email, name) => {
+  const addUniq  = (list, email, name) => {
     if (email && !list.some(x => x.emailAddress.address === email)) list.push(makeAddr(email, name));
   };
 
@@ -667,9 +659,7 @@ export async function sendClosureEmailDirect({
   if (storeEmail) addUniq(toList, storeEmail, storeName);
 
   const ccList = [];
-  if (fmEmail)      addUniq(ccList, fmEmail, fmName);
-  if (smEmail)      addUniq(ccList, smEmail, `SM ${storeCode}`);
-  if (hoPoc?.email) addUniq(ccList, hoPoc.email, hoPoc.name);
+  if (fmEmail) addUniq(ccList, fmEmail, fmName);
 
   return sendFromSharedMailbox({ subject, htmlBody, toAddresses: toList, ccAddresses: ccList });
 }

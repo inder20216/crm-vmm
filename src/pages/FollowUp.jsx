@@ -261,14 +261,14 @@ export default function FollowUp() {
           vmm.sendClosureEmail({
             storeCode:     selected.store_code   || '',
             storeName:     bufStr(selected.store_name) || '',
-            storeEmail:    selected.email_from   || selected.storeemail || '',
+            storeEmail:    selected.storeemail   || '',
             fmEmail:       selected.fm_email     || '',
             fmName:        selected.fm_name      || '',
-            vendorName:    selected.vendorname   || '',
             productName:   bufStr(selected.productname) || '',
             complaintno:   selected.complaintno  || '',
             closureStatus: action,
             closureDate:   newEdc || new Date().toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }),
+            closedBy,
             remarks,
           }).catch(() => {});
           setComplaints(prev => prev.filter(c => c.id !== selected.id));
