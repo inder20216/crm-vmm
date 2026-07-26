@@ -141,18 +141,20 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "https://inder20216.app.n8n.cloud/webhook/vmm-escalation-outlook",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ toEmail: $json.toEmail, ccEmails: $json.ccEmails, subject: $json.subject, htmlBody: $json.htmlBody }) }}",
-        "options": {}
+        "resource": "message",
+        "operation": "send",
+        "toRecipients": "={{ $json.toEmail }}",
+        "ccRecipients": "={{ $json.ccEmails }}",
+        "subject": "={{ $json.subject }}",
+        "bodyContent": "={{ $json.htmlBody }}",
+        "bodyContentType": "html"
       },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
       "position": [2440, 260],
       "id": "fu02-node-0011",
-      "name": "Send Closure Email"
+      "name": "Send Closure Email",
+      "credentials": { "microsoftOutlookOAuth2Api": { "id": "OUTLOOK_CRED_ID", "name": "VMM Outlook" } }
     }
   ],
   "connections": {
