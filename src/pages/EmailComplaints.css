@@ -894,8 +894,10 @@
   display: flex; align-items: center; justify-content: center; z-index: 1000;
 }
 .ec-confirm-modal {
-  background: #fff; border-radius: 14px; padding: 28px 30px;
-  width: 460px; max-width: 95vw; box-shadow: 0 20px 60px rgba(0,0,0,.2);
+  background: #fff; border-radius: 14px;
+  width: 460px; max-width: 95vw; max-height: 90vh;
+  box-shadow: 0 20px 60px rgba(0,0,0,.2);
+  display: flex; flex-direction: column; overflow: hidden;
 }
 .ec-confirm-title { font-size: 17px; font-weight: 700; color: #1e293b; margin-bottom: 4px; }
 .ec-confirm-subtitle { font-size: 13px; color: #64748b; margin-bottom: 18px; }

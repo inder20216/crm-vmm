@@ -413,7 +413,7 @@ export default function CaseLoggingForm() {
       source:            form.source,
       emailSubject:      form.emailSubject,
       callTxnId:         form.callTxnId,
-      uid: currentUser?.id || 1,
+      uid: currentUser?.id ?? 1,
       agentName: currentUser?.name || '',
     };
     try {
@@ -1049,9 +1049,9 @@ export default function CaseLoggingForm() {
               {errors.productLocation && <p className="err-msg">{errors.productLocation}</p>}
             </div>
           </div>
-          <div className="field">
+          <div className="field remarks-field-wrap">
             <div className="remarks-label-row">
-              <label>Complaint Remarks / Description <span className="req">*</span></label>
+              <label className="remarks-main-label">Complaint Description <span className="req">*</span></label>
               <button
                 type="button"
                 className={`btn-ai-polish ${polishing ? 'loading' : ''}`}
@@ -1063,8 +1063,8 @@ export default function CaseLoggingForm() {
               </button>
             </div>
             <textarea
-              rows={4}
-              placeholder="Describe the issue in detail — you can write in English or Hinglish, the AI will clean it up."
+              rows={8}
+              placeholder="Describe the issue in detail — what is the problem, where is it located, since when. You can write in English or Hinglish, the AI will clean it up."
               value={form.remarks}
               onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))}
               className={`remarks-textarea ${errors.remarks ? 'err' : ''}`}

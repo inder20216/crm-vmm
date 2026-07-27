@@ -646,6 +646,7 @@ export default function EmailComplaints() {
             vendorName:      res.vendorName      || first.vendorName      || '',
             natureOfProblem: matchedNature?.nature  || res.natureOfProblem || first.natureOfProblem || '',
             complaintType:   matchedNature?.type    || res.complaintType   || first.complaintType   || '',
+            description:     first.description || res.description || '',
           },
           ...prev.slice(1),
         ];
@@ -772,8 +773,7 @@ export default function EmailComplaints() {
     return AMC_WARRANTY_PRODUCTS.has(k) ? 'amc_warranty' : AMC_ONLY_PRODUCTS.has(k) ? 'amc_only' : 'fm_ho';
   };
   const getItemShowVendorSection = (item) => {
-    const vt = getItemVendorType(item.productName);
-    return vt === 'amc_warranty' || (vt === 'amc_only' && item.contractType === 'AMC');
+    return item.contractType === 'AMC' || item.contractType === 'Warranty';
   };
 
   const logComplaint = async () => {
@@ -824,7 +824,7 @@ export default function EmailComplaints() {
         emailConversationId: selected.conversationId || '',
         emailFrom:           selected.fromAddr || '',
         emailTo:             selected.toDisplay || '',
-        uid: currentUser?.id || 1,
+        uid: currentUser?.id ?? 1,
         agentName: currentUser?.name || '',
       };
 
@@ -841,7 +841,9 @@ export default function EmailComplaints() {
         const attachmentText = itemAttachments.length
           ? '\n\nAttachments:\n' + itemAttachments.map(a => `- ${a.name}: ${a.viewLink}`).join('\n')
           : '';
-        const itemDescription = (item.description || parsedEdits.description || parsed.description || '').replace(/\n+/g, ' ').trim();
+        const itemDescription = complaintItems.length > 1
+          ? (item.description || '').replace(/\n+/g, ' ').trim()
+          : (item.description || parsedEdits.description || parsed.description || '').replace(/\n+/g, ' ').trim();
         const payload = {
           ...sharedPayload,
           productName:       product.name    || item.productName    || '',
@@ -853,7 +855,9 @@ export default function EmailComplaints() {
           tatDays:           nature.tatDays     || 7,
           description:       itemDescription,
           vendorEmail:       item.vendorEmail   || '',
-          remarks:           `${itemDescription}${providedText}${attachmentText}`.trim(),
+          remarks:           complaintItems.length > 1
+            ? `[${item.productName}] ${itemDescription}${providedText}${attachmentText}`.trim()
+            : `${itemDescription}${providedText}${attachmentText}`.trim(),
           attachmentLinks:   itemAttachments,
         };
         const res = await vmm.logComplaint(payload);
@@ -922,7 +926,7 @@ export default function EmailComplaints() {
             storeState:        store.state              || '',
             storeCity:         store.city               || '',
             manualVendorEmail: item.vendorEmail         || '',
-            complaints: [{ complaintno: res.complaintno, productLocation: iPayload.productLocation, natureOfProblem: item.natureOfProblem || '', edcDate: res.edcDate, description: (item.description || parsedEdits.description || parsed.description || '').replace(/\n+/g, ' ').trim() }],
+            complaints: [{ complaintno: res.complaintno, productLocation: iPayload.productLocation, natureOfProblem: item.natureOfProblem || '', edcDate: res.edcDate, description: complaintItems.length > 1 ? (item.description || '').replace(/\n+/g, ' ').trim() : (item.description || parsedEdits.description || parsed.description || '').replace(/\n+/g, ' ').trim() }],
             attachmentLinks: itemAttachments,
             extraToEmails: item.extraEscTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
             extraCcEmails: item.extraEscCc.split(/[;,]/).map(s => s.trim()).filter(Boolean),
@@ -987,7 +991,8 @@ export default function EmailComplaints() {
   const storeOk    = !!(parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode);
   const employeeOk = !parsed?.employeeCode || empLookupStatus === 'found';
   const canLog     = parsed && storeOk && employeeOk && complaintItems.length > 0
-    && complaintItems.every(item => item.productName && item.natureOfProblem && item.complaintType && item.contractType);
+    && complaintItems.every(item => item.productName && item.natureOfProblem && item.complaintType && item.contractType
+      && (complaintItems.length === 1 || item.description.trim()));
 
   const handleTemplateChange = (newId) => {
     setSelectedTemplateId(newId);
@@ -1217,34 +1222,17 @@ export default function EmailComplaints() {
       {confirmModal && (
         <div className="ec-confirm-overlay" onClick={() => setConfirmModal(false)}>
           <div className="ec-confirm-modal" onClick={e => e.stopPropagation()}>
-            <div className="ec-confirm-title">Confirm before logging</div>
-            <div className="ec-confirm-subtitle">Please verify all details are correct:</div>
-            <div className="ec-confirm-grid">
-              {[
-                { label: 'Store Code',     val: parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode, req: true },
-                { label: 'Employee Code',  val: parsedEdits.employeeCode || parsed?.employeeCode,  req: false },
-                { label: 'Employee Name',  val: resolvedEmpName || parsed?.employeeName,            req: false },
-                { label: 'Contact Number', val: parsedEdits.contactNumber || parsed?.contactNumber, req: false },
-              ].map(({ label, val, req }) => (
-                <div key={label} className={`ec-confirm-row${!val && req ? ' warn' : ''}`}>
-                  <span className="ec-confirm-label">{label}</span>
-                  <span className={`ec-confirm-val${!val ? ' empty' : ''}`}>{val || (req ? '⚠ Missing' : '—')}</span>
-                </div>
-              ))}
+            <div style={{ padding: '24px 28px 16px', flexShrink: 0 }}>
+              <div className="ec-confirm-title">Confirm before logging</div>
+              <div className="ec-confirm-subtitle">Please verify all details are correct:</div>
             </div>
-            {complaintItems.map((item, idx) => (
-              <div key={item.id} style={{ margin: '8px 0', padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12 }}>
-                <div style={{ fontWeight: 700, color: '#4f46e5', marginBottom: 6, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.04em' }}>
-                  {complaintItems.length > 1 ? `Complaint #${idx + 1}` : 'Complaint'}
-                </div>
+            <div style={{ overflowY: 'auto', flex: 1, padding: '0 28px' }}>
+              <div className="ec-confirm-grid">
                 {[
-                  { label: 'Product',          val: item.productName,    req: true },
-                  { label: 'Contract',         val: item.contractType === 'AMC' ? 'Under AMC' : item.contractType === 'Warranty' ? 'Under Warranty' : item.contractType === 'NotApplicable' ? 'Not Applicable' : '', req: true },
-                  { label: 'Vendor',           val: item.vendorName,     req: false },
-                  ...(item.vendorEmail ? [{ label: 'Escalation To', val: item.vendorEmail, req: false }] : []),
-                  { label: 'Nature',           val: item.natureOfProblem, req: true },
-                  { label: 'Type',             val: item.complaintType,   req: true },
-                  { label: 'Images',           val: item.selectedAttachIndices === null ? 'All' : `${item.selectedAttachIndices.length} selected`, req: false },
+                  { label: 'Store Code',     val: parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode, req: true },
+                  { label: 'Employee Code',  val: parsedEdits.employeeCode || parsed?.employeeCode,  req: false },
+                  { label: 'Employee Name',  val: resolvedEmpName || parsed?.employeeName,            req: false },
+                  { label: 'Contact Number', val: parsedEdits.contactNumber || parsed?.contactNumber, req: false },
                 ].map(({ label, val, req }) => (
                   <div key={label} className={`ec-confirm-row${!val && req ? ' warn' : ''}`}>
                     <span className="ec-confirm-label">{label}</span>
@@ -1252,8 +1240,30 @@ export default function EmailComplaints() {
                   </div>
                 ))}
               </div>
-            ))}
-            <div className="ec-confirm-actions">
+              {complaintItems.map((item, idx) => (
+                <div key={item.id} style={{ margin: '8px 0', padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12 }}>
+                  <div style={{ fontWeight: 700, color: '#4f46e5', marginBottom: 6, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                    {complaintItems.length > 1 ? `Complaint #${idx + 1}` : 'Complaint'}
+                  </div>
+                  {[
+                    { label: 'Product',          val: item.productName,    req: true },
+                    { label: 'Contract',         val: item.contractType === 'AMC' ? 'Under AMC' : item.contractType === 'Warranty' ? 'Under Warranty' : item.contractType === 'NotApplicable' ? 'Not Applicable' : '', req: true },
+                    { label: 'Vendor',           val: item.vendorName,     req: false },
+                    ...(item.vendorEmail ? [{ label: 'Escalation To', val: item.vendorEmail, req: false }] : []),
+                    { label: 'Nature',           val: item.natureOfProblem, req: true },
+                    { label: 'Type',             val: item.complaintType,   req: true },
+                    { label: 'Description',      val: item.description,     req: complaintItems.length > 1 },
+                    { label: 'Images',           val: item.selectedAttachIndices === null ? 'All' : `${item.selectedAttachIndices.length} selected`, req: false },
+                  ].map(({ label, val, req }) => (
+                    <div key={label} className={`ec-confirm-row${!val && req ? ' warn' : ''}`}>
+                      <span className="ec-confirm-label">{label}</span>
+                      <span className={`ec-confirm-val${!val ? ' empty' : ''}`} style={{ wordBreak: 'break-word', maxWidth: '65%', textAlign: 'right' }}>{val || (req ? '⚠ Missing' : '—')}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div className="ec-confirm-actions" style={{ padding: '16px 28px 24px', flexShrink: 0, borderTop: '1px solid #f1f5f9' }}>
               <button className="ec-confirm-cancel" onClick={() => setConfirmModal(false)}>Go Back &amp; Edit</button>
               <button className="ec-confirm-ok" onClick={() => { setConfirmModal(false); logComplaint(); }}>
                 {complaintItems.length > 1 ? `Confirm — Log ${complaintItems.length} Complaints` : 'Confirm — Log Complaint'}
@@ -2065,7 +2075,7 @@ export default function EmailComplaints() {
                           const payload = {
                             complaintNo: updateForm.complaintId.trim(),
                             remarks:     updateForm.remarks,
-                            uid:         currentUser?.id || 1,
+                            uid:         currentUser?.id ?? 1,
                             agentName:   currentUser?.name || '',
                           };
                           if (updateAction === 'escalate') {
@@ -2465,16 +2475,22 @@ export default function EmailComplaints() {
                         <div style={{ marginTop: 8 }}>
                           <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
                             Description
-                            <span style={{ color: '#9ca3af', fontWeight: 400 }}> (specific to this product / vendor)</span>
+                            {complaintItems.length > 1
+                              ? <span style={{ color: '#ef4444', fontWeight: 600 }}> * required</span>
+                              : <span style={{ color: '#9ca3af', fontWeight: 400 }}> (specific to this product / vendor)</span>
+                            }
                           </div>
                           <textarea
                             className="ec-field-input"
                             rows={2}
-                            placeholder="Describe the issue for this product…"
+                            placeholder={complaintItems.length > 1 ? `Describe the ${item.productName || 'product'} issue specifically…` : 'Describe the issue for this product…'}
                             value={item.description}
                             onChange={e => updateItem(item.id, { description: e.target.value })}
-                            style={{ resize: 'vertical', background: '#fff', borderRadius: 6 }}
+                            style={{ resize: 'vertical', background: '#fff', borderRadius: 6, borderColor: complaintItems.length > 1 && !item.description.trim() ? '#ef4444' : undefined }}
                           />
+                          {complaintItems.length > 1 && !item.description.trim() && (
+                            <div style={{ fontSize: 10, color: '#ef4444', marginTop: 3 }}>⚠ Each complaint needs its own description when logging multiple</div>
+                          )}
                         </div>
                         {/* Escalation Email */}
                         {item.contractType && (
