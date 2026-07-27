@@ -18,6 +18,34 @@ const AMC_WARRANTY_PRODUCTS = new Set(['ac','server room ac','air curtain','elec
 const AMC_ONLY_PRODUCTS     = new Set(['civil work','weighing scale','pest control','shampoo dispenser machine','safe lock','sensormatic']);
 // Everything else → FM / HO Team (no external vendor)
 
+const DELAY_REASONS = {
+  'Delay From Vendor Side': [
+    { label: 'Quotation not received',       tat: 1  },
+    { label: 'Material/Parts Not Available', tat: 5  },
+    { label: 'Delay in logistics',           tat: 3  },
+    { label: 'Vendor not responding',        tat: 1  },
+  ],
+  'Delay From HO Team': [
+    { label: 'Quotation Approval Pending',  tat: 2  },
+    { label: 'Delay in Release of PO',      tat: 2  },
+    { label: 'Delay Due To Landlord',       tat: 15 },
+    { label: 'Delay Due To Lapse of AMC',   tat: 4  },
+    { label: 'Vendor details not provided', tat: 2  },
+    { label: 'Payment under process',       tat: null },
+    { label: 'Vendor Has Payment Issues',   tat: 15 },
+    { label: 'Delay in logistics',          tat: 3  },
+  ],
+  'Work Is Delayed Due To FM': [
+    { label: 'Local vendor/Quotation being arranged', tat: 2 },
+    { label: 'Site inspection pending',               tat: 3 },
+  ],
+  'Delay From Store': [
+    { label: 'Store has rescheduled',     tat: 3 },
+    { label: 'Product under observation', tat: 1 },
+    { label: 'Store not responding',      tat: 1 },
+  ],
+};
+
 const REQUIRED_FIELDS = ['storeCode', 'productName', 'natureOfProblem', 'description'];
 const FIELD_LABELS = {
   storeCode: 'Store Code', employeeCode: 'Employee Code', employeeName: 'Employee Name',
@@ -164,6 +192,15 @@ export default function EmailComplaints() {
   const [resendSending,   setResendSending]   = useState(false);
   const [updateForm,      setUpdateForm]      = useState({ complaintId: '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' });
   const [updateAction,    setUpdateAction]    = useState(null); // 'escalate' | 'close' | 'update'
+  const [updSrc,          setUpdSrc]          = useState('Email Reply');
+  const [updTxnId,        setUpdTxnId]        = useState('');
+  const [updMobile,       setUpdMobile]       = useState('');
+  const [updEmailRef,     setUpdEmailRef]     = useState('');
+  const [updVendorTicket, setUpdVendorTicket] = useState('');
+  const [updDelayMain,    setUpdDelayMain]    = useState('');
+  const [updDelaySub,     setUpdDelaySub]     = useState('');
+  const [updStatus,       setUpdStatus]       = useState('Closed');
+  const [updClosedBy,     setUpdClosedBy]     = useState('');
   const [searchingComplaint, setSearchingComplaint] = useState(false);
   const [foundComplaint,     setFoundComplaint]     = useState(null); // complaint data from system
   const [attachmentData,  setAttachmentData]  = useState(null);
@@ -456,6 +493,7 @@ export default function EmailComplaints() {
     setReplyBody('');
     setActiveAction(null);
     setUpdateForm({ complaintId: email.complaintId || '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' }); setUpdateAction(null); setFoundComplaint(null); setRecentCases([]); setLoadingRecent(false); setQuickReplyBody('');
+    setUpdSrc('Email Reply'); setUpdTxnId(''); setUpdMobile(''); setUpdEmailRef(''); setUpdVendorTicket(''); setUpdDelayMain(''); setUpdDelaySub(''); setUpdStatus('Closed'); setUpdClosedBy('');
     // Restore cached attachments so the Load button doesn't reappear after refresh
     const cached = email.id ? localStorage.getItem(`vmm_attach_${email.id}`) : null;
     setAttachmentData(cached ? JSON.parse(cached) : null);
@@ -1854,6 +1892,9 @@ export default function EmailComplaints() {
                             ).replace(/\n{3,}/g, '\n\n').trim();
                             const autoRemarks = `Email received from ${from} and sent to ${to}\n\n${body}`.trim();
                             setUpdateForm(f => ({ ...f, complaintId: detectedId, remarks: autoRemarks }));
+                            setUpdSrc('Email Reply');
+                            setUpdEmailRef(selected?.subject || '');
+                            setUpdDelayMain(''); setUpdDelaySub(''); setUpdStatus('Closed'); setUpdClosedBy('');
                           } else {
                             setUpdateForm(f => ({ ...f, complaintId: detectedId }));
                           }
@@ -2021,46 +2062,132 @@ export default function EmailComplaints() {
                     </div>
                   )}
 
-                  {/* Remarks — shown for all actions */}
+                  {/* Update Source — shown for all actions */}
                   {updateAction && (
                     <div className="ec-update-row">
-                      <label>Remarks</label>
-                      <textarea
-                        rows={3}
-                        placeholder="Summarise the update from this email…"
-                        value={updateForm.remarks}
-                        onChange={e => setUpdateForm(f => ({ ...f, remarks: e.target.value }))}
-                      />
+                      <label>Update Source</label>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {['Call', 'Email Reply', 'Vendor Update'].map(s => (
+                          <button key={s} onClick={() => setUpdSrc(s)}
+                            style={{ padding: '6px 14px', borderRadius: 6, border: '2px solid',
+                              borderColor: updSrc === s ? '#4f46e5' : '#e2e8f0',
+                              background: updSrc === s ? '#eef2ff' : 'transparent',
+                              fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                              color: updSrc === s ? '#4f46e5' : '#64748b' }}>
+                            {s === 'Call' ? '📞' : s === 'Email Reply' ? '📧' : '🏭'} {s}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
 
-                  {/* Escalate fields */}
-                  {updateAction === 'escalate' && (
+                  {/* Source-specific fields */}
+                  {updateAction && updSrc === 'Call' && (
                     <div className="ec-update-row-2">
                       <div>
-                        <label>Escalation Level</label>
-                        <select value={updateForm.escalationLevel} onChange={e => setUpdateForm(f => ({ ...f, escalationLevel: e.target.value }))}>
+                        <label>TXN / Call ID</label>
+                        <input type="text" placeholder="SparkTG TXN ID" value={updTxnId} onChange={e => setUpdTxnId(e.target.value)} />
+                      </div>
+                      <div>
+                        <label>Mobile Called</label>
+                        <input type="text" placeholder="Number dialled" value={updMobile} onChange={e => setUpdMobile(e.target.value)} />
+                      </div>
+                    </div>
+                  )}
+                  {updateAction && updSrc === 'Email Reply' && (
+                    <div className="ec-update-row">
+                      <label>Email Subject / Reference</label>
+                      <input type="text" placeholder="Subject line of the email" value={updEmailRef} onChange={e => setUpdEmailRef(e.target.value)} />
+                    </div>
+                  )}
+                  {updateAction && updSrc === 'Vendor Update' && (
+                    <div className="ec-update-row">
+                      <label>Vendor Ticket No</label>
+                      <input type="text" placeholder="Vendor's ticket / reference number" value={updVendorTicket} onChange={e => setUpdVendorTicket(e.target.value)} />
+                    </div>
+                  )}
+
+                  {/* Delay Reason — for Escalate */}
+                  {updateAction === 'escalate' && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Delay Reason — Main</label>
+                        <select style={{ padding: '7px 10px', border: '1.5px solid #d1d5db', borderRadius: 7, fontSize: 12, color: '#111827', width: '100%', outline: 'none' }} value={updDelayMain} onChange={e => {
+                          setUpdDelayMain(e.target.value); setUpdDelaySub('');
+                          setUpdateForm(f => ({ ...f, newEdc: '' }));
+                        }}>
                           <option value="">— Select —</option>
-                          <option>Level 1</option>
-                          <option>Level 2</option>
-                          <option>Level 3</option>
+                          {Object.keys(DELAY_REASONS).map(k => <option key={k} value={k}>{k}</option>)}
                         </select>
                       </div>
                       <div>
-                        <label>New EDC</label>
-                        <input type="date" value={updateForm.newEdc} onChange={e => setUpdateForm(f => ({ ...f, newEdc: e.target.value }))} />
-                      </div>
-                      <div>
-                        <label>Reason for Delay</label>
-                        <select value={updateForm.reasonForDelay} onChange={e => setUpdateForm(f => ({ ...f, reasonForDelay: e.target.value }))}>
+                        <label style={{ fontSize: 11, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Delay Reason — Sub</label>
+                        <select style={{ padding: '7px 10px', border: '1.5px solid #d1d5db', borderRadius: 7, fontSize: 12, color: '#111827', width: '100%', outline: 'none' }} value={updDelaySub} disabled={!updDelayMain} onChange={e => {
+                          const sub = e.target.value;
+                          setUpdDelaySub(sub);
+                          const item = (DELAY_REASONS[updDelayMain] || []).find(r => r.label === sub);
+                          if (item?.tat) {
+                            const d = new Date(); d.setDate(d.getDate() + item.tat);
+                            setUpdateForm(f => ({ ...f, newEdc: d.toISOString().split('T')[0] }));
+                          }
+                        }}>
                           <option value="">— Select —</option>
-                          <option>Delay From Vendor Side</option>
-                          <option>Delay From HO Team</option>
-                          <option>Delay From Store Side</option>
-                          <option>Part Unavailable</option>
-                          <option>Other</option>
+                          {(DELAY_REASONS[updDelayMain] || []).map(r => (
+                            <option key={r.label} value={r.label}>{r.tat ? `${r.label} (${r.tat}d)` : r.label}</option>
+                          ))}
                         </select>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Close Type — for Close action */}
+                  {updateAction === 'close' && (
+                    <div className="ec-update-row">
+                      <label>Close Type</label>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        {['Closed', 'Partially Closed'].map(s => (
+                          <button key={s} onClick={() => setUpdStatus(s)}
+                            style={{ padding: '6px 14px', borderRadius: 6, border: '2px solid',
+                              borderColor: updStatus === s ? '#16a34a' : '#e2e8f0',
+                              background: updStatus === s ? '#f0fdf4' : 'transparent',
+                              fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                              color: updStatus === s ? '#15803d' : '#64748b' }}>
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Date — required for Escalate and Close */}
+                  {(updateAction === 'escalate' || updateAction === 'close') && (
+                    <div className="ec-update-row">
+                      <label>
+                        {updateAction === 'close' && updStatus === 'Closed' ? 'Date of Closure' : 'New EDC'}
+                        <span style={{ color: '#dc2626' }}> *</span>
+                      </label>
+                      <input type="date" value={updateForm.newEdc} onChange={e => setUpdateForm(f => ({ ...f, newEdc: e.target.value }))} />
+                    </div>
+                  )}
+
+                  {/* Closed By — for full Closed only */}
+                  {updateAction === 'close' && updStatus === 'Closed' && (
+                    <div className="ec-update-row">
+                      <label>Case Closed By</label>
+                      <input type="text" placeholder="Name of person who confirmed closure" value={updClosedBy} onChange={e => setUpdClosedBy(e.target.value)} />
+                    </div>
+                  )}
+
+                  {/* Remarks — shown for all actions */}
+                  {updateAction && (
+                    <div className="ec-update-row">
+                      <label>Remarks <span style={{ color: '#dc2626' }}>*</span></label>
+                      <textarea
+                        rows={3}
+                        placeholder={updateAction === 'escalate' ? 'Reason for escalation, pending actions…' : updateAction === 'close' ? 'Closure details, what was done…' : 'Update details, vendor response, next steps…'}
+                        value={updateForm.remarks}
+                        onChange={e => setUpdateForm(f => ({ ...f, remarks: e.target.value }))}
+                      />
                     </div>
                   )}
 
@@ -2068,26 +2195,36 @@ export default function EmailComplaints() {
                   {updateAction && (
                     <button
                       className="ec-submit-update-btn"
-                      disabled={loggingActivity || !updateForm.complaintId.trim() || !updateForm.remarks.trim()}
+                      disabled={loggingActivity || !updateForm.complaintId.trim() || !updateForm.remarks.trim()
+                        || ((updateAction === 'escalate' || updateAction === 'close') && !updateForm.newEdc)}
                       onClick={async () => {
                         setLoggingActivity(true);
                         try {
-                          const payload = {
-                            complaintNo: updateForm.complaintId.trim(),
-                            remarks:     updateForm.remarks,
-                            uid:         currentUser?.id ?? 1,
-                            agentName:   currentUser?.name || '',
-                          };
-                          if (updateAction === 'escalate') {
-                            payload.newStatus       = 'Escalated';
-                            payload.newEdc          = updateForm.newEdc;
-                            payload.escalationLevel = updateForm.escalationLevel;
-                            payload.reasonForDelay  = updateForm.reasonForDelay;
-                          } else if (updateAction === 'close') {
-                            payload.newStatus = 'Closed';
-                          }
-                          const res = await vmm.logEmailActivity(payload);
-                          if (res.found) {
+                          const c = foundComplaint?.complaint;
+                          const effectiveStatus = updateAction === 'escalate' ? 'Escalated'
+                            : updateAction === 'close' ? updStatus : 'Open';
+                          const followupMethod = updSrc === 'Email Reply' ? 'Email Reply'
+                            : updSrc === 'Vendor Update' ? 'Vendor Update' : 'Call';
+                          const nextLevel = parseInt(c?.escalationlevel || 0) + 1;
+                          const res = await vmm.closeComplaint({
+                            complaintId:    c?.id,
+                            closureStatus:  effectiveStatus,
+                            followupMethod,
+                            txnId:          updSrc === 'Call' ? updTxnId : '',
+                            mobileCalled:   updSrc === 'Call' ? updMobile : '',
+                            emailSubject:   updSrc === 'Email Reply' ? updEmailRef : '',
+                            vendorTicketNo: updSrc === 'Vendor Update' ? updVendorTicket : '',
+                            delayMain:      updDelayMain,
+                            delaySub:       updDelaySub,
+                            remarks:        updateForm.remarks,
+                            uid:            currentUser?.id ?? 1,
+                            agentName:      currentUser?.name || '',
+                            escalationLevel: nextLevel,
+                            newClosureDate: (effectiveStatus === 'Partially Closed' || effectiveStatus === 'Escalated') ? updateForm.newEdc : '',
+                            closureDate:    effectiveStatus === 'Closed' ? updateForm.newEdc : '',
+                            closedBy:       effectiveStatus === 'Closed' ? updClosedBy : '',
+                          });
+                          if (res?.success !== false && !res?.error) {
                             const tagType  = updateAction === 'escalate' ? 'escalated' : updateAction === 'close' ? 'closed' : 'updated';
                             const tagLabel = `${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'} • ${updateForm.complaintId.trim()}`;
                             const graphCat = updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Case Closed' : 'Case Updated';
@@ -2096,11 +2233,14 @@ export default function EmailComplaints() {
                             vmm.categorizeEmail(selected.id, [graphCat, 'New CRM']).catch(() => {});
                             showToast(`${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'}: ${updateForm.complaintId.trim()}`, 'ok');
                             setActiveAction(null);
-                            setUpdateForm({ complaintId: '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' }); setUpdateAction(null);
+                            setUpdateForm({ complaintId: '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' });
+                            setUpdateAction(null);
+                            setUpdSrc('Email Reply'); setUpdTxnId(''); setUpdMobile(''); setUpdEmailRef('');
+                            setUpdVendorTicket(''); setUpdDelayMain(''); setUpdDelaySub(''); setUpdStatus('Closed'); setUpdClosedBy('');
                           } else {
-                            showToast(res.message || 'Complaint not found', 'err');
+                            showToast(res?.message || 'Update failed', 'err');
                           }
-                        } catch { showToast('Could not log activity', 'err'); }
+                        } catch { showToast('Could not save update', 'err'); }
                         finally { setLoggingActivity(false); }
                       }}
                     >
