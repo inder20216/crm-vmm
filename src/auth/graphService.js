@@ -13,15 +13,10 @@ const DELTA_KEY = 'vmm_inbox_delta_link';
 async function getAccessToken() {
   const accounts = msalInstance.getAllAccounts();
   if (!accounts.length) throw new Error('Not signed in');
+  // Use a blank redirect page so the silent-auth iframe doesn't try to navigate the parent window
   const silentRedirectUri = window.location.origin + (import.meta.env.BASE_URL || '/') + 'blank.html';
-  try {
-    const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0], redirectUri: silentRedirectUri });
-    return res.accessToken;
-  } catch {
-    // Silent refresh failed (token expired / consent required) — get a fresh token via popup
-    const res = await msalInstance.acquireTokenPopup({ ...loginRequest, account: accounts[0] });
-    return res.accessToken;
-  }
+  const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0], redirectUri: silentRedirectUri });
+  return res.accessToken;
 }
 
 function authHeader(token) {
