@@ -4,7 +4,7 @@ import { AC_VENDOR_MAP, LIFT_VENDOR_MAP, getSmEmail, HO_POC, getVendorEscalation
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 
 // ── TEST MODE — set true to redirect ALL outbound emails to TEST_EMAIL ────────
-const TEST_MODE  = true;
+const TEST_MODE  = false;
 const TEST_EMAIL = 'inder@openmind.in';
 
 // Delta link persisted in sessionStorage so refresh survives page reloads within the session
@@ -13,10 +13,15 @@ const DELTA_KEY = 'vmm_inbox_delta_link';
 async function getAccessToken() {
   const accounts = msalInstance.getAllAccounts();
   if (!accounts.length) throw new Error('Not signed in');
-  // Use a blank redirect page so the silent-auth iframe doesn't try to navigate the parent window
   const silentRedirectUri = window.location.origin + (import.meta.env.BASE_URL || '/') + 'blank.html';
-  const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0], redirectUri: silentRedirectUri });
-  return res.accessToken;
+  try {
+    const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0], redirectUri: silentRedirectUri });
+    return res.accessToken;
+  } catch {
+    // Silent refresh failed (token expired / consent required) — get a fresh token via popup
+    const res = await msalInstance.acquireTokenPopup({ ...loginRequest, account: accounts[0] });
+    return res.accessToken;
+  }
 }
 
 function authHeader(token) {
