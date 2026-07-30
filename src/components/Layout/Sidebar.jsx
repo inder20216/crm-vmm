@@ -12,9 +12,10 @@ const ADMIN_NAV = [
     ],
   },
   { label: 'NTR Requests',    icon: '📦', to: '/ntr'      },
-  { label: 'Follow-up',       icon: '🔁', to: '/followup' },
-  { label: 'Reports',         icon: '📊', to: '/reports'  },
-  { label: 'User Management', icon: '👥', to: '/users'    },
+  { label: 'Follow-up',       icon: '🔁', to: '/followup'    },
+  { label: 'Bulk Close',      icon: '✅', to: '/bulk-close' },
+  { label: 'Reports',         icon: '📊', to: '/reports'    },
+  { label: 'User Management', icon: '👥', to: '/users'      },
 ];
 
 const USER_NAV = [

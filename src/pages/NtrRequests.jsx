@@ -202,23 +202,14 @@ export default function NtrRequests() {
       const reqNo = saveRes.requestNo || '';
       setSavedReqNo(reqNo);
 
-      // 2. Fetch master XLSX from Google Drive via n8n
-      let attachmentBase64 = '';
-      try {
-        const xlsxRes = await vmm.fetchNtrMasterXlsx();
-        attachmentBase64 = xlsxRes.base64 || '';
-      } catch {
-        // Non-fatal — email sends without attachment if fetch fails
-      }
-
-      // 3. Send confirmation email via Graph API (same path as escalation emails)
+      // 2. Send confirmation email via n8n
       await vmm.sendNtrEmail({
-        storeEmail:      storeInfo.email || storeInfo.storeEmail || '',
-        storeName:       storeInfo.name,
-        storeCode:       storeInfo.code || storeCode.toUpperCase(),
-        requestNo:       reqNo,
+        storeEmail: storeInfo.email || storeInfo.storeEmail || '',
+        fmEmail:    storeInfo.fmEmail || storeInfo.fmemail  || '',
+        storeName:  storeInfo.name,
+        storeCode:  storeInfo.code || storeCode.toUpperCase(),
+        requestNo:  reqNo,
         invalidItems,
-        attachmentBase64,
       });
 
       setUploadStep('done');

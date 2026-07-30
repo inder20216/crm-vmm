@@ -20,7 +20,10 @@ body {
   flex-direction: column;
   min-width: 0;
   background: #f0f2f5;
+  margin-left: 220px;
+  transition: margin-left .2s;
 }
+.sidebar.collapsed ~ .app-body { margin-left: 56px; }
 
 /* ── Top Bar ── */
 .top-bar {
@@ -488,27 +491,41 @@ body {
 .multi-id-val { font-size: 15px; font-weight: 800; color: #1e1b4b; font-family: monospace; letter-spacing: 1px; }
 
 /* ── Remarks ── */
+.remarks-field-wrap {
+  background: #f5f3ff;
+  border: 2px solid #c4b5fd;
+  border-radius: 12px;
+  padding: 16px 18px !important;
+  margin-top: 4px;
+}
 .remarks-label-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 5px;
+  margin-bottom: 8px;
 }
 .remarks-label-row label { margin-bottom: 0; }
+.remarks-main-label {
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  color: #4c1d95 !important;
+  letter-spacing: .01em;
+}
 .remarks-textarea {
   width: 100%;
-  padding: 10px 12px;
-  border: 1.5px solid #d1d5db;
+  padding: 14px 16px;
+  border: 2px solid #a78bfa;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 15px;
   font-family: inherit;
   color: #111827;
   resize: vertical;
   outline: none;
   transition: border .15s, box-shadow .15s;
-  line-height: 1.6;
+  line-height: 1.7;
+  background: #fff;
 }
-.remarks-textarea:focus { border-color: #7c3aed; box-shadow: 0 0 0 3px rgba(124,58,237,.1); }
+.remarks-textarea:focus { border-color: #7c3aed; box-shadow: 0 0 0 3px rgba(124,58,237,.15); }
 .remarks-textarea.err   { border-color: #dc2626; }
 
 /* ── AI Polish button ── */

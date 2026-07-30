@@ -206,8 +206,10 @@ export default function FollowUp() {
     : null;
   const maxDate = (() => {
     if (isPaymentCycle) return nextPaymentCycleDate().toISOString().split('T')[0];
-    if (currentSubTat == null) return undefined;
-    const d = new Date(); d.setDate(d.getDate() + currentSubTat);
+    // Use delay reason TAT if available, else fall back to complaint's original TAT
+    const tatDays = currentSubTat ?? (selected ? Number(selected.tat || 0) : 0);
+    if (!tatDays) return undefined;
+    const d = new Date(); d.setDate(d.getDate() + tatDays);
     return d.toISOString().split('T')[0];
   })();
 

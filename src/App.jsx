@@ -12,7 +12,9 @@ import NtrRequests        from './pages/NtrRequests';
 import ComplaintDetail    from './pages/ComplaintDetail';
 import Reports             from './pages/Reports';
 import FollowUp            from './pages/FollowUp';
+import BulkClose           from './pages/BulkClose';
 import UserManagement      from './pages/UserManagement';
+import DialerPanel         from './components/DialerPanel';
 import './App.css';
 
 function LoginScreen({ onLogin, loading }) {
@@ -148,6 +150,7 @@ export default function App() {
               <Route path="/complaints/add" element={<RoleRoute adminOnly><div className="main"><CaseLoggingForm /></div></RoleRoute>} />
               <Route path="/ntr"            element={<RoleRoute adminOnly><NtrRequests /></RoleRoute>} />
               <Route path="/followup"       element={<RoleRoute adminOnly><FollowUp /></RoleRoute>} />
+              <Route path="/bulk-close"     element={<RoleRoute adminOnly><BulkClose /></RoleRoute>} />
               <Route path="/reports"        element={<RoleRoute adminOnly><Reports /></RoleRoute>} />
               <Route path="/users"          element={<RoleRoute adminOnly><UserManagement /></RoleRoute>} />
 
@@ -156,6 +159,7 @@ export default function App() {
             </Routes>
           </main>
         </div>
+        <DialerPanel />
       </div>
     </BrowserRouter>
   );

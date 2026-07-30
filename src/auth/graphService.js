@@ -13,9 +13,7 @@ const DELTA_KEY = 'vmm_inbox_delta_link';
 async function getAccessToken() {
   const accounts = msalInstance.getAllAccounts();
   if (!accounts.length) throw new Error('Not signed in');
-  // Use a blank redirect page so the silent-auth iframe doesn't try to navigate the parent window
-  const silentRedirectUri = window.location.origin + (import.meta.env.BASE_URL || '/') + 'blank.html';
-  const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0], redirectUri: silentRedirectUri });
+  const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0] });
   return res.accessToken;
 }
 
@@ -165,10 +163,17 @@ export async function searchEmails(q) {
   const mailbox = encodeURIComponent(SHARED_MAILBOX);
   const SELECT = 'id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,conversationId,isRead,hasAttachments';
 
-  const res = await fetch(
-    `${GRAPH}/users/${mailbox}/messages?$search="${encodeURIComponent(q)}"&$select=${SELECT}&$top=25`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
+  const url = new URL(`${GRAPH}/users/${mailbox}/messages`);
+  url.searchParams.set('$search', `"${q}"`);
+  url.searchParams.set('$select', SELECT);
+  url.searchParams.set('$top', '25');
+
+  const res = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ConsistencyLevel: 'eventual',
+    }
+  });
   if (!res.ok) throw new Error(`Search failed: ${res.status}`);
   const data = await res.json();
   const emails = (data.value || []).map(formatMessage);
@@ -432,6 +437,110 @@ export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, 
   if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
 
   return { toAddresses, ccAddresses, isVendorCase, resolvedVendor };
+}
+
+// ── Build escalation email content (recipients + HTML) without sending ────────
+// Returns { toEmail, ccEmails, subject, htmlBody } for passing to n8n
+export function buildEscalationEmailContent({
+  storeCode, storeName, storeEmail, fmName, fmEmail, region, zone, storeState, storeCity,
+  vendorName, productName, natureOfComplaint, complaints = [],
+  extraToEmails = [], extraCcEmails = [],
+  attachmentLinks = [],
+  skipSM = false, skipHO = false, skipFM = false,
+  manualVendorEmail = '',
+}) {
+  const nos = complaints.map(c => c.complaintno).join(', ');
+  const isMultiple = complaints.length > 1;
+  const makeAddr = (email, name) => ({ emailAddress: { address: email, name: name || '' } });
+  const addUniq = (list, email, name) => {
+    if (email && !list.some(x => x.emailAddress.address.toLowerCase() === email.toLowerCase()))
+      list.push(makeAddr(email, name));
+  };
+
+  const isVendorCase = !!manualVendorEmail;
+  let toAddresses = [];
+  let ccAddresses = [];
+
+  if (isVendorCase) {
+    const resolved = resolveEscalationRecipients({
+      storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity,
+      skipSM, skipHO, skipFM, manualVendorEmail,
+    });
+    toAddresses = resolved.toAddresses;
+    ccAddresses = resolved.ccAddresses;
+  } else {
+    if (!fmEmail) return null;
+    const hoPoc = HO_POC[productName] || HO_POC['DEFAULT'];
+    toAddresses = [makeAddr(fmEmail, fmName || '')];
+    if (!skipSM) { const smEmail = getSmEmail(storeCode); if (smEmail) addUniq(ccAddresses, smEmail, `SM ${storeCode}`); }
+    if (storeEmail) addUniq(ccAddresses, storeEmail, storeName || '');
+    if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
+  }
+
+  const extrasInput = v => (Array.isArray(v) ? v.join(',') : (v || ''));
+  buildRecipients(extrasInput(extraToEmails)).forEach(r => addUniq(toAddresses, r.emailAddress.address, r.emailAddress.name));
+  buildRecipients(extrasInput(extraCcEmails)).forEach(r => addUniq(ccAddresses, r.emailAddress.address, r.emailAddress.name));
+
+  const toSet = new Set(toAddresses.map(r => r.emailAddress.address.toLowerCase()));
+  const finalCC = ccAddresses.filter(r => !toSet.has(r.emailAddress.address.toLowerCase()));
+
+  const subject = isMultiple
+    ? `[VMM] New Complaints — ${storeCode} | ${productName} | ${complaints.length} Units`
+    : `[VMM] New Complaint — ${storeCode} | ${productName} | ${nos}`;
+
+  const resolvedVendor = isVendorCase ? (vendorName || '—') : (fmName || 'FM');
+
+  const rows = complaints.map((c, i) => `
+    <tr style="background:${i % 2 === 0 ? '#fff' : '#f8fafc'}">
+      <td style="padding:9px 14px;border-bottom:${c.description ? 'none' : '1px solid #e2e8f0'}">${c.complaintno}</td>
+      <td style="padding:9px 14px;border-bottom:${c.description ? 'none' : '1px solid #e2e8f0'}">${c.productLocation || '—'}</td>
+      <td style="padding:9px 14px;border-bottom:${c.description ? 'none' : '1px solid #e2e8f0'};font-weight:600;color:#059669">${c.edcDate || '—'}</td>
+    </tr>
+    ${c.description ? `<tr style="background:${i % 2 === 0 ? '#fff' : '#f8fafc'}"><td colspan="3" style="padding:4px 14px 10px;border-bottom:1px solid #e2e8f0;color:#374151;font-size:12px;font-style:italic">${c.description.replace(/\n/g, '<br/>')}</td></tr>` : ''}`).join('');
+
+  const htmlBody = `
+<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:640px;margin:0 auto">
+  <div style="background:#1e1b4b;padding:18px 28px;border-radius:8px 8px 0 0">
+    <div style="color:#a5b4fc;font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:2px">VMM Facility Management</div>
+    <h2 style="color:#fff;margin:0;font-size:18px">New Complaint${isMultiple ? 's' : ''} — Action Required</h2>
+  </div>
+  <div style="background:#fff;padding:24px 28px;border:1px solid #e2e8f0;border-top:none">
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+      <tr><td style="padding:5px 0;color:#64748b;width:140px;vertical-align:top">Store</td><td style="padding:5px 0;font-weight:600">${storeName || ''} (${storeCode})</td></tr>
+      ${region ? `<tr><td style="padding:5px 0;color:#64748b">Region / Zone</td><td style="padding:5px 0">${region}${zone ? ' / ' + zone : ''}</td></tr>` : ''}
+      <tr><td style="padding:5px 0;color:#64748b">Product</td><td style="padding:5px 0">${productName}</td></tr>
+      ${natureOfComplaint ? `<tr><td style="padding:5px 0;color:#64748b">Nature</td><td style="padding:5px 0">${natureOfComplaint}</td></tr>` : ''}
+      <tr><td style="padding:5px 0;color:#64748b">${isVendorCase ? 'Vendor' : 'Assigned FM'}</td><td style="padding:5px 0;font-weight:600;color:#1e1b4b">${resolvedVendor}</td></tr>
+      ${isVendorCase && fmName ? `<tr><td style="padding:5px 0;color:#64748b">FM</td><td style="padding:5px 0">${fmName}${fmEmail ? ' &lt;' + fmEmail + '&gt;' : ''}</td></tr>` : ''}
+    </table>
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr style="background:#1e1b4b">
+          <th style="padding:9px 14px;color:#fff;text-align:left;font-weight:600">Complaint No</th>
+          <th style="padding:9px 14px;color:#fff;text-align:left;font-weight:600">Location</th>
+          <th style="padding:9px 14px;color:#fff;text-align:left;font-weight:600">Expected Closure</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="margin-top:20px;padding:12px 16px;background:#fef9c3;border-left:4px solid #f59e0b;border-radius:0 6px 6px 0;font-size:13px;color:#92400e">
+      ${isVendorCase ? 'Please attend the complaint and confirm assignment within 24 hours.' : 'Please attend to this complaint and coordinate with the store within 24 hours.'}
+    </div>
+    ${attachmentLinks.length > 0 ? `
+    <div style="margin-top:16px;padding:12px 16px;background:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:0 6px 6px 0;font-size:13px">
+      <div style="font-weight:700;color:#0369a1;margin-bottom:8px">Attachments from original complaint:</div>
+      ${attachmentLinks.map(a => `<div style="margin-bottom:4px"><a href="${a.viewLink}" style="color:#0284c7;text-decoration:none">${a.name}</a></div>`).join('')}
+    </div>` : ''}
+  </div>
+  <div style="padding:12px 28px;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;font-size:11px;color:#94a3b8">
+    Open Mind Services Limited &nbsp;·&nbsp; VMM CRM &nbsp;·&nbsp; vmm.helpdesk@openmind.in
+  </div>
+</div>`;
+
+  const toEmail  = toAddresses.map(r => r.emailAddress.address).join(',');
+  const ccEmails = finalCC.map(r => r.emailAddress.address).join(',');
+
+  return { toEmail, ccEmails, subject: TEST_MODE ? `[TEST] ${subject}` : subject, htmlBody };
 }
 
 // ── Escalation email ──────────────────────────────────────────────────────────

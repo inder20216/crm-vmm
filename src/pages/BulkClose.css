@@ -1,0 +1,71 @@
+.bc-page { display: flex; flex-direction: column; min-height: calc(100vh - 48px); background: #f8fafc; }
+
+.bc-header {
+  padding: 24px 32px 16px; background: #fff; border-bottom: 1px solid #e2e8f0;
+}
+.bc-title    { font-size: 18px; font-weight: 700; color: #1e1b4b; margin: 0 0 4px; }
+.bc-subtitle { font-size: 12px; color: #94a3b8; margin: 0; }
+
+.bc-body {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  padding: 36px 24px; gap: 0;
+}
+
+/* ── Steps ── */
+.bc-step {
+  width: 100%; max-width: 540px; background: #fff;
+  border: 1.5px solid #e2e8f0; border-radius: 14px; padding: 28px 32px;
+  display: flex; gap: 20px; transition: border-color .2s;
+}
+.bc-step.bc-step-done   { border-color: #16a34a; }
+.bc-step.bc-step-locked { opacity: .45; pointer-events: none; }
+
+.bc-step-num {
+  width: 36px; height: 36px; border-radius: 50%; background: #1e1b4b;
+  color: #fff; font-size: 15px; font-weight: 800; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.bc-step.bc-step-done .bc-step-num { background: #16a34a; }
+
+.bc-step-content { flex: 1; min-width: 0; }
+.bc-step-title   { font-size: 15px; font-weight: 700; color: #1e1b4b; margin-bottom: 4px; }
+.bc-step-desc    { font-size: 12px; color: #64748b; line-height: 1.6; margin-bottom: 18px; }
+
+/* ── Drop zone ── */
+.bc-dropzone {
+  border: 2px dashed #cbd5e1; border-radius: 10px; padding: 28px 20px;
+  text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  margin-bottom: 16px;
+}
+.bc-dropzone:hover       { border-color: #7c3aed; background: #f5f3ff; }
+.bc-dropzone.bc-dropzone-ready { border-color: #7c3aed; border-style: solid; background: #f5f3ff; }
+.bc-file-icon  { font-size: 28px; margin-bottom: 6px; }
+.bc-file-name  { font-size: 14px; font-weight: 700; color: #1e1b4b; margin-bottom: 2px; }
+.bc-file-size  { font-size: 11px; color: #94a3b8; }
+.bc-drop-text  { font-size: 13px; color: #64748b; }
+.bc-drop-text span { color: #7c3aed; font-weight: 600; text-decoration: underline; }
+
+/* ── Buttons ── */
+.bc-btn {
+  width: 100%; padding: 12px; border: none; border-radius: 9px;
+  font-size: 14px; font-weight: 700; cursor: pointer; transition: background .15s;
+}
+.bc-btn:disabled { opacity: .55; cursor: not-allowed; }
+.bc-btn-upload { background: #1e1b4b; color: #fff; }
+.bc-btn-upload:not(:disabled):hover { background: #2d2a6e; }
+.bc-btn-run    { background: #16a34a; color: #fff; }
+.bc-btn-run:not(:disabled):hover { background: #15803d; }
+
+/* ── Status ── */
+.bc-status {
+  margin-top: 12px; font-size: 13px; padding: 10px 14px;
+  border-radius: 8px; font-weight: 500;
+}
+.bc-status-ok  { background: #dcfce7; color: #166534; }
+.bc-status-err { background: #fee2e2; color: #991b1b; }
+
+/* ── Arrow ── */
+.bc-arrow {
+  font-size: 22px; color: #cbd5e1; padding: 10px 0; text-align: center;
+  width: 100%; max-width: 540px;
+}

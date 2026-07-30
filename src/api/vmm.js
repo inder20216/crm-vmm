@@ -38,6 +38,7 @@ export const vmm = {
   logComplaint:        (data)   => post(BASE, 'vmm-log-complaint',           data),
   getComplaint:        (complaintno) => get(BASE, 'vmm-get-complaint',       { complaintno }),
   sendEscalationEmail:          (data) => graph.sendEscalationEmailDirect(data),
+  buildEscalationEmailContent: (data) => graph.buildEscalationEmailContent(data),
   resolveEscalationRecipients: (data) => graph.resolveEscalationRecipients(data),
   sendClosureEmail:    (data)   => graph.sendClosureEmailDirect(data),
   polishRemarks:       (text)   => post(BASE, 'vmm-ai-polish',           { text }),
@@ -48,12 +49,12 @@ export const vmm = {
   getComplaintDetail:(ref)    => get(BASE, 'vmm-complaint-detail',   { no: ref }),
   getReports:        ()       => get(BASE, 'vmm-reports'),
 
-  // ── Email — direct Graph API (no n8n / Power Automate) ─────────────────────
-  fetchInbox:         (opts)    => graph.fetchInbox(opts),
-  resetInboxDelta:    ()        => graph.resetInboxDelta(),
+  // ── Email — inbox & thread via n8n; all sending via Graph API ───────────────
+  fetchInbox:         ()        => get(BASE, 'vmm-email-inbox').then(r => ({ emails: r.emails || [], isIncremental: false })),
+  resetInboxDelta:    ()        => Promise.resolve(),
   searchEmails:       (q)       => graph.searchEmails(q),
   fetchSent:          ()        => graph.fetchSent(),
-  fetchThread:        (convId)  => graph.fetchThread(convId),
+  fetchThread:        (convId)  => get(BASE, 'vmm-email-thread', { conversationId: convId }),
   sendEmailReply:     (data)    => graph.replyOnThread({ messageId: data.messageId, htmlBody: data.htmlBody, toEmail: data.toRecipients, ccEmails: data.ccRecipients }),
   categorizeEmail:    (messageId, categories) => graph.categorizeEmail(messageId, categories),
   markEmailRead:      (messageId) => graph.markAsRead(messageId),
@@ -77,7 +78,7 @@ export const vmm = {
   validateNtrArticles: (items) => post(BASE, 'vmm-ntr-validate', { items }),
   saveNtr:             (data)  => post(BASE, 'vmm-ntr-save',     data),
   fetchNtrMasterXlsx:  ()      => post(BASE, 'vmm-ntr-fetch-xlsx', {}),
-  sendNtrEmail:        (data)  => graph.sendNtrEmailDirect(data),
+  sendNtrEmail:        (data)  => post(BASE, 'vmm-ntr-email', data),
 
   // ── User Management (MySQL-backed roles) ─────────────
   getUserRole:  (email)  => get(BASE, 'vmm-user-role',   { email }),
@@ -86,9 +87,14 @@ export const vmm = {
   updateUser:   (data)   => post(BASE, 'vmm-user-update', data),
   deleteUser:   (data)   => post(BASE, 'vmm-user-delete', data),
 
+  // ── SparkTG CTI — only MySQL lookup goes through n8n; calls are browser-direct ──
+  lookupCaller: (mobile) => get(BASE, 'vmm-sparktg-inbound', { mobile }),
+
   // ── Follow-up ────────────────────────────────────────
   getFollowUpComplaints: ()     => get(BASE,  'vmm-followup-complaints'),
-  closeComplaint:   (data)      => post(BASE, 'vmm-close-complaint',   data),
-  notConnected:     (data)      => post(BASE, 'vmm-not-connected',     data),
-  updateEdc:        (data)      => post(BASE, 'vmm-update-edc',        data),
+  updateComplaint:  (data)      => post(BASE, 'vmm-update-complaint',   data),
+  escalateComplaint:(data)      => post(BASE, 'vmm-escalate-complaint', data),
+  closeComplaint:   (data)      => post(BASE, 'vmm-close-complaint-v2', data),
+  notConnected:     (data)      => post(BASE, 'vmm-not-connected',      data),
+  updateEdc:        (data)      => post(BASE, 'vmm-update-edc',         data),
 };

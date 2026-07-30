@@ -181,6 +181,7 @@ export default function EmailComplaints() {
   const [sendingQuickReply, setSendingQuickReply] = useState(false);
   const [logging,       setLogging]       = useState(false);
   const [loggingActivity, setLoggingActivity] = useState(false);
+  const [confirmECPending, setConfirmECPending] = useState(false);
   const [toast,         setToast]         = useState('');
   const [activeAction,    setActiveAction]    = useState(null);
   const [resendModal,     setResendModal]     = useState(false);
@@ -607,16 +608,28 @@ export default function EmailComplaints() {
     claimEmail(selected.id, 'claim');
     try {
       // If direct body is empty (e.g. WIP sidebar click), build from thread messages
+      // n8n thread returns bodyHtml (no plain text body); fall back chain: body → bodyHtml → bodyPreview
       const threadBodyText = threadMessages.length > 0
-        ? threadMessages.map(m => `[From: ${m.fromName || m.from}]\n${m.body}`).join('\n\n---\n\n')
+        ? threadMessages.map(m => `[From: ${m.fromName || m.from}]\n${m.body || m.bodyHtml || m.bodyPreview || ''}`).join('\n\n---\n\n')
         : '';
-      const emailBody = selected.body || threadBodyText;
+      const emailBody = selected.body || selected.bodyPreview || threadBodyText;
+
+      // Extract store code + employee code from body text when the email address didn't reveal them
+      const rawText = emailBody.replace(/<[^>]*>/g, ' ');
+      let bodyStoreCode = selected.storeCode || '';
+      if (!bodyStoreCode) {
+        const hit = rawText.match(/\bstore\s*(?:code)?\s*[-:]\s*([A-Z]{2}\d{2,3})\b/i);
+        if (hit) bodyStoreCode = hit[1].toUpperCase();
+      }
+      let bodyEmpCode = '';
+      const empHit = rawText.match(/\b(?:employee|emp|staff)\s*(?:code|id|no\.?)?\s*[-:]\s*(\d{5,7}|VMM\d{3})\b/i);
+      if (empHit) bodyEmpCode = empHit[1];
 
       const res = await vmm.parseEmail({
         fromEmail:  selected.fromAddr,
         subject:    selected.subject,
         emailBody,
-        storeCode:  selected.storeCode,
+        storeCode:  bodyStoreCode || selected.storeCode,
         templates,
         natures:    natures.map(n => ({ nature: n.nature, type: n.type })),
         // Unique product names so AI picks from the real list (e.g. "Server room AC" → "AC")
@@ -634,22 +647,24 @@ export default function EmailComplaints() {
           description:     parsedEdits.description      || '',
         } : {},
       });
-      // Employee — lookup from code if present; clear if not
-      if (!res.employeeCode) {
+      // Employee — lookup from code if present (from AI or body regex); clear if not
+      const effectiveEmpCode = res.employeeCode || bodyEmpCode;
+      if (!effectiveEmpCode) {
         res.employeeName = null;
         setEmpLookupStatus('idle');
         setResolvedEmpName('');
       } else {
+        res.employeeCode = effectiveEmpCode;
         setEmpLookupStatus('loading');
         try {
-          const empRes = await vmm.lookupEmployee(res.employeeCode);
+          const empRes = await vmm.lookupEmployee(effectiveEmpCode);
           if (empRes.found && empRes.employee?.name) {
             res.employeeName = empRes.employee.name;
             if (!res.contactNumber && empRes.employee.mobile) {
               res.contactNumber = empRes.employee.mobile;
             }
             // If store code is missing, auto-fill from employee's store
-            if (!res.storeCode && !selected.storeCode && empRes.employee.storeCode) {
+            if (!res.storeCode && !bodyStoreCode && !selected.storeCode && empRes.employee.storeCode) {
               res.storeCode = empRes.employee.storeCode;
             }
             setResolvedEmpName(empRes.employee.name);
@@ -670,8 +685,8 @@ export default function EmailComplaints() {
       // Nature — nearest match from real natures list
       const matchedNature  = findBestByText(natures,  res.natureOfProblem || '', ['nature']);
       setParsedEdits(prev => ({
-        storeCode:       res.storeCode       || selected?.storeCode    || prev?.storeCode       || '',
-        employeeCode:    res.employeeCode    || prev?.employeeCode    || '',
+        storeCode:       res.storeCode       || bodyStoreCode         || selected?.storeCode    || prev?.storeCode       || '',
+        employeeCode:    res.employeeCode    || bodyEmpCode           || prev?.employeeCode    || '',
         contactNumber:   res.contactNumber   || prev?.contactNumber   || '',
         productLocation: res.productLocation || prev?.productLocation || '',
         description:     res.description     || prev?.description     || '',
@@ -863,7 +878,6 @@ export default function EmailComplaints() {
         emailFrom:           selected.fromAddr || '',
         emailTo:             selected.toDisplay || '',
         uid: currentUser?.id ?? 1,
-        agentName: currentUser?.name || '',
       };
 
       const allResults = [];
@@ -2054,7 +2068,17 @@ export default function EmailComplaints() {
                         { key: 'close',    label: '✓ Close',   style: { background: '#16a34a' } },
                       ].map(({ key, label, style }) => (
                         <button key={key}
-                          onClick={() => setUpdateAction(updateAction === key ? null : key)}
+                          onClick={() => {
+                            const next = updateAction === key ? null : key;
+                            setUpdateAction(next);
+                            if (next === 'update' || next === 'escalate') {
+                              const fc = foundComplaint?.complaint;
+                              setUpdateForm(f => ({ ...f, newEdc: fc?.edc ? String(fc.edc).split('T')[0] : '' }));
+                              const latestLog = [...(foundComplaint?.logs || [])].sort((a, b) => new Date(b.created) - new Date(a.created))[0];
+                              setUpdDelayMain(latestLog?.reasonfordelay || '');
+                              setUpdDelaySub(latestLog?.subreasonfordelay || '');
+                            }
+                          }}
                           style={{ ...style, color: '#fff', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer', fontWeight: 600, fontSize: 13, opacity: updateAction && updateAction !== key ? 0.45 : 1 }}>
                           {label}
                         </button>
@@ -2107,14 +2131,13 @@ export default function EmailComplaints() {
                     </div>
                   )}
 
-                  {/* Delay Reason — for Escalate */}
-                  {updateAction === 'escalate' && (
+                  {/* Delay Reason — for Escalate and Update */}
+                  {(updateAction === 'escalate' || updateAction === 'update') && (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
                       <div>
                         <label style={{ fontSize: 11, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Delay Reason — Main</label>
                         <select style={{ padding: '7px 10px', border: '1.5px solid #d1d5db', borderRadius: 7, fontSize: 12, color: '#111827', width: '100%', outline: 'none' }} value={updDelayMain} onChange={e => {
                           setUpdDelayMain(e.target.value); setUpdDelaySub('');
-                          setUpdateForm(f => ({ ...f, newEdc: '' }));
                         }}>
                           <option value="">— Select —</option>
                           {Object.keys(DELAY_REASONS).map(k => <option key={k} value={k}>{k}</option>)}
@@ -2159,8 +2182,8 @@ export default function EmailComplaints() {
                     </div>
                   )}
 
-                  {/* Date — required for Escalate and Close */}
-                  {(updateAction === 'escalate' || updateAction === 'close') && (
+                  {/* Date — required for Escalate/Close, optional for Update */}
+                  {(updateAction === 'escalate' || updateAction === 'close' || updateAction === 'update') && (
                     <div className="ec-update-row">
                       <label>
                         {updateAction === 'close' && updStatus === 'Closed' ? 'Date of Closure' : 'New EDC'}
@@ -2191,58 +2214,115 @@ export default function EmailComplaints() {
                     </div>
                   )}
 
-                  {/* Submit */}
+                  {/* Confirm-before-save modal */}
+                  {confirmECPending && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+                      <div style={{ background: '#fff', borderRadius: 14, padding: 28, width: 440, maxWidth: '95vw', boxShadow: '0 24px 64px rgba(0,0,0,0.3)' }}>
+                        <div style={{ fontWeight: 800, fontSize: 17, color: '#1e293b', marginBottom: 4 }}>
+                          Confirm {updateAction === 'escalate' ? 'Escalation' : updateAction === 'close' ? 'Closure' : 'Update'}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 18 }}>
+                          Verify all details before saving to the case log.
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderTop: '1px solid #f1f5f9', borderBottom: '1px solid #f1f5f9', padding: '16px 0', marginBottom: 20 }}>
+                          {[
+                            ['Status', updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? updStatus : (foundComplaint?.complaint?.current_status || 'Open')],
+                            ['EDC', updateForm.newEdc || '—'],
+                            updDelayMain ? ['Delay Reason', `${updDelayMain}${updDelaySub ? ` — ${updDelaySub}` : ''}`] : null,
+                            ['Remarks', updateForm.remarks],
+                          ].filter(Boolean).map(([label, value]) => (
+                            <div key={label} style={{ display: 'flex', gap: 14 }}>
+                              <div style={{ width: 110, flexShrink: 0, fontSize: 12, color: '#64748b', fontWeight: 600 }}>{label}</div>
+                              <div style={{ fontSize: 13, color: '#1e293b', fontWeight: 500, flex: 1 }}>{value}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                          <button onClick={() => setConfirmECPending(false)}
+                            style={{ padding: '9px 22px', borderRadius: 7, border: '1.5px solid #e2e8f0', background: '#fff', color: '#475569', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                            Cancel
+                          </button>
+                          <button disabled={loggingActivity}
+                            style={{ padding: '9px 22px', borderRadius: 7, border: 'none', background: updateAction === 'escalate' ? '#d97706' : updateAction === 'close' ? '#16a34a' : '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+                            onClick={async () => {
+                              setConfirmECPending(false);
+                              setLoggingActivity(true);
+                              try {
+                                const c = foundComplaint?.complaint;
+                                const effectiveStatus = updateAction === 'escalate' ? 'Escalated'
+                                  : updateAction === 'close' ? updStatus : (foundComplaint?.complaint?.current_status || 'Open');
+                                const followupMethod = updSrc === 'Email Reply' ? 'Email Reply'
+                                  : updSrc === 'Vendor Update' ? 'Vendor Update' : 'Call';
+                                const nextLevel = parseInt(c?.escalationlevel || 0) + 1;
+                                const basePayload = {
+                                  complaintId:    c?.id,
+                                  followupMethod,
+                                  txnId:          updSrc === 'Call'          ? updTxnId        : '',
+                                  mobileCalled:   updSrc === 'Call'          ? updMobile       : '',
+                                  emailSubject:   updSrc === 'Email Reply'   ? updEmailRef     : '',
+                                  vendorTicketNo: updSrc === 'Vendor Update' ? updVendorTicket : '',
+                                  remarks:        updateForm.remarks,
+                                  uid:            currentUser?.id ?? 1,
+                                };
+                                let res;
+                                if (updateAction === 'update') {
+                                  res = await vmm.updateComplaint({
+                                    ...basePayload,
+                                    delayMain:      updDelayMain,
+                                    delaySub:       updDelaySub,
+                                    newClosureDate: updateForm.newEdc || '',
+                                    closureStatus:  effectiveStatus,
+                                  });
+                                } else if (updateAction === 'escalate') {
+                                  res = await vmm.escalateComplaint({
+                                    ...basePayload,
+                                    closureStatus:   effectiveStatus,
+                                    delayMain:       updDelayMain,
+                                    delaySub:        updDelaySub,
+                                    newClosureDate:  updateForm.newEdc || '',
+                                    escalationLevel: nextLevel,
+                                  });
+                                } else {
+                                  res = await vmm.closeComplaint({
+                                    ...basePayload,
+                                    closureStatus: effectiveStatus,
+                                    closureDate:   updateForm.newEdc || '',
+                                    closedBy:      updClosedBy || '',
+                                  });
+                                }
+                                if (res?.success !== false && !res?.error) {
+                                  const tagType  = updateAction === 'escalate' ? 'escalated' : updateAction === 'close' ? 'closed' : 'updated';
+                                  const tagLabel = `${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'} • ${updateForm.complaintId.trim()}`;
+                                  const graphCat = updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Case Closed' : 'Case Updated';
+                                  tagEmail(selected.id, tagType, tagLabel);
+                                  patchEmailCategories(selected.id, [graphCat, 'New CRM']);
+                                  vmm.categorizeEmail(selected.id, [graphCat, 'New CRM']).catch(() => {});
+                                  showToast(`${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'}: ${updateForm.complaintId.trim()}`, 'ok');
+                                  setActiveAction(null);
+                                  setUpdateForm({ complaintId: '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' });
+                                  setUpdateAction(null);
+                                  setUpdSrc('Email Reply'); setUpdTxnId(''); setUpdMobile(''); setUpdEmailRef('');
+                                  setUpdVendorTicket(''); setUpdDelayMain(''); setUpdDelaySub(''); setUpdStatus('Closed'); setUpdClosedBy('');
+                                } else {
+                                  showToast(res?.message || 'Update failed', 'err');
+                                }
+                              } catch { showToast('Could not save update', 'err'); }
+                              finally { setLoggingActivity(false); }
+                            }}>
+                            {loggingActivity ? 'Saving…' : 'Confirm & Save'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Submit — opens confirm dialog */}
                   {updateAction && (
                     <button
                       className="ec-submit-update-btn"
                       disabled={loggingActivity || !updateForm.complaintId.trim() || !updateForm.remarks.trim()
-                        || ((updateAction === 'escalate' || updateAction === 'close') && !updateForm.newEdc)}
-                      onClick={async () => {
-                        setLoggingActivity(true);
-                        try {
-                          const c = foundComplaint?.complaint;
-                          const effectiveStatus = updateAction === 'escalate' ? 'Escalated'
-                            : updateAction === 'close' ? updStatus : 'Open';
-                          const followupMethod = updSrc === 'Email Reply' ? 'Email Reply'
-                            : updSrc === 'Vendor Update' ? 'Vendor Update' : 'Call';
-                          const nextLevel = parseInt(c?.escalationlevel || 0) + 1;
-                          const res = await vmm.closeComplaint({
-                            complaintId:    c?.id,
-                            closureStatus:  effectiveStatus,
-                            followupMethod,
-                            txnId:          updSrc === 'Call' ? updTxnId : '',
-                            mobileCalled:   updSrc === 'Call' ? updMobile : '',
-                            emailSubject:   updSrc === 'Email Reply' ? updEmailRef : '',
-                            vendorTicketNo: updSrc === 'Vendor Update' ? updVendorTicket : '',
-                            delayMain:      updDelayMain,
-                            delaySub:       updDelaySub,
-                            remarks:        updateForm.remarks,
-                            uid:            currentUser?.id ?? 1,
-                            agentName:      currentUser?.name || '',
-                            escalationLevel: nextLevel,
-                            newClosureDate: (effectiveStatus === 'Partially Closed' || effectiveStatus === 'Escalated') ? updateForm.newEdc : '',
-                            closureDate:    effectiveStatus === 'Closed' ? updateForm.newEdc : '',
-                            closedBy:       effectiveStatus === 'Closed' ? updClosedBy : '',
-                          });
-                          if (res?.success !== false && !res?.error) {
-                            const tagType  = updateAction === 'escalate' ? 'escalated' : updateAction === 'close' ? 'closed' : 'updated';
-                            const tagLabel = `${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'} • ${updateForm.complaintId.trim()}`;
-                            const graphCat = updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Case Closed' : 'Case Updated';
-                            tagEmail(selected.id, tagType, tagLabel);
-                            patchEmailCategories(selected.id, [graphCat, 'New CRM']);
-                            vmm.categorizeEmail(selected.id, [graphCat, 'New CRM']).catch(() => {});
-                            showToast(`${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'}: ${updateForm.complaintId.trim()}`, 'ok');
-                            setActiveAction(null);
-                            setUpdateForm({ complaintId: '', remarks: '', newStatus: '', newEdc: '', escalationLevel: '', reasonForDelay: '' });
-                            setUpdateAction(null);
-                            setUpdSrc('Email Reply'); setUpdTxnId(''); setUpdMobile(''); setUpdEmailRef('');
-                            setUpdVendorTicket(''); setUpdDelayMain(''); setUpdDelaySub(''); setUpdStatus('Closed'); setUpdClosedBy('');
-                          } else {
-                            showToast(res?.message || 'Update failed', 'err');
-                          }
-                        } catch { showToast('Could not save update', 'err'); }
-                        finally { setLoggingActivity(false); }
-                      }}
+                        || !updateForm.newEdc}
+                      onClick={() => setConfirmECPending(true)}
                     >
                       {loggingActivity ? 'Saving…'
                         : updateAction === 'escalate' ? '↑ Escalate Complaint'

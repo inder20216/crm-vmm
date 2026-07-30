@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { vmm } from '../api/vmm';
 import './ComplaintDetail.css';
+import '../components/DialerPanel.css';
 import { useAuth } from '../context/AuthContext';
 
 const STATUS_COLORS = {
@@ -101,6 +102,27 @@ function Field({ label, value, mono, span2 }) {
   );
 }
 
+function PhoneField({ label, value, span2 }) {
+  const v = bufStr(value);
+  const handleCall = () => {
+    if (!v || !window.__vmmDial) return;
+    window.__vmmDial(v.replace(/\D/g, ''));
+  };
+  return (
+    <div className={`cd-field${span2 ? ' cd-field-span2' : ''}`}>
+      <div className="cd-field-label">{label}</div>
+      <div className="cd-field-value">
+        {v || '—'}
+        {v && (
+          <button className="ctc-btn" onClick={handleCall} title={`Call ${v}`}>
+            📞
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ComplaintDetail() {
   const { currentUser } = useAuth();
   const { id }    = useParams();
@@ -123,6 +145,7 @@ export default function ComplaintDetail() {
   const [updEdc,      setUpdEdc]      = useState('');
   const [updClosedBy, setUpdClosedBy] = useState('');
   const [updRemarks,  setUpdRemarks]  = useState('');
+  const [confirmPending, setConfirmPending] = useState(false);
   const [updating,   setUpdating]     = useState(false);
   const [updateMsg,  setUpdateMsg]    = useState(null);
   const [logsRefreshing, setLogsRefreshing] = useState(false);
@@ -176,12 +199,12 @@ export default function ComplaintDetail() {
 
   const handleUpdate = async () => {
     if (!updRemarks.trim()) { showUpdMsg('Remarks are required', 'err'); return; }
-    // Derive status from action
+    // Preserve existing status on plain update — avoids resetting Escalated → Open
     const effectiveStatus = updAction === 'escalate'      ? 'Escalated'
       : updAction === 'not-connected' ? 'Not Connected'
-      : updAction === 'close'         ? updStatus  // updStatus holds Closed / Partially Closed
-      : 'Open';
-    if ((effectiveStatus === 'Partially Closed' || effectiveStatus === 'Escalated' || effectiveStatus === 'Closed') && !updEdc) { showUpdMsg('Date of closure is required', 'err'); return; }
+      : updAction === 'close'         ? updStatus
+      : (data.complaint?.current_status || 'Open');
+    if (!updEdc) { showUpdMsg('Date of closure (EDC) is required', 'err'); return; }
 
     setUpdating(true);
     try {
@@ -195,7 +218,6 @@ export default function ComplaintDetail() {
           complaintno: c.complaintno,
           remarks: updRemarks,
           uid: currentUser?.id ?? 1,
-          agentName: currentUser?.name || '',
           txnId: updTxnId,
           mobileCalled: updMobile,
           newClosureDate: updEdc,
@@ -204,27 +226,46 @@ export default function ComplaintDetail() {
           delaySub: updDelaySub,
         });
       } else {
-      const followupMethod = updSrc === 'Email Reply' ? 'Email Reply'
-                            : updSrc === 'Vendor Update' ? 'Vendor Update'
-                            : 'Call';
-      res = await vmm.closeComplaint({
-        complaintId: c.id,
-        closureStatus: effectiveStatus,
-        followupMethod,
-        txnId: updSrc === 'Call' ? updTxnId : '',
-        mobileCalled: updSrc === 'Call' ? updMobile : '',
-        emailSubject: updSrc === 'Email Reply' ? updEmailRef : '',
-        vendorTicketNo: updSrc === 'Vendor Update' ? updVendorTicket : '',
-        delayMain: updDelayMain,
-        delaySub: updDelaySub,
-        remarks: updRemarks,
-        uid: currentUser?.id ?? 1,
-        agentName: currentUser?.name || '',
-        escalationLevel: nextLevel,
-        newClosureDate: (effectiveStatus === 'Partially Closed' || effectiveStatus === 'Escalated') ? updEdc : '',
-        closureDate: effectiveStatus === 'Closed' ? updEdc : '',
-        closedBy: effectiveStatus === 'Closed' ? updClosedBy : '',
-      });
+        const followupMethod = updSrc === 'Email Reply' ? 'Email Reply'
+                              : updSrc === 'Vendor Update' ? 'Vendor Update'
+                              : 'Call';
+        const basePayload = {
+          complaintId:   c.id,
+          followupMethod,
+          txnId:         updSrc === 'Call'          ? updTxnId        : '',
+          mobileCalled:  updSrc === 'Call'          ? updMobile       : '',
+          emailSubject:  updSrc === 'Email Reply'   ? updEmailRef     : '',
+          vendorTicketNo:updSrc === 'Vendor Update' ? updVendorTicket : '',
+          remarks:       updRemarks,
+          uid:           currentUser?.id ?? 1,
+        };
+
+        if (updAction === 'update') {
+          res = await vmm.updateComplaint({
+            ...basePayload,
+            delayMain:      updDelayMain,
+            delaySub:       updDelaySub,
+            newClosureDate: updEdc || '',
+            closureStatus:  effectiveStatus,
+          });
+        } else if (updAction === 'escalate') {
+          res = await vmm.escalateComplaint({
+            ...basePayload,
+            closureStatus:  effectiveStatus,
+            delayMain:      updDelayMain,
+            delaySub:       updDelaySub,
+            newClosureDate: updEdc || '',
+            escalationLevel: nextLevel,
+          });
+        } else {
+          // close action (Closed / Partially Closed)
+          res = await vmm.closeComplaint({
+            ...basePayload,
+            closureStatus: effectiveStatus,
+            closureDate:   updEdc || '',
+            closedBy:      updClosedBy || '',
+          });
+        }
       } // end else (not-connected branch)
 
       if (res?.success !== false && !res?.error) {
@@ -268,6 +309,43 @@ export default function ComplaintDetail() {
   return (
     <div className="cd-page">
 
+      {/* ── Confirm-before-save modal ── */}
+      {confirmPending && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 28, width: 440, maxWidth: '95vw', boxShadow: '0 24px 64px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontWeight: 800, fontSize: 17, color: '#1e293b', marginBottom: 4 }}>
+              Confirm {updAction === 'escalate' ? 'Escalation' : updAction === 'close' ? 'Closure' : updAction === 'not-connected' ? 'Not Connected' : 'Update'}
+            </div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 18 }}>
+              Verify all details before saving to the case log.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderTop: '1px solid #f1f5f9', borderBottom: '1px solid #f1f5f9', padding: '16px 0', marginBottom: 20 }}>
+              {[
+                ['Status', updAction === 'escalate' ? 'Escalated' : updAction === 'not-connected' ? 'Not Connected' : updAction === 'close' ? updStatus : (c.current_status || 'Open')],
+                ['EDC', updEdc || '—'],
+                updDelayMain ? ['Delay Reason', `${updDelayMain}${updDelaySub ? ` — ${updDelaySub}` : ''}`] : null,
+                ['Remarks', updRemarks],
+              ].filter(Boolean).map(([label, value]) => (
+                <div key={label} style={{ display: 'flex', gap: 14 }}>
+                  <div style={{ width: 110, flexShrink: 0, fontSize: 12, color: '#64748b', fontWeight: 600 }}>{label}</div>
+                  <div style={{ fontSize: 13, color: '#1e293b', fontWeight: 500, flex: 1 }}>{value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => setConfirmPending(false)}
+                style={{ padding: '9px 22px', borderRadius: 7, border: '1.5px solid #e2e8f0', background: '#fff', color: '#475569', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                Cancel
+              </button>
+              <button onClick={() => { setConfirmPending(false); handleUpdate(); }} disabled={updating}
+                style={{ padding: '9px 22px', borderRadius: 7, border: 'none', background: updAction === 'escalate' ? '#d97706' : updAction === 'close' ? '#16a34a' : '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                Confirm &amp; Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Top bar ── */}
       <div className="cd-topbar">
         <button className="cd-back" onClick={() => navigate(-1)}>← Back</button>
@@ -291,7 +369,7 @@ export default function ComplaintDetail() {
           <div className="cd-grid">
             <Field label="Employee Code"    value={c.empcode}        mono />
             <Field label="Employee Name"    value={c.empname} />
-            <Field label="Mobile No."       value={c.empmobileno} />
+            <PhoneField label="Mobile No."  value={c.empmobileno} />
             <Field label="Source"           value={c.sourceofcomplaints} />
             <Field label="Designation"      value={c.empdesignation} />
             {c.sourceofcsubject && <Field label="Email Subject" value={c.sourceofcsubject} span2 />}
@@ -324,10 +402,32 @@ export default function ComplaintDetail() {
             <Field label="City"        value={c.city} />
             <Field label="Region"      value={c.region} />
             <Field label="State"       value={c.state} />
-            <Field label="Manager"     value={c.managername ? `${c.managername}${c.managermobileno ? ' · ' + c.managermobileno : ''}` : null} />
-            <Field label="ASM"         value={c.asmname    ? `${c.asmname}${c.asmmobileno ? ' · ' + c.asmmobileno : ''}` : null} />
+            <div className="cd-field">
+              <div className="cd-field-label">Manager</div>
+              <div className="cd-field-value">
+                {c.managername || '—'}
+                {c.managermobileno && (
+                  <>&nbsp;·&nbsp;{c.managermobileno}
+                    <button className="ctc-btn" title={`Call ${c.managermobileno}`}
+                      onClick={() => window.__vmmDial && window.__vmmDial(bufStr(c.managermobileno).replace(/\D/g,''))}>📞</button>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="cd-field">
+              <div className="cd-field-label">ASM</div>
+              <div className="cd-field-value">
+                {c.asmname || '—'}
+                {c.asmmobileno && (
+                  <>&nbsp;·&nbsp;{c.asmmobileno}
+                    <button className="ctc-btn" title={`Call ${c.asmmobileno}`}
+                      onClick={() => window.__vmmDial && window.__vmmDial(bufStr(c.asmmobileno).replace(/\D/g,''))}>📞</button>
+                  </>
+                )}
+              </div>
+            </div>
             <Field label="FM Name"     value={c.fmname} />
-            <Field label="FM Mobile"   value={c.fmmobileno} />
+            <PhoneField label="FM Mobile" value={c.fmmobileno} />
             <Field label="FM Email"    value={c.fmemail} />
           </div>
         </div>
@@ -359,10 +459,17 @@ export default function ComplaintDetail() {
                 <tbody>
                   {timeline.map((row, i) => {
                     if (row._type === 'log') {
-                      const sc    = STATUS_COLORS[row.status] || 'blue';
-                      const src   = extractSource(row.remarks);
-                      const ss    = SOURCE_STYLES[src] || null;
-                      const delay = extractDelay(row.remarks);
+                      const sc = STATUS_COLORS[row.status] || 'blue';
+                      // Prefer dedicated column, fall back to parsing remarks
+                      const src = bufStr(row.fupdonevia) || extractSource(row.remarks);
+                      const ss  = SOURCE_STYLES[src] || null;
+                      const delayMain = bufStr(row.reasonfordelay);
+                      const delaySub  = bufStr(row.subreasonfordelay);
+                      const logEdc    = bufStr(row.closureinformdate);
+                      const closedBy  = bufStr(row.caseclosedby);
+                      // Fall back to remarks-extracted delay only if no dedicated column
+                      const delayFallback = !delayMain ? extractDelay(row.remarks) : null;
+                      const byName = bufStr(row.agentname) || bufStr(row.updatedby) || (row.uid ? `UID ${row.uid}` : 'CRM');
                       return (
                         <tr key={`log-${row.id || i}`}>
                           <td className="cd-log-date">{fmtDateTime(row.created)}</td>
@@ -376,22 +483,40 @@ export default function ComplaintDetail() {
                           </td>
                           <td className="cd-log-remarks">
                             <div>{cleanRemarks(row.remarks)}</div>
-                            {delay && (
-                              <div style={{ marginTop:4 }}>
+                            {delayMain && (
+                              <div style={{ marginTop:5 }}>
                                 <span style={{ display:'inline-block', padding:'2px 8px', borderRadius:6, fontSize:10, fontWeight:700, background:'#fef3c7', color:'#92400e' }}>
-                                  ⏳ {delay}
+                                  ⏳ {delayMain}{delaySub ? ` — ${delaySub}` : ''}
                                 </span>
+                              </div>
+                            )}
+                            {!delayMain && delayFallback && (
+                              <div style={{ marginTop:5 }}>
+                                <span style={{ display:'inline-block', padding:'2px 8px', borderRadius:6, fontSize:10, fontWeight:700, background:'#fef3c7', color:'#92400e' }}>
+                                  ⏳ {delayFallback}
+                                </span>
+                              </div>
+                            )}
+                            {logEdc && (
+                              <div style={{ marginTop:4, fontSize:11, color:'#6d28d9' }}>
+                                📅 EDC — <strong>{fmtDate(logEdc)}</strong>
+                              </div>
+                            )}
+                            {closedBy && (
+                              <div style={{ marginTop:4, fontSize:11, color:'#16a34a' }}>
+                                ✓ Closed by: <strong>{closedBy}</strong>
                               </div>
                             )}
                           </td>
                           <td><span className={`status-tag status-${sc}`}>{row.status || 'Open'}</span></td>
-                          <td className="cd-log-by">{row.agentname || (row.uid ? `uid ${row.uid}` : 'CRM')}</td>
+                          <td className="cd-log-by">{byName}</td>
                         </tr>
                       );
                     } else {
                       const level   = row.escalationlevel || (i + 1);
-                      const hasEdc  = !!row.edc;
+                      const hasEdc  = !!row.edc || !!row.closuredate;
                       const hasTkt  = !!row.ticketno;
+                      const edcVal  = row.edc || row.closuredate;
                       return (
                         <tr key={`esc-${i}`} style={{ background: '#faf5ff' }}>
                           <td className="cd-log-date">{fmtDateTime(row.created)}</td>
@@ -399,12 +524,12 @@ export default function ComplaintDetail() {
                             <span className="cd-esc-level">↑ L{level} Escalation</span>
                           </td>
                           <td className="cd-log-remarks" style={{ color: '#6d28d9' }}>
-                            {hasEdc  && <div>📅 EDC set to <strong>{fmtDate(row.edc)}</strong></div>}
+                            {hasEdc  && <div>📅 EDC set to <strong>{fmtDate(edcVal)}</strong></div>}
                             {hasTkt  && <div>🎫 Vendor Ticket: <strong>{row.ticketno}</strong></div>}
                             {!hasEdc && !hasTkt && <span style={{ color:'#94a3b8' }}>Escalation recorded</span>}
                           </td>
-                          <td className="cd-log-date">{hasEdc ? fmtDate(row.edc) : '—'}</td>
-                          <td className="cd-log-by">CRM</td>
+                          <td className="cd-log-date">{hasEdc ? fmtDate(edcVal) : '—'}</td>
+                          <td className="cd-log-by">{bufStr(row.agentname) || (row.uid ? `UID ${row.uid}` : 'CRM')}</td>
                         </tr>
                       );
                     }
@@ -440,6 +565,11 @@ export default function ComplaintDetail() {
                         const d = new Date(); d.setDate(d.getDate() + 3);
                         setUpdEdc(d.toISOString().split('T')[0]);
                         setUpdSrc('Call');
+                      } else if (next === 'update' || next === 'escalate') {
+                        setUpdEdc(c.edc ? String(c.edc).split('T')[0] : '');
+                        const latestLog = [...(data.logs || [])].sort((a, b) => new Date(b.created) - new Date(a.created))[0];
+                        setUpdDelayMain(bufStr(latestLog?.reasonfordelay) || '');
+                        setUpdDelaySub(bufStr(latestLog?.subreasonfordelay) || '');
                       } else {
                         setUpdEdc('');
                       }
@@ -491,14 +621,13 @@ export default function ComplaintDetail() {
                 )}
 
                 {/* Escalate / Not Connected — delay reason fields */}
-                {(updAction === 'escalate' || updAction === 'not-connected') && (
+                {(updAction === 'escalate' || updAction === 'not-connected' || updAction === 'update') && (
                   <div className="cd-uf-two-col">
                     <div className="cd-uf-field">
                       <label className="cd-uf-label">Delay Reason — Main</label>
                       <select className="cd-uf-select" value={updDelayMain} onChange={e => {
                         setUpdDelayMain(e.target.value); setUpdDelaySub('');
                         if (updAction === 'not-connected') { const d = new Date(); d.setDate(d.getDate() + 3); setUpdEdc(d.toISOString().split('T')[0]); }
-                        else setUpdEdc('');
                       }}>
                         <option value="">— Select —</option>
                         {Object.keys(DELAY_REASONS).map(k => <option key={k} value={k}>{k}</option>)}
@@ -537,10 +666,11 @@ export default function ComplaintDetail() {
                 )}
 
                 {/* EDC — required for Escalate, Not Connected, and Close */}
-                {(updAction === 'escalate' || updAction === 'not-connected' || updAction === 'close') && (
+                {(updAction === 'escalate' || updAction === 'not-connected' || updAction === 'close' || updAction === 'update') && (
                   <div className="cd-uf-field">
                     <label className="cd-uf-label">
-                      {updAction === 'close' && updStatus === 'Closed' ? 'Date of Closure' : updAction === 'not-connected' ? 'New EDC (auto +3d)' : 'New EDC'} <span style={{ color: '#dc2626' }}>*</span>
+                      {updAction === 'close' && updStatus === 'Closed' ? 'Date of Closure' : updAction === 'not-connected' ? 'New EDC (auto +3d)' : 'New EDC'}
+                      <span style={{ color: '#dc2626' }}> *</span>
                     </label>
                     <input className="cd-uf-input" type="date" value={updEdc} onChange={e => setUpdEdc(e.target.value)} />
                   </div>
@@ -566,7 +696,12 @@ export default function ComplaintDetail() {
 
                 <button
                   className={`cd-uf-submit cd-uf-submit-${updAction === 'escalate' ? 'escalated' : updAction === 'close' ? 'closed' : updAction === 'not-connected' ? 'escalated' : 'open'}`}
-                  onClick={handleUpdate} disabled={updating}>
+                  onClick={() => {
+                    if (!updRemarks.trim()) { showUpdMsg('Remarks are required', 'err'); return; }
+                    if (!updEdc) { showUpdMsg('Date of closure (EDC) is required', 'err'); return; }
+                    setConfirmPending(true);
+                  }}
+                  disabled={updating}>
                   {updating ? 'Saving…' : updAction === 'escalate' ? '↑ Escalate Complaint' : updAction === 'close' ? '✓ Close Complaint' : updAction === 'not-connected' ? '📵 Log Not Connected' : '✏ Save Update'}
                 </button>
 
