@@ -14,29 +14,33 @@ const TYPE_COLORS = { Breakdown: 'red', Repair: 'orange', Maintenance: 'blue', R
 
 const DELAY_REASONS = {
   'Delay From Vendor Side': [
-    { label: 'Quotation not received',       tat: 1  },
-    { label: 'Material/Parts Not Available', tat: 5  },
-    { label: 'Delay in logistics',           tat: 3  },
-    { label: 'Vendor not responding',        tat: 1  },
+    { label: 'Quotation / Field Service Report not received from vendor', tat: 1 },
+    { label: 'Material or Parts Not Available',                           tat: 3 },
+    { label: 'Under Transit',                                             tat: 3 },
+    { label: 'Work in progress',                                          tat: 1 },
+    { label: 'Vendor Is Not Responding',                                  tat: 1 },
+    { label: 'Vendor Visit Pending',                                      tat: 2 },
   ],
   'Delay From HO Team': [
-    { label: 'Quotation Approval Pending',  tat: 2  },
-    { label: 'Delay in Release of PO',      tat: 2  },
-    { label: 'Delay Due To Landlord',       tat: 15 },
-    { label: 'Delay Due To Lapse of AMC',   tat: 4  },
-    { label: 'Vendor details not provided', tat: 2  },
+    { label: 'Quotation Approval Pending',  tat: 1    },
+    { label: 'Delay In Release Of PO',      tat: 2    },
+    { label: 'Delay Due To Landlord',       tat: 15   },
+    { label: 'Delay Due To Lapse Of AMC',   tat: 3    },
+    { label: 'Vendor details not provided', tat: 2    },
     { label: 'Payment under process',       tat: null },
-    { label: 'Vendor Has Payment Issues',   tat: 15 },
-    { label: 'Delay in logistics',          tat: 3  },
+    { label: 'Vendor Has Payment Issues',   tat: 2    },
+    { label: 'Under Transit',               tat: 3    },
+    { label: 'Material To Be Dispatched',   tat: 2    },
   ],
   'Work Is Delayed Due To FM': [
-    { label: 'Local vendor/Quotation being arranged', tat: 2 },
-    { label: 'Site inspection pending',               tat: 3 },
+    { label: 'Local vendor or Quotation is being arranged', tat: 2 },
+    { label: 'Site inspection pending',                     tat: 2 },
+    { label: 'Facility Manager is not responding',          tat: 1 },
   ],
   'Delay From Store': [
-    { label: 'Store has rescheduled',     tat: 3 },
-    { label: 'Product under observation', tat: 1 },
-    { label: 'Store not responding',      tat: 1 },
+    { label: 'Store has rescheduled the work', tat: 3 },
+    { label: 'Product under observation',       tat: 1 },
+    { label: 'Store is not responding',         tat: 1 },
   ],
 };
 
@@ -76,6 +80,15 @@ function extractDelay(remarks) {
   if (!remarks) return null;
   const m = remarks.match(/\|\s*Delay:\s*([^|]+?)(\s*\|.*)?$/);
   return m ? m[1].trim() : null;
+}
+
+function matchDelaySub(stored, mainCat) {
+  if (!stored) return '';
+  const opts = DELAY_REASONS[mainCat] || [];
+  if (opts.find(o => o.label === stored)) return stored;
+  const lower = stored.toLowerCase();
+  const ci = opts.find(o => o.label.toLowerCase() === lower);
+  return ci ? ci.label : '';
 }
 
 function cleanRemarks(remarks) {
@@ -566,10 +579,15 @@ export default function ComplaintDetail() {
                         setUpdEdc(d.toISOString().split('T')[0]);
                         setUpdSrc('Call');
                       } else if (next === 'update' || next === 'escalate') {
-                        setUpdEdc(c.edc ? String(c.edc).split('T')[0] : '');
-                        const latestLog = [...(data.logs || [])].sort((a, b) => new Date(b.created) - new Date(a.created))[0];
-                        setUpdDelayMain(bufStr(latestLog?.reasonfordelay) || '');
-                        setUpdDelaySub(bufStr(latestLog?.subreasonfordelay) || '');
+                        const sortedLogs   = [...(data.logs || [])].sort((a, b) => new Date(b.created) - new Date(a.created));
+                        const latestLog    = sortedLogs[0];
+                        const latestEdcLog = sortedLogs.find(l => l.closureinformdate);
+                        const existingEdc  = c.edc || latestEdcLog?.closureinformdate || '';
+                        setUpdEdc(existingEdc ? String(existingEdc).split('T')[0] : '');
+                        const storedMain = bufStr(latestLog?.reasonfordelay) || '';
+                        const storedSub  = bufStr(latestLog?.subreasonfordelay) || '';
+                        setUpdDelayMain(storedMain);
+                        setUpdDelaySub(matchDelaySub(storedSub, storedMain));
                       } else {
                         setUpdEdc('');
                       }

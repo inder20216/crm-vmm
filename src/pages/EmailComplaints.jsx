@@ -20,31 +20,44 @@ const AMC_ONLY_PRODUCTS     = new Set(['civil work','weighing scale','pest contr
 
 const DELAY_REASONS = {
   'Delay From Vendor Side': [
-    { label: 'Quotation not received',       tat: 1  },
-    { label: 'Material/Parts Not Available', tat: 5  },
-    { label: 'Delay in logistics',           tat: 3  },
-    { label: 'Vendor not responding',        tat: 1  },
+    { label: 'Quotation / Field Service Report not received from vendor', tat: 1 },
+    { label: 'Material or Parts Not Available',                           tat: 3 },
+    { label: 'Under Transit',                                             tat: 3 },
+    { label: 'Work in progress',                                          tat: 1 },
+    { label: 'Vendor Is Not Responding',                                  tat: 1 },
+    { label: 'Vendor Visit Pending',                                      tat: 2 },
   ],
   'Delay From HO Team': [
-    { label: 'Quotation Approval Pending',  tat: 2  },
-    { label: 'Delay in Release of PO',      tat: 2  },
-    { label: 'Delay Due To Landlord',       tat: 15 },
-    { label: 'Delay Due To Lapse of AMC',   tat: 4  },
-    { label: 'Vendor details not provided', tat: 2  },
+    { label: 'Quotation Approval Pending',  tat: 1    },
+    { label: 'Delay In Release Of PO',      tat: 2    },
+    { label: 'Delay Due To Landlord',       tat: 15   },
+    { label: 'Delay Due To Lapse Of AMC',   tat: 3    },
+    { label: 'Vendor details not provided', tat: 2    },
     { label: 'Payment under process',       tat: null },
-    { label: 'Vendor Has Payment Issues',   tat: 15 },
-    { label: 'Delay in logistics',          tat: 3  },
+    { label: 'Vendor Has Payment Issues',   tat: 2    },
+    { label: 'Under Transit',               tat: 3    },
+    { label: 'Material To Be Dispatched',   tat: 2    },
   ],
   'Work Is Delayed Due To FM': [
-    { label: 'Local vendor/Quotation being arranged', tat: 2 },
-    { label: 'Site inspection pending',               tat: 3 },
+    { label: 'Local vendor or Quotation is being arranged', tat: 2 },
+    { label: 'Site inspection pending',                     tat: 2 },
+    { label: 'Facility Manager is not responding',          tat: 1 },
   ],
   'Delay From Store': [
-    { label: 'Store has rescheduled',     tat: 3 },
-    { label: 'Product under observation', tat: 1 },
-    { label: 'Store not responding',      tat: 1 },
+    { label: 'Store has rescheduled the work', tat: 3 },
+    { label: 'Product under observation',       tat: 1 },
+    { label: 'Store is not responding',         tat: 1 },
   ],
 };
+
+function matchDelaySub(stored, mainCat) {
+  if (!stored) return '';
+  const opts = DELAY_REASONS[mainCat] || [];
+  if (opts.find(o => o.label === stored)) return stored;
+  const lower = stored.toLowerCase();
+  const ci = opts.find(o => o.label.toLowerCase() === lower);
+  return ci ? ci.label : '';
+}
 
 const REQUIRED_FIELDS = ['storeCode', 'productName', 'natureOfProblem', 'description'];
 const FIELD_LABELS = {
@@ -2072,11 +2085,16 @@ export default function EmailComplaints() {
                             const next = updateAction === key ? null : key;
                             setUpdateAction(next);
                             if (next === 'update' || next === 'escalate') {
-                              const fc = foundComplaint?.complaint;
-                              setUpdateForm(f => ({ ...f, newEdc: fc?.edc ? String(fc.edc).split('T')[0] : '' }));
-                              const latestLog = [...(foundComplaint?.logs || [])].sort((a, b) => new Date(b.created) - new Date(a.created))[0];
-                              setUpdDelayMain(latestLog?.reasonfordelay || '');
-                              setUpdDelaySub(latestLog?.subreasonfordelay || '');
+                              const fc         = foundComplaint?.complaint;
+                              const sortedLogs   = [...(foundComplaint?.logs || [])].sort((a, b) => new Date(b.created) - new Date(a.created));
+                              const latestLog    = sortedLogs[0];
+                              const latestEdcLog = sortedLogs.find(l => l.closureinformdate);
+                              const existingEdc  = fc?.edc || latestEdcLog?.closureinformdate || '';
+                              setUpdateForm(f => ({ ...f, newEdc: existingEdc ? String(existingEdc).split('T')[0] : '' }));
+                              const storedMain = latestLog?.reasonfordelay || '';
+                              const storedSub  = latestLog?.subreasonfordelay || '';
+                              setUpdDelayMain(storedMain);
+                              setUpdDelaySub(matchDelaySub(storedSub, storedMain));
                             }
                           }}
                           style={{ ...style, color: '#fff', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer', fontWeight: 600, fontSize: 13, opacity: updateAction && updateAction !== key ? 0.45 : 1 }}>
