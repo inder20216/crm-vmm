@@ -26,3 +26,6 @@ dist-ssr
 *.xlsx
 *.docx
 index (*).html
+
+# n8n workflows — contain API credentials, keep off GitHub
+VMM/
