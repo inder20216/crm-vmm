@@ -42,8 +42,10 @@ export default function BulkClose() {
     setUploading(true);
     setUploadStatus(null);
     try {
+      const buffer = await file.arrayBuffer();
+      const blob = new Blob([buffer], { type: 'text/csv' });
       const formData = new FormData();
-      formData.append('data', file);
+      formData.append('data', blob, file.name);
       const res = await fetch(`${BASE}/vmm-csv-upload`, { method: 'POST', body: formData });
       if (res.ok) {
         setUploadDone(true);
@@ -63,14 +65,24 @@ export default function BulkClose() {
     setRunStatus(null);
     try {
       const res = await fetch(`${BASE}/close-cases`, { method: 'POST' });
-      if (res.ok) {
-        setRunStatus({ ok: true, msg: 'All pending cases processed. Closure emails sent to stores and FMs.' });
-        setFile(null);
-        setUploadDone(false);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      } else {
+      let body = null;
+      try { body = await res.json(); } catch {}
+      if (!res.ok) {
         setRunStatus({ ok: false, msg: `Process failed (${res.status} ${res.statusText})` });
+        return;
       }
+      if (body?.status === 'error' || body?.success === false) {
+        setRunStatus({ ok: false, msg: body.message || 'Workflow reported an error. Check n8n logs.' });
+        return;
+      }
+      const count = body?.count;
+      const msg = count != null
+        ? `${count} case${count !== 1 ? 's' : ''} closed. Closure emails sent to stores and FMs.`
+        : 'All pending cases processed. Closure emails sent to stores and FMs.';
+      setRunStatus({ ok: true, msg });
+      setFile(null);
+      setUploadDone(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err) {
       setRunStatus({ ok: false, msg: 'Connection error. Check your network.' });
     } finally {
@@ -127,9 +139,9 @@ export default function BulkClose() {
             <button
               className="bc-btn bc-btn-upload"
               onClick={handleUpload}
-              disabled={!file || uploading || uploadDone}
+              disabled={!file || uploading}
             >
-              {uploading ? 'Uploading…' : uploadDone ? 'Uploaded' : 'Upload CSV'}
+              {uploading ? 'Uploading…' : 'Upload CSV'}
             </button>
 
             {uploadStatus && (

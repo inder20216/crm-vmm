@@ -454,9 +454,17 @@ export default function ComplaintDetail() {
           {logs.length === 0 && escs.length === 0 ? (
             <div className="cd-no-logs">No activity recorded yet.</div>
           ) : (() => {
+            const seenEsc = new Set();
+            const dedupedEscs = escs.filter(e => {
+              const min = (e.created || '').slice(0, 16);
+              const key = `${e.escalationlevel}|${min}|${e.uid}`;
+              if (seenEsc.has(key)) return false;
+              seenEsc.add(key);
+              return true;
+            });
             const timeline = [
               ...logs.map(l => ({ _type: 'log', ...l })),
-              ...escs.map(e => ({ _type: 'esc', ...e })),
+              ...dedupedEscs.map(e => ({ _type: 'esc', ...e })),
             ].sort((a, b) => new Date(a.created) - new Date(b.created));
             return (
               <table className="cd-log-table">
@@ -583,7 +591,15 @@ export default function ComplaintDetail() {
                         const latestLog    = sortedLogs[0];
                         const latestEdcLog = sortedLogs.find(l => l.closureinformdate);
                         const existingEdc  = c.edc || latestEdcLog?.closureinformdate || '';
-                        setUpdEdc(existingEdc ? String(existingEdc).split('T')[0] : '');
+                        if (existingEdc) {
+                          setUpdEdc(String(existingEdc).split('T')[0]);
+                        } else if (c.tat && c.created) {
+                          const d = new Date(c.created);
+                          d.setDate(d.getDate() + parseInt(c.tat));
+                          setUpdEdc(d.toISOString().split('T')[0]);
+                        } else {
+                          setUpdEdc('');
+                        }
                         const storedMain = bufStr(latestLog?.reasonfordelay) || '';
                         const storedSub  = bufStr(latestLog?.subreasonfordelay) || '';
                         setUpdDelayMain(storedMain);
