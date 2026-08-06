@@ -4,6 +4,7 @@ import { vmm } from '../api/vmm';
 import './ComplaintDetail.css';
 import '../components/DialerPanel.css';
 import { useAuth } from '../context/AuthContext';
+import { AC_VENDOR_MAP } from '../auth/escalationMatrix';
 
 const STATUS_COLORS = {
   Logged: 'blue', Open: 'blue', Escalated: 'red',
@@ -158,6 +159,12 @@ export default function ComplaintDetail() {
   const [updEdc,      setUpdEdc]      = useState('');
   const [updClosedBy, setUpdClosedBy] = useState('');
   const [updRemarks,  setUpdRemarks]  = useState('');
+  const [escEmailMode, setEscEmailMode] = useState(null); // null|'loading'|'reply'|'new'|'skip'
+  const [escPrevMsg,   setEscPrevMsg]   = useState(null);
+  const [escToEmail,   setEscToEmail]   = useState('');
+  const [escCc,        setEscCc]        = useState('');
+  const [escSubject,   setEscSubject]   = useState('');
+  const [escBody,      setEscBody]      = useState('');
   const [confirmPending, setConfirmPending] = useState(false);
   const [updating,   setUpdating]     = useState(false);
   const [updateMsg,  setUpdateMsg]    = useState(null);
@@ -218,11 +225,14 @@ export default function ComplaintDetail() {
       : updAction === 'close'         ? updStatus
       : (data.complaint?.current_status || 'Open');
     if (!updEdc) { showUpdMsg('Date of closure (EDC) is required', 'err'); return; }
+    if (updAction === 'escalate' && (escEmailMode === 'reply' || escEmailMode === 'new') && !escBody.trim()) {
+      showUpdMsg('Please write the email message before submitting', 'err'); return;
+    }
 
     setUpdating(true);
     try {
       const c = data.complaint;
-      const nextLevel = parseInt(c.escalationlevel || 0) + 1;
+      const nextLevel = (parseInt(c.escalationlevel) || 0) + 1; // handles "NaN" string stored in DB
       let res;
 
       if (updAction === 'not-connected') {
@@ -262,6 +272,22 @@ export default function ComplaintDetail() {
             closureStatus:  effectiveStatus,
           });
         } else if (updAction === 'escalate') {
+          const _toEmail = escToEmail.trim();
+          const _ccEmails = escCc.split(',').map(e => e.trim()).filter(Boolean).join(',');
+          const _edcDisplay = updEdc
+            ? new Date(updEdc).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+            : '—';
+          const _bodyHtml = escBody.trim()
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .split('\n\n').map(para => `<p style="margin:0 0 12px">${para.replace(/\n/g, '<br>')}</p>`).join('');
+          const _emailHtml = _toEmail && escBody.trim()
+            ? `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:600px">`
+              + _bodyHtml
+              + `<hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0">`
+              + `<p style="font-size:12px;color:#64748b;margin:0">Complaint: <strong>${c.complaintno}</strong> &nbsp;|&nbsp; ${c.storename} (${c.storecode}) &nbsp;|&nbsp; ${c.productname} &nbsp;|&nbsp; EDC: ${_edcDisplay}</p>`
+              + `</div>`
+            : '';
+          // Save escalation to DB via n8n (no email — sent separately via Graph API below)
           res = await vmm.escalateComplaint({
             ...basePayload,
             closureStatus:  effectiveStatus,
@@ -270,6 +296,20 @@ export default function ComplaintDetail() {
             newClosureDate: updEdc || '',
             escalationLevel: nextLevel,
           });
+          // Send email via n8n → Graph API (no browser MSAL token needed)
+          if (_emailHtml && escSubject.trim()) {
+            try {
+              await vmm.sendFollowupEmail({
+                messageId: (escEmailMode === 'reply' && escPrevMsg?.id) ? escPrevMsg.id : '',
+                toEmail:   _toEmail,
+                ccEmails:  _ccEmails,
+                subject:   escSubject.trim(),
+                htmlBody:  _emailHtml,
+              });
+            } catch {
+              showUpdMsg('Escalation saved — but email could not be sent. Please send manually.', 'warn');
+            }
+          }
         } else {
           // close action (Closed / Partially Closed)
           res = await vmm.closeComplaint({
@@ -288,6 +328,8 @@ export default function ComplaintDetail() {
         setUpdEmailRef(isEmailSourced(c) ? emailRefDefault(c) : '');
         setUpdVendorTicket(''); setUpdDelayMain(''); setUpdDelaySub('');
         setUpdEdc(''); setUpdClosedBy(''); setUpdRemarks('');
+        setEscEmailMode(null); setEscPrevMsg(null);
+        setEscToEmail(''); setEscCc(''); setEscSubject(''); setEscBody('');
         refreshData();
       } else {
         showUpdMsg(res?.message || res?.error || 'Update failed', 'err');
@@ -582,6 +624,8 @@ export default function ComplaintDetail() {
                       const next = updAction === key ? null : key;
                       setUpdAction(next);
                       setUpdDelayMain(''); setUpdDelaySub(''); setUpdClosedBy('');
+                      setEscEmailMode(null); setEscPrevMsg(null);
+                      setEscToEmail(''); setEscCc(''); setEscSubject(''); setEscBody('');
                       if (next === 'not-connected') {
                         const d = new Date(); d.setDate(d.getDate() + 3);
                         setUpdEdc(d.toISOString().split('T')[0]);
@@ -589,8 +633,9 @@ export default function ComplaintDetail() {
                       } else if (next === 'update' || next === 'escalate') {
                         const sortedLogs   = [...(data.logs || [])].sort((a, b) => new Date(b.created) - new Date(a.created));
                         const latestLog    = sortedLogs[0];
-                        const latestEdcLog = sortedLogs.find(l => l.closureinformdate);
-                        const existingEdc  = c.edc || latestEdcLog?.closureinformdate || '';
+                        const sortedEscs   = [...(data.escalations || [])].sort((a, b) => new Date(b.created) - new Date(a.created));
+                        const latestEscEdc = sortedEscs.find(e => e.edc)?.edc || '';
+                        const existingEdc  = latestEscEdc || c.edc || '';
                         if (existingEdc) {
                           setUpdEdc(String(existingEdc).split('T')[0]);
                         } else if (c.tat && c.created) {
@@ -604,6 +649,11 @@ export default function ComplaintDetail() {
                         const storedSub  = bufStr(latestLog?.subreasonfordelay) || '';
                         setUpdDelayMain(storedMain);
                         setUpdDelaySub(matchDelaySub(storedSub, storedMain));
+                        if (next === 'escalate') {
+                          setEscEmailMode('prompt');
+                          setEscPrevMsg(null);
+                          setEscToEmail(''); setEscCc(''); setEscSubject(''); setEscBody('');
+                        }
                       } else {
                         setUpdEdc('');
                       }
@@ -725,6 +775,171 @@ export default function ComplaintDetail() {
                     placeholder={updAction === 'escalate' ? 'Reason for escalation, pending actions…' : updAction === 'close' ? 'Closure details, what was done…' : 'Update details, vendor response, next steps…'}
                     value={updRemarks} onChange={e => setUpdRemarks(e.target.value)} />
                 </div>
+
+                {/* Escalation Email */}
+                {updAction === 'escalate' && (
+                  <div style={{ marginTop: 14, borderTop: '1.5px dashed #fde68a', paddingTop: 14 }}>
+                    <div style={{ fontWeight: 700, color: '#d97706', fontSize: 13, marginBottom: 12 }}>📧 Escalation Email</div>
+
+                    {/* Step 1 — send email prompt */}
+                    {escEmailMode === 'prompt' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <button onClick={() => setEscEmailMode('choose')}
+                          style={{ padding: '8px 20px', borderRadius: 7, border: '1.5px solid #d97706', background: '#fffbeb', color: '#92400e', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                          📧 Send Email
+                        </button>
+                        <span style={{ fontSize: 12, color: '#94a3b8' }}>or <button onClick={() => setEscEmailMode('skip')} style={{ fontSize: 12, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>skip</button></span>
+                      </div>
+                    )}
+
+                    {/* Step 2 — choose reply or new */}
+                    {escEmailMode === 'choose' && (
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                        <button onClick={() => {
+                          setEscEmailMode('loading');
+                          const vi = AC_VENDOR_MAP[c.storecode] || {};
+                          const _nl = (parseInt(c.escalationlevel) || 0) + 1;
+                          const _defSubj = `Escalation L${_nl} | ${c.complaintno} | ${c.storename} (${c.storecode}) | ${c.productname}`;
+                          const _edcStr = updEdc
+                            ? new Date(updEdc).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                            : '—';
+                          const _defaultBody = `Dear Team,\n\nThis is a reminder regarding complaint ${c.complaintno} for ${c.storename || c.storecode}.\n\nProduct: ${c.productname || '—'}\nNature of Problem: ${c.natureofproblem || '—'}\nExpected Date of Closure: ${_edcStr}\n\nThe complaint is still pending. Kindly update the status at the earliest.\n\nRegards,\nVMM Helpdesk`;
+                          const _logsAsc = [...(data.logs || [])].sort((a, b) => new Date(a.created) - new Date(b.created));
+                          const logDate = (_logsAsc[0]?.created || c.created || '').slice(0, 10) || null;
+                          vmm.searchSentEmail(c.complaintno, logDate).then(result => {
+                            if (result?.found) {
+                              setEscPrevMsg(result);
+                              // Use vendor email from complaint data — result.to is the received copy's TO (helpdesk mailbox), not the vendor
+                              setEscToEmail(vi.ve || '');
+                              setEscCc(c.fmemail || '');
+                              setEscSubject(`Re: ${result.subject}`);
+                            } else {
+                              setEscPrevMsg(null);
+                              setEscToEmail(vi.ve || '');
+                              setEscCc(c.fmemail || '');
+                              setEscSubject(_defSubj);
+                            }
+                            setEscBody(_defaultBody);
+                            setEscEmailMode('reply');
+                          }).catch(() => {
+                            setEscPrevMsg(null);
+                            setEscToEmail(vi.ve || '');
+                            setEscCc(c.fmemail || '');
+                            setEscSubject(_defSubj);
+                            setEscBody(_defaultBody);
+                            setEscEmailMode('reply');
+                          });
+                        }} style={{ padding: '8px 16px', borderRadius: 7, border: '1.5px solid #d97706', background: '#fffbeb', color: '#92400e', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                          ↩ Reply to Escalation
+                        </button>
+                        <button onClick={() => {
+                          setEscPrevMsg(null);
+                          setEscToEmail(''); setEscCc(''); setEscSubject(''); setEscBody('');
+                          setEscEmailMode('new');
+                        }} style={{ padding: '8px 16px', borderRadius: 7, border: '1.5px solid #7c3aed', background: '#f5f3ff', color: '#5b21b6', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                          ✉ New Email
+                        </button>
+                        <button onClick={() => setEscEmailMode('prompt')}
+                          style={{ padding: '8px 12px', borderRadius: 7, border: 'none', background: 'none', color: '#94a3b8', fontSize: 12, cursor: 'pointer' }}>
+                          ← Back
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Step 2a — loading */}
+                    {escEmailMode === 'loading' && (
+                      <div style={{ fontSize: 12, color: '#94a3b8' }}>Searching for previous escalation emails…</div>
+                    )}
+
+
+                    {/* Step 2b — reply compose */}
+                    {escEmailMode === 'reply' && (<>
+                      {escPrevMsg ? (
+                        <div style={{ fontSize: 12, background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 6, padding: '8px 12px', marginBottom: 10 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                            <span>↩ Replying to: <strong>{escPrevMsg.subject}</strong></span>
+                            {escPrevMsg.totalFound > 1 && (
+                              <span style={{ background: '#d97706', color: '#fff', borderRadius: 10, padding: '1px 7px', fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap' }}>
+                                Email {escPrevMsg.totalFound} of {escPrevMsg.totalFound}
+                              </span>
+                            )}
+                          </div>
+                          {escPrevMsg.sentAt && (
+                            <div style={{ color: '#92400e', marginTop: 3 }}>
+                              Sent: {new Date(escPrevMsg.sentAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                              {escPrevMsg.totalFound > 1 && <span style={{ marginLeft: 8, color: '#b45309' }}>· {escPrevMsg.totalFound} emails sent for this complaint so far</span>}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 12, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, padding: '8px 12px', marginBottom: 10, color: '#991b1b' }}>
+                          No previous escalation email found — fill in the To field to send a new email.
+                        </div>
+                      )}
+                      <div className="cd-uf-field">
+                        <label className="cd-uf-label">To</label>
+                        <input className="cd-uf-input" value={escToEmail} onChange={e => setEscToEmail(e.target.value)} placeholder="vendor@email.com" />
+                      </div>
+                      <div className="cd-uf-two-col" style={{ marginTop: 8 }}>
+                        <div className="cd-uf-field">
+                          <label className="cd-uf-label">CC</label>
+                          <input className="cd-uf-input" value={escCc} onChange={e => setEscCc(e.target.value)} placeholder="cc1, cc2" />
+                        </div>
+                        <div className="cd-uf-field">
+                          <label className="cd-uf-label">Subject</label>
+                          <input className="cd-uf-input" value={escSubject} onChange={e => setEscSubject(e.target.value)} />
+                        </div>
+                      </div>
+                      <div className="cd-uf-field" style={{ marginTop: 8 }}>
+                        <label className="cd-uf-label">Message</label>
+                        <textarea className="cd-uf-textarea" rows={4} placeholder="Write your follow-up / reminder message…"
+                          value={escBody} onChange={e => setEscBody(e.target.value)} />
+                      </div>
+                      <button onClick={() => setEscEmailMode('choose')}
+                        style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', marginTop: 6, padding: 0, textDecoration: 'underline' }}>
+                        ← Back
+                      </button>
+                    </>)}
+
+                    {/* Step 2c — new email compose */}
+                    {escEmailMode === 'new' && (<>
+                      <div className="cd-uf-field">
+                        <label className="cd-uf-label">To</label>
+                        <input className="cd-uf-input" value={escToEmail} onChange={e => setEscToEmail(e.target.value)} placeholder="vendor@email.com" />
+                      </div>
+                      <div className="cd-uf-two-col" style={{ marginTop: 8 }}>
+                        <div className="cd-uf-field">
+                          <label className="cd-uf-label">CC</label>
+                          <input className="cd-uf-input" value={escCc} onChange={e => setEscCc(e.target.value)} placeholder="cc1, cc2" />
+                        </div>
+                        <div className="cd-uf-field">
+                          <label className="cd-uf-label">Subject</label>
+                          <input className="cd-uf-input" value={escSubject} onChange={e => setEscSubject(e.target.value)} placeholder="Email subject…" />
+                        </div>
+                      </div>
+                      <div className="cd-uf-field" style={{ marginTop: 8 }}>
+                        <label className="cd-uf-label">Message</label>
+                        <textarea className="cd-uf-textarea" rows={4} placeholder="Write your escalation message…"
+                          value={escBody} onChange={e => setEscBody(e.target.value)} />
+                      </div>
+                      <button onClick={() => setEscEmailMode('choose')}
+                        style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', marginTop: 6, padding: 0, textDecoration: 'underline' }}>
+                        ← Back
+                      </button>
+                    </>)}
+
+                    {/* Skipped */}
+                    {escEmailMode === 'skip' && (
+                      <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        No email will be sent.
+                        <button onClick={() => setEscEmailMode('prompt')}
+                          style={{ fontSize: 11, color: '#d97706', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+                          Add email
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {updateMsg && <div className={`cd-uf-msg cd-uf-msg-${updateMsg.type}`}>{updateMsg.text}</div>}
 

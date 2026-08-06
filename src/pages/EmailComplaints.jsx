@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { vmm } from '../api/vmm';
 import { useAuth } from '../context/AuthContext';
-import { HO_POC } from '../auth/escalationMatrix';
+import { HO_POC, AC_VENDOR_MAP } from '../auth/escalationMatrix';
+import { searchSentEmails, replyOnThread, sendSharedMailboxEmail } from '../auth/graphService';
 import './EmailComplaints.css';
 
 function fmtTime(dt) {
@@ -215,6 +216,12 @@ export default function EmailComplaints() {
   const [updDelaySub,     setUpdDelaySub]     = useState('');
   const [updStatus,       setUpdStatus]       = useState('Closed');
   const [updClosedBy,     setUpdClosedBy]     = useState('');
+  const [escEmailMode, setEscEmailMode] = useState(null); // null|'loading'|'reply'|'new'|'skip'
+  const [escPrevMsg,   setEscPrevMsg]   = useState(null);
+  const [escToEmail,   setEscToEmail]   = useState('');
+  const [escCc,        setEscCc]        = useState('');
+  const [escSubject,   setEscSubject]   = useState('');
+  const [escBody,      setEscBody]      = useState('');
   const [searchingComplaint, setSearchingComplaint] = useState(false);
   const [foundComplaint,     setFoundComplaint]     = useState(null); // complaint data from system
   const [attachmentData,  setAttachmentData]  = useState(null);
@@ -2084,6 +2091,8 @@ export default function EmailComplaints() {
                           onClick={() => {
                             const next = updateAction === key ? null : key;
                             setUpdateAction(next);
+                            setEscEmailMode(null); setEscPrevMsg(null);
+                            setEscToEmail(''); setEscCc(''); setEscSubject(''); setEscBody('');
                             if (next === 'update' || next === 'escalate') {
                               const fc         = foundComplaint?.complaint;
                               const sortedLogs   = [...(foundComplaint?.logs || [])].sort((a, b) => new Date(b.created) - new Date(a.created));
@@ -2095,6 +2104,26 @@ export default function EmailComplaints() {
                               const storedSub  = latestLog?.subreasonfordelay || '';
                               setUpdDelayMain(storedMain);
                               setUpdDelaySub(matchDelaySub(storedSub, storedMain));
+                              if (next === 'escalate') {
+                                setEscEmailMode('loading');
+                                const _compno = fc?.complaintno;
+                                const _nextLvl = parseInt(fc?.escalationlevel || 0) + 1;
+                                searchSentEmails(_compno).then(results => {
+                                  const prev = results[0] || null;
+                                  if (prev) {
+                                    setEscPrevMsg(prev);
+                                    setEscToEmail(prev.to.join(', '));
+                                    setEscCc(prev.cc.join(', '));
+                                    setEscEmailMode('reply');
+                                  } else {
+                                    setEscSubject(`Escalation L${_nextLvl} | ${_compno} | ${fc?.storename} (${fc?.storecode}) | ${fc?.productname}`);
+                                    setEscEmailMode('new');
+                                  }
+                                }).catch(() => {
+                                  setEscSubject(`Escalation L${_nextLvl} | ${_compno} | ${fc?.storename} (${fc?.storecode}) | ${fc?.productname}`);
+                                  setEscEmailMode('new');
+                                });
+                              }
                             }
                           }}
                           style={{ ...style, color: '#fff', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer', fontWeight: 600, fontSize: 13, opacity: updateAction && updateAction !== key ? 0.45 : 1 }}>
@@ -2232,6 +2261,87 @@ export default function EmailComplaints() {
                     </div>
                   )}
 
+                  {/* Escalation Email */}
+                  {updateAction === 'escalate' && (
+                    <div style={{ marginTop: 14, borderTop: '1.5px dashed #fde68a', paddingTop: 14 }}>
+                      <div style={{ fontWeight: 700, color: '#d97706', fontSize: 13, marginBottom: 10 }}>📧 Escalation Email</div>
+
+                      {escEmailMode === 'loading' && (
+                        <div style={{ fontSize: 12, color: '#94a3b8' }}>Checking for previous emails…</div>
+                      )}
+
+                      {(escEmailMode === 'reply' || escEmailMode === 'new') && (<>
+                        {escEmailMode === 'reply' && escPrevMsg && (
+                          <div style={{ fontSize: 12, background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 6, padding: '8px 12px', marginBottom: 10 }}>
+                            ↩ Replying to: <strong>{escPrevMsg.subject}</strong>
+                            {escPrevMsg.sentAt && <span style={{ color: '#92400e' }}> · {new Date(escPrevMsg.sentAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>}
+                          </div>
+                        )}
+                        <div className="ec-update-row">
+                          <label>To</label>
+                          <input type="text" value={escToEmail} onChange={e => setEscToEmail(e.target.value)}
+                            placeholder="recipient@email.com"
+                            style={{ padding: '7px 10px', border: '1.5px solid #d1d5db', borderRadius: 7, fontSize: 12, width: '100%', outline: 'none' }} />
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 8 }}>
+                          <div>
+                            <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', marginBottom: 4 }}>CC</label>
+                            <input type="text" value={escCc} onChange={e => setEscCc(e.target.value)}
+                              placeholder="cc1, cc2"
+                              style={{ padding: '7px 10px', border: '1.5px solid #d1d5db', borderRadius: 7, fontSize: 12, width: '100%', outline: 'none' }} />
+                          </div>
+                          {escEmailMode === 'new' && (
+                            <div>
+                              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', marginBottom: 4 }}>Subject</label>
+                              <input type="text" value={escSubject} onChange={e => setEscSubject(e.target.value)}
+                                style={{ padding: '7px 10px', border: '1.5px solid #d1d5db', borderRadius: 7, fontSize: 12, width: '100%', outline: 'none' }} />
+                            </div>
+                          )}
+                        </div>
+                        <div className="ec-update-row" style={{ marginTop: 8 }}>
+                          <label>Message</label>
+                          <textarea rows={4} value={escBody} onChange={e => setEscBody(e.target.value)}
+                            placeholder={escEmailMode === 'reply' ? 'Write your follow-up message…' : 'Write your escalation message…'}
+                            style={{ padding: '7px 10px', border: '1.5px solid #d1d5db', borderRadius: 7, fontSize: 12, width: '100%', outline: 'none', resize: 'vertical' }} />
+                        </div>
+                        <button onClick={() => setEscEmailMode('skip')}
+                          style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', marginTop: 4, padding: 0, textDecoration: 'underline' }}>
+                          Don't send email
+                        </button>
+                      </>)}
+
+                      {escEmailMode === 'skip' && (
+                        <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
+                          No email will be sent.
+                          <button onClick={() => {
+                            const fc = foundComplaint?.complaint;
+                            setEscEmailMode('loading'); setEscPrevMsg(null);
+                            setEscToEmail(''); setEscCc(''); setEscSubject(''); setEscBody('');
+                            searchSentEmails(fc?.complaintno).then(results => {
+                              const prev = results[0] || null;
+                              if (prev) {
+                                setEscPrevMsg(prev);
+                                setEscToEmail(prev.to.join(', '));
+                                setEscCc(prev.cc.join(', '));
+                                setEscEmailMode('reply');
+                              } else {
+                                const nl = parseInt(fc?.escalationlevel || 0) + 1;
+                                setEscSubject(`Escalation L${nl} | ${fc?.complaintno} | ${fc?.storename} (${fc?.storecode}) | ${fc?.productname}`);
+                                setEscEmailMode('new');
+                              }
+                            }).catch(() => {
+                              const nl = parseInt(fc?.escalationlevel || 0) + 1;
+                              setEscSubject(`Escalation L${nl} | ${fc?.complaintno} | ${fc?.storename} (${fc?.storecode}) | ${fc?.productname}`);
+                              setEscEmailMode('new');
+                            });
+                          }} style={{ fontSize: 11, color: '#d97706', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+                            Add email
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Confirm-before-save modal */}
                   {confirmECPending && (
                     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
@@ -2309,6 +2419,25 @@ export default function EmailComplaints() {
                                   });
                                 }
                                 if (res?.success !== false && !res?.error) {
+                                  // Send escalation email from frontend if user composed one
+                                  if (updateAction === 'escalate' && (escEmailMode === 'reply' || escEmailMode === 'new') && escBody.trim() && escToEmail.trim()) {
+                                    const _edcDisplay = updateForm.newEdc
+                                      ? new Date(updateForm.newEdc).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                                      : '—';
+                                    const emailHtml = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;max-width:600px">`
+                                      + `<p style="margin:0 0 16px;white-space:pre-line">${escBody.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`
+                                      + `<hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0">`
+                                      + `<p style="font-size:12px;color:#64748b;margin:0">Complaint: <strong>${c?.complaintno}</strong> &nbsp;|&nbsp; ${c?.storename} (${c?.storecode}) &nbsp;|&nbsp; ${c?.productname} &nbsp;|&nbsp; EDC: ${_edcDisplay}</p>`
+                                      + `<p style="font-size:13px;margin:16px 0 0">Regards,<br/><strong>VMM Helpdesk</strong><br/>Open Mind Services Limited</p>`
+                                      + `</div>`;
+                                    try {
+                                      if (escEmailMode === 'reply' && escPrevMsg?.id) {
+                                        await replyOnThread({ messageId: escPrevMsg.id, htmlBody: emailHtml, toEmail: escToEmail, ccEmails: escCc });
+                                      } else {
+                                        await sendSharedMailboxEmail({ toEmail: escToEmail, ccEmails: escCc, subject: escSubject, htmlBody: emailHtml });
+                                      }
+                                    } catch { /* email fail does not block DB log */ }
+                                  }
                                   const tagType  = updateAction === 'escalate' ? 'escalated' : updateAction === 'close' ? 'closed' : 'updated';
                                   const tagLabel = `${updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Closed' : 'Updated'} • ${updateForm.complaintId.trim()}`;
                                   const graphCat = updateAction === 'escalate' ? 'Escalated' : updateAction === 'close' ? 'Case Closed' : 'Case Updated';
@@ -2321,6 +2450,8 @@ export default function EmailComplaints() {
                                   setUpdateAction(null);
                                   setUpdSrc('Email Reply'); setUpdTxnId(''); setUpdMobile(''); setUpdEmailRef('');
                                   setUpdVendorTicket(''); setUpdDelayMain(''); setUpdDelaySub(''); setUpdStatus('Closed'); setUpdClosedBy('');
+                                  setEscEmailMode(null); setEscPrevMsg(null);
+                                  setEscToEmail(''); setEscCc(''); setEscSubject(''); setEscBody('');
                                 } else {
                                   showToast(res?.message || 'Update failed', 'err');
                                 }

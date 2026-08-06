@@ -13,8 +13,24 @@ const DELTA_KEY = 'vmm_inbox_delta_link';
 async function getAccessToken() {
   const accounts = msalInstance.getAllAccounts();
   if (!accounts.length) throw new Error('Not signed in');
-  const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0] });
-  return res.accessToken;
+  try {
+    const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0] });
+    return res.accessToken;
+  } catch (e) {
+    // Silent acquisition fails when Mail scopes not yet consented — fall back to popup
+    console.error('[MSAL] acquireTokenSilent failed:', e.name, e.errorCode, e.message);
+    const needsPopup = e.name === 'InteractionRequiredAuthError'
+      || e.errorCode === 'interaction_required'
+      || e.errorCode === 'consent_required'
+      || e.errorCode === 'login_required'
+      || e.errorCode === 'timed_out'
+      || e.name === 'BrowserAuthError';
+    if (needsPopup) {
+      const res = await msalInstance.acquireTokenPopup({ ...loginRequest, account: accounts[0] });
+      return res.accessToken;
+    }
+    throw e;
+  }
 }
 
 function authHeader(token) {
@@ -178,6 +194,36 @@ export async function searchEmails(q) {
   const data = await res.json();
   const emails = (data.value || []).map(formatMessage);
   return { emails };
+}
+
+// ── Search sent items by keyword (for escalation reply threading) ─────────────
+export async function searchSentEmails(q) {
+  if (!q) return [];
+  const token   = await getAccessToken();
+  const mailbox = encodeURIComponent(SHARED_MAILBOX);
+  const SELECT  = 'id,subject,toRecipients,ccRecipients,sentDateTime,conversationId';
+
+  const url = new URL(`${GRAPH}/users/${mailbox}/mailFolders/sentItems/messages`);
+  url.searchParams.set('$search', `"${q}"`);
+  url.searchParams.set('$select', SELECT);
+  url.searchParams.set('$top', '5');
+
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: 'eventual' },
+  });
+  if (!res.ok) throw new Error(`Sent search failed: ${res.status}`);
+  const data = await res.json();
+
+  return (data.value || [])
+    .map(m => ({
+      id:             m.id,
+      subject:        m.subject || '',
+      to:             (m.toRecipients || []).map(r => r.emailAddress?.address || '').filter(Boolean),
+      cc:             (m.ccRecipients || []).map(r => r.emailAddress?.address || '').filter(Boolean),
+      sentAt:         m.sentDateTime || '',
+      conversationId: m.conversationId || '',
+    }))
+    .sort((a, b) => new Date(b.sentAt) - new Date(a.sentAt));
 }
 
 // ── Thread fetch ──────────────────────────────────────────────────────────────

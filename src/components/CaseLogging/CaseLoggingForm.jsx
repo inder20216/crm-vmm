@@ -133,7 +133,7 @@ const emptyForm = {
   fmName: '', managerName: '', managerMobile: '',
   asmName: '', asmMobile: '',
   employeeCode: '', employeeName: '', contactNumber: '', designation: '',
-  productName: '', vendorName: '', productType: '',
+  productName: '', productShortName: '', vendorName: '', productType: '',
   natureOfComplaint: '', complaintType: '', tatDays: '',
   productLocation: '', remarks: '', attachments: [],
   source: '', emailSubject: '', callTxnId: '',
@@ -403,6 +403,7 @@ export default function CaseLoggingForm() {
       contactNumber:     form.contactNumber,
       designation:       form.designation,
       productName:       form.productName,
+      productShortName:  form.productShortName,
       vendorName:        form.vendorName,
       productType:       form.productType,
       natureOfComplaint: form.natureOfComplaint,
@@ -965,7 +966,8 @@ export default function CaseLoggingForm() {
                   setAmcStatus('idle');
                   setForm(f => ({
                     ...f,
-                    productName: p.name,
+                    productName:      p.name,
+                    productShortName: p.shortName || '',
                     // AMC-lookup products (AC/Lift/etc) start blank — only the store-specific
                     // webhook result should fill them, not the generic product-sheet vendor
                     vendorName:  fixedVendor || ((hoDirect || amcLookup) ? '' : (p.vendor || '')),
