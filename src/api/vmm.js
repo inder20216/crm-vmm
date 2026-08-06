@@ -96,7 +96,7 @@ export const vmm = {
   escalateComplaint:(data)      => post(BASE, 'vmm-escalate-complaint', data),
   searchSentEmail:(complaintno, date) => get(BASE, 'vmm-search-sent-email', { complaintno, ...(date ? { date } : {}) }),
   sendFollowupEmail:(data) => post(BASE, 'vmm-send-followup-email', data),
-  closeComplaint:   (data)      => post(BASE, 'vmm-close-complaint-v2', data),
+  closeComplaint:   (data)      => post(BASE, 'vmm-close-complaint',    data),
   notConnected:     (data)      => post(BASE, 'vmm-not-connected',      data),
   updateEdc:        (data)      => post(BASE, 'vmm-update-edc',         data),
 };

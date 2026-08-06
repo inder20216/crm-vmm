@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { vmm } from '../api/vmm';
 import { useAuth } from '../context/AuthContext';
 import { HO_POC, AC_VENDOR_MAP } from '../auth/escalationMatrix';
-import { searchSentEmails, replyOnThread, sendSharedMailboxEmail } from '../auth/graphService';
+import { searchSentEmails, replyOnThread } from '../auth/graphService';
 import './EmailComplaints.css';
 
 function fmtTime(dt) {
@@ -2434,7 +2434,7 @@ export default function EmailComplaints() {
                                       if (escEmailMode === 'reply' && escPrevMsg?.id) {
                                         await replyOnThread({ messageId: escPrevMsg.id, htmlBody: emailHtml, toEmail: escToEmail, ccEmails: escCc });
                                       } else {
-                                        await sendSharedMailboxEmail({ toEmail: escToEmail, ccEmails: escCc, subject: escSubject, htmlBody: emailHtml });
+                                        await vmm.sendFollowupEmail({ toEmail: escToEmail, ccEmails: escCc, subject: escSubject, htmlBody: emailHtml });
                                       }
                                     } catch { /* email fail does not block DB log */ }
                                   }

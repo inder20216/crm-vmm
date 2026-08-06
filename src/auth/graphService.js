@@ -10,22 +10,25 @@ const TEST_EMAIL = 'inder@openmind.in';
 // Delta link persisted in sessionStorage so refresh survives page reloads within the session
 const DELTA_KEY = 'vmm_inbox_delta_link';
 
+const SILENT_REDIRECT_URI = window.location.origin + (import.meta.env.BASE_URL || '/') + 'blank.html';
+
 async function getAccessToken() {
   const accounts = msalInstance.getAllAccounts();
   if (!accounts.length) throw new Error('Not signed in');
   try {
-    const res = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0] });
+    const res = await msalInstance.acquireTokenSilent({
+      ...loginRequest,
+      account: accounts[0],
+      redirectUri: SILENT_REDIRECT_URI,
+    });
     return res.accessToken;
   } catch (e) {
-    // Silent acquisition fails when Mail scopes not yet consented — fall back to popup
-    console.error('[MSAL] acquireTokenSilent failed:', e.name, e.errorCode, e.message);
-    const needsPopup = e.name === 'InteractionRequiredAuthError'
+    // Only pop up for genuine consent/login prompts — NOT for timeouts (popup would be blocked)
+    const needsConsent = e.name === 'InteractionRequiredAuthError'
       || e.errorCode === 'interaction_required'
       || e.errorCode === 'consent_required'
-      || e.errorCode === 'login_required'
-      || e.errorCode === 'timed_out'
-      || e.name === 'BrowserAuthError';
-    if (needsPopup) {
+      || e.errorCode === 'login_required';
+    if (needsConsent) {
       const res = await msalInstance.acquireTokenPopup({ ...loginRequest, account: accounts[0] });
       return res.accessToken;
     }
