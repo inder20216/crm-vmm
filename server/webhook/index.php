@@ -23,6 +23,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(200); exit; }
 require_once __DIR__ . '/../common/constraints/dbconfig.php';
 $db = mysqli_connect(constant('dbhost'), constant('dbusername'), constant('dbpassword'), constant('dbname'));
 if (!$db) { http_response_code(500); echo json_encode(['success'=>false,'error'=>'DB connection failed']); exit; }
+mysqli_select_db($db, 'demo_vmm'); // TEST MODE — switch to production DB name when going live
 mysqli_set_charset($db, 'utf8mb4');
 $px = 'vmm_';
 
