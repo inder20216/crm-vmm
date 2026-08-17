@@ -1,6 +1,9 @@
 import * as graph from '../auth/graphService';
 
-// Self-hosted n8n — CRM workflows
+// PHP REST API on vmm.openmindservices.in — all core DB operations
+const PHP = import.meta.env.VITE_PHP_BASE || 'https://vmm.openmindservices.in/webhook';
+
+// Self-hosted n8n — email workflows only
 const BASE = import.meta.env.VITE_API_BASE || '/webhook';
 
 // Cloud n8n — non-email workflows only
@@ -25,31 +28,38 @@ async function post(base, path, body) {
 }
 
 export const vmm = {
-  // ── Self-hosted n8n ──────────────────────────────────
-  lookupStore:       (code)   => get(BASE, 'vmm-sp-store',          { code }),
-  lookupEmployee:         (code)   => get(BASE, 'vmm-sp-employee', { code }),
-  lookupEmployeeByMobile: (mobile) => get(BASE, 'vmm-sp-employee', { mobile }),
-  getProducts:       ()       => get(BASE, 'vmm-sp-products'),
-  getNatures:        ()       => get(BASE, 'vmm-sp-natures'),
-  getDelayReasons:   ()       => get(BASE, 'vmm-sp-delay-reasons'),
-  getVendors:        ()       => get(BASE, 'vmm-sp-vendors'),
-  getAmcVendor:        (storeCode, product) => get(BASE, 'vmm-sp-amc-vendor', { storeCode, product }),
-  getEscalationMatrix: (params = {})        => get(BASE, 'vmm-sp-escalation-matrix', params),
-  logComplaint:        (data)   => post(BASE, 'vmm-log-complaint',           data),
-  getComplaint:        (complaintno) => get(BASE, 'vmm-get-complaint',       { complaintno }),
+  // ── PHP REST API — core DB operations ───────────────
+  lookupStore:       (code)   => get(PHP, 'vmm-sp-store',          { code }),
+  lookupEmployee:         (code)   => get(PHP, 'vmm-sp-employee', { code }),
+  lookupEmployeeByMobile: (mobile) => get(PHP, 'vmm-sp-employee', { mobile }),
+  getProducts:       ()       => get(PHP, 'vmm-sp-products'),
+  getNatures:        ()       => get(PHP, 'vmm-sp-natures'),
+  getDelayReasons:   ()       => get(PHP, 'vmm-sp-delay-reasons'),
+  getVendors:        ()       => get(PHP, 'vmm-sp-vendors'),
+  getAmcVendor:        (storeCode, product) => get(PHP, 'vmm-sp-amc-vendor', { storeCode, product }),
+  getEscalationMatrix: (params = {})        => get(PHP, 'vmm-sp-escalation-matrix', params),
+  logComplaint:        (data)   => post(PHP, 'vmm-log-complaint',           data),
+  getComplaint:        (complaintno) => get(PHP, 'vmm-get-complaint',       { complaintno }),
   sendEscalationEmail:          (data) => graph.sendEscalationEmailDirect(data),
   buildEscalationEmailContent: (data) => graph.buildEscalationEmailContent(data),
   resolveEscalationRecipients: (data) => graph.resolveEscalationRecipients(data),
   sendClosureEmail:    (data)   => graph.sendClosureEmailDirect(data),
   polishRemarks:       (text)   => post(BASE, 'vmm-ai-polish',           { text }),
-  getRecentComplaints: (code)   => get(BASE,  'vmm-recent-complaints',   { storeCode: code }),
-  emailClaim:          (data)   => post(BASE, 'vmm-email-claim',         data),
-  searchComplaints:    (params) => get(BASE, 'vmm-search-complaints',    params),
-  dashboardStats:    (params = {}) => get(BASE, 'vmm-dashboard-stats', params),
-  getComplaintDetail:(ref)    => get(BASE, 'vmm-complaint-detail',   { no: ref }),
-  getReports:        ()       => get(BASE, 'vmm-reports'),
+  getRecentComplaints: (code)   => get(PHP,  'vmm-recent-complaints',   { storeCode: code }),
+  searchComplaints:    (params) => get(PHP, 'vmm-search-complaints',    params),
+  dashboardStats:    (params = {}) => get(PHP, 'vmm-dashboard-stats', params),
+  getComplaintDetail:(ref)    => get(PHP, 'vmm-complaint-detail',   { no: ref }),
+  getUserRole:  (email)  => get(PHP, 'vmm-user-role',   { email }),
+  lookupCaller: (mobile) => get(PHP, 'vmm-sparktg-inbound', { mobile }),
+  getFollowUpComplaints: ()     => get(PHP,  'vmm-followup-complaints'),
+  updateComplaint:  (data)      => post(PHP, 'vmm-update-complaint',   data),
+  escalateComplaint:(data)      => post(PHP, 'vmm-escalate-complaint', data),
+  closeComplaint:   (data)      => post(PHP, 'vmm-close-complaint',    data),
+  notConnected:     (data)      => post(PHP, 'vmm-not-connected',      data),
+  updateEdc:        (data)      => post(PHP, 'vmm-update-edc',         data),
 
   // ── Email — inbox & thread via n8n; all sending via Graph API ───────────────
+  emailClaim:          (data)   => post(BASE, 'vmm-email-claim',         data),
   fetchInbox:         ()        => get(BASE, 'vmm-email-inbox').then(r => ({ emails: r.emails || [], isIncremental: false })),
   resetInboxDelta:    ()        => Promise.resolve(),
   searchEmails:       (q)       => graph.searchEmails(q),
@@ -59,13 +69,14 @@ export const vmm = {
   categorizeEmail:    (messageId, categories) => graph.categorizeEmail(messageId, categories),
   markEmailRead:      (messageId) => graph.markAsRead(messageId),
   sendNewEmail:       (data)    => graph.sendSharedMailboxEmail(data),
+  logEmailActivity:  (data)   => post(BASE,  'vmm-email-log-activity', data),
+  searchSentEmail:(complaintno, date) => get(BASE, 'vmm-search-sent-email', { complaintno, ...(date ? { date } : {}) }),
+  sendFollowupEmail:(data) => post(BASE, 'vmm-send-followup-email', data),
 
-  // Still via n8n (no Graph API equivalent needed)
+  // ── Cloud n8n — attachments, templates, AI ──────────
   fetchAttachments:   (msgId)   => get(CLOUD,  'vmm-fetch-attachments', { messageId: msgId }),
   getEmailTemplates:  ()        => get(CLOUD,  'vmm-email-templates'),
   parseEmail:         (data)    => post(BASE,  'vmm-parse-email',       data),
-  // Self-hosted — log email activity on existing complaint
-  logEmailActivity:  (data)   => post(BASE,  'vmm-email-log-activity', data),
 
   // ── WIP Emails ──────────────────────────────────────
   saveWip:        (data) => post(BASE, 'vmm-wip-save',    data),
@@ -80,23 +91,12 @@ export const vmm = {
   fetchNtrMasterXlsx:  ()      => post(BASE, 'vmm-ntr-fetch-xlsx', {}),
   sendNtrEmail:        (data)  => post(BASE, 'vmm-ntr-email', data),
 
-  // ── User Management (MySQL-backed roles) ─────────────
-  getUserRole:  (email)  => get(BASE, 'vmm-user-role',   { email }),
+  // ── User Management ──────────────────────────────────
   listUsers:    ()       => get(BASE, 'vmm-users-list'),
   createUser:   (data)   => post(BASE, 'vmm-user-create', data),
   updateUser:   (data)   => post(BASE, 'vmm-user-update', data),
   deleteUser:   (data)   => post(BASE, 'vmm-user-delete', data),
 
-  // ── SparkTG CTI — only MySQL lookup goes through n8n; calls are browser-direct ──
-  lookupCaller: (mobile) => get(BASE, 'vmm-sparktg-inbound', { mobile }),
-
-  // ── Follow-up ────────────────────────────────────────
-  getFollowUpComplaints: ()     => get(BASE,  'vmm-followup-complaints'),
-  updateComplaint:  (data)      => post(BASE, 'vmm-update-complaint',   data),
-  escalateComplaint:(data)      => post(BASE, 'vmm-escalate-complaint', data),
-  searchSentEmail:(complaintno, date) => get(BASE, 'vmm-search-sent-email', { complaintno, ...(date ? { date } : {}) }),
-  sendFollowupEmail:(data) => post(BASE, 'vmm-send-followup-email', data),
-  closeComplaint:   (data)      => post(BASE, 'vmm-close-complaint',    data),
-  notConnected:     (data)      => post(BASE, 'vmm-not-connected',      data),
-  updateEdc:        (data)      => post(BASE, 'vmm-update-edc',         data),
+  // ── Reports ──────────────────────────────────────────
+  getReports:        ()       => get(BASE, 'vmm-reports'),
 };
