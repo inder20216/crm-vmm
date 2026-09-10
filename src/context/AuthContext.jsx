@@ -5,7 +5,7 @@ import { vmm } from '../api/vmm';
 const AuthContext = createContext(null);
 
 // Hardcoded super-admins — bypass MySQL, always have full access
-const SUPER_ADMIN_EMAILS = ['inder@openmind.in', 'amandeep@openmind.in'];
+const SUPER_ADMIN_EMAILS = ['inder@openmind.in', 'amandeep@openmind.in', 'intern@openmind.in'];
 
 export function AuthProvider({ children }) {
   const { accounts } = useMsal();
