@@ -14,6 +14,10 @@ import Reports             from './pages/Reports';
 import FollowUp            from './pages/FollowUp';
 import BulkClose           from './pages/BulkClose';
 import UserManagement      from './pages/UserManagement';
+import Settings            from './pages/Settings';
+import FlowDiagram         from './pages/FlowDiagram';
+import EmailFlow           from './pages/EmailFlow';
+import MasterDataSqlFlow   from './pages/MasterDataSqlFlow';
 import DialerPanel         from './components/DialerPanel';
 import './App.css';
 
@@ -153,6 +157,10 @@ export default function App() {
               <Route path="/bulk-close"     element={<RoleRoute adminOnly><BulkClose /></RoleRoute>} />
               <Route path="/reports"        element={<RoleRoute adminOnly><Reports /></RoleRoute>} />
               <Route path="/users"          element={<RoleRoute adminOnly><UserManagement /></RoleRoute>} />
+              <Route path="/settings"       element={<RoleRoute adminOnly><Settings /></RoleRoute>} />
+              <Route path="/flow"           element={<RoleRoute adminOnly><FlowDiagram /></RoleRoute>} />
+              <Route path="/email-flow"     element={<RoleRoute adminOnly><EmailFlow /></RoleRoute>} />
+              <Route path="/master-data-flow" element={<RoleRoute adminOnly><MasterDataSqlFlow /></RoleRoute>} />
 
               {/* Fallback — send agents straight to inbox */}
               <Route path="*" element={<Navigate to={isAdmin ? '/' : '/complaints/email'} replace />} />
