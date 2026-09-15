@@ -35,6 +35,8 @@ export const vmm = {
   getProducts:       ()       => get(PHP, 'vmm-sp-products'),
   getNatures:        ()       => get(PHP, 'vmm-sp-natures'),
   getDelayReasons:   ()       => get(PHP, 'vmm-sp-delay-reasons'),
+  getSheetMaster:    ()       => get(PHP, 'vmm-master-data'),
+  saveMasterRow:     (sheet, action, row) => post(PHP, 'vmm-master-save', { sheet, action, row }),
   getVendors:        ()       => get(PHP, 'vmm-sp-vendors'),
   getAmcVendor:        (storeCode, product) => get(PHP, 'vmm-sp-amc-vendor', { storeCode, product }),
   getEscalationMatrix: (params = {})        => get(PHP, 'vmm-sp-escalation-matrix', params),

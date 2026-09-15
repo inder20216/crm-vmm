@@ -6,14 +6,19 @@ import { AuthProvider } from './context/AuthContext';
 import './index.css';
 import App from './App.jsx';
 
-msalInstance.initialize().then(() => {
-  createRoot(document.getElementById('root')).render(
-    <StrictMode>
-      <MsalProvider instance={msalInstance}>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
-      </MsalProvider>
-    </StrictMode>,
-  );
-});
+msalInstance.initialize()
+  .then(() => msalInstance.handleRedirectPromise())
+  .catch(error => {
+    console.error('MSAL init/redirect error:', error);
+  })
+  .finally(() => {
+    createRoot(document.getElementById('root')).render(
+      <StrictMode>
+        <MsalProvider instance={msalInstance}>
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        </MsalProvider>
+      </StrictMode>,
+    );
+  });

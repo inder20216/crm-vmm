@@ -15,7 +15,11 @@ const ADMIN_NAV = [
   { label: 'Follow-up',       icon: '🔁', to: '/followup'    },
   { label: 'Bulk Close',      icon: '✅', to: '/bulk-close' },
   { label: 'Reports',         icon: '📊', to: '/reports'    },
+  { label: 'Process Flow',    icon: '🔀', to: '/flow'       },
+  { label: 'Email Flow',      icon: '📬', to: '/email-flow' },
+  { label: 'Master Data SQL', icon: '🗄️', to: '/master-data-flow' },
   { label: 'User Management', icon: '👥', to: '/users'      },
+  { label: 'Settings',        icon: '⚙️', to: '/settings'   },
 ];
 
 const USER_NAV = [

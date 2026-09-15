@@ -35,6 +35,28 @@ function q($db, $sql)     { $r = mysqli_query($db, $sql); if (!$r) throw new Exc
 function rows($db, $sql)  { $r = q($db,$sql); $a=[]; while($row=mysqli_fetch_assoc($r)) $a[]=$row; return $a; }
 function row($db, $sql)   { $r = q($db,$sql); return mysqli_fetch_assoc($r) ?: null; }
 function now_()           { return date('Y-m-d H:i:s'); }
+function tableFields($db, $table) {
+    return array_map('strval', array_column(mysqli_fetch_all(mysqli_query($db, "SHOW COLUMNS FROM `$table`"), MYSQLI_ASSOC), 'Field'));
+}
+// Insert only the columns that actually exist on the table
+function insertAvailable($db, $table, $data) {
+    $fields = tableFields($db, $table);
+    $cols = []; $vals = [];
+    foreach ($data as $k => $v) {
+        if (!in_array($k, $fields, true)) continue;
+        $cols[] = "`$k`";
+        $vals[] = ($v === null || $v === '') ? 'NULL' : "'" . e($db, $v) . "'";
+    }
+    q($db, "INSERT INTO `$table` (" . implode(',', $cols) . ") VALUES (" . implode(',', $vals) . ")");
+    return mysqli_insert_id($db);
+}
+function ensureCols($db, $table, $add) {
+    $fields = tableFields($db, $table);
+    foreach ($add as $col => $def) {
+        if (!in_array($col, $fields, true)) { q($db, "ALTER TABLE `$table` ADD COLUMN $col $def"); $fields[] = $col; }
+    }
+    return $fields;
+}
 
 // ── Route ─────────────────────────────────────────────────────────────────────
 $uri    = trim(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH), '/');
@@ -53,13 +75,108 @@ try {
         ok(['products' => $r]);
 
     case 'vmm-sp-natures':
-        $r = rows($db, "SELECT id, name FROM {$px}natureofproblem WHERE is_deleted='No' ORDER BY name");
+        $npF = ensureCols($db, "{$px}natureofproblem", ['type' => 'VARCHAR(255) NULL AFTER name', 'tat_days' => 'INT NULL AFTER type']);
+        $r = rows($db, "SELECT id, name, name as nature,
+            " . (in_array('type', $npF, true) ? 'type' : "NULL as type") . ",
+            " . (in_array('tat_days', $npF, true) ? 'tat_days' : "NULL as tat_days") . "
+            FROM {$px}natureofproblem WHERE is_deleted='No' ORDER BY name");
         ok(['natures' => $r]);
 
     case 'vmm-sp-delay-reasons':
         $r = rows($db, "SELECT id, name, tat FROM {$px}delayreasons WHERE is_deleted='No' ORDER BY name");
         $s = rows($db, "SELECT id, reasonid, name FROM {$px}subdelayreasons WHERE is_deleted='No' ORDER BY name");
-        ok(['reasons' => $r, 'subReasons' => $s]);
+        // grouped shape used by FollowUp / Settings dropdowns: { main: [ { label, tat } ] }
+        $grouped = [];
+        foreach ($r as $main) {
+            $subs = array_values(array_filter($s, fn($x) => (int)$x['reasonid'] === (int)$main['id']));
+            if (!$subs) continue;
+            $grouped[$main['name']] = array_map(fn($x) => ['label' => $x['name'], 'tat' => $main['tat'] !== null ? (int)$main['tat'] : null], $subs);
+        }
+        ok(['reasons' => $r, 'subReasons' => $s, 'grouped' => $grouped]);
+
+    case 'vmm-master-save':
+        if ($METHOD !== 'POST') fail('POST required');
+        $sheet   = e($db, $body['sheet']   ?? '');
+        $action  = e($db, $body['action']  ?? 'create');
+        $row     = $body['row']            ?? [];
+        if (!$sheet || !is_array($row)) fail('sheet and row required');
+
+        if ($sheet === 'Nature') {
+            $nature = e($db, $row['nature'] ?? '');
+            if (!$nature) fail('nature required');
+            $type  = e($db, $row['type']    ?? 'Repair');
+            $tat   = (isset($row['tatDays']) && $row['tatDays'] !== '' && $row['tatDays'] !== null) ? (int)$row['tatDays'] : null;
+            if ($action === 'delete') {
+                q($db, "UPDATE {$px}natureofproblem SET is_deleted='Yes' WHERE name='$nature'");
+            } else {
+                ensureCols($db, "{$px}natureofproblem", ['type' => 'VARCHAR(255) NULL', 'tat_days' => 'INT NULL']);
+                $exists = row($db, "SELECT id FROM {$px}natureofproblem WHERE name='$nature' AND is_deleted='No' LIMIT 1");
+                if ($exists) {
+                    q($db, "UPDATE {$px}natureofproblem SET type='$type', tat_days=" . ($tat === null ? 'NULL' : $tat) . ", is_deleted='No' WHERE name='$nature'");
+                } else {
+                    insertAvailable($db, "{$px}natureofproblem", ['name' => $nature, 'type' => $type, 'tat_days' => $tat, 'is_deleted' => 'No', 'status' => 1, 'created' => now_(), 'updated' => now_()]);
+                }
+            }
+            ok();
+
+        } elseif ($sheet === 'ComplaintType') {
+            // single-value type lives on the nature row; nothing extra to persist
+            ok();
+
+        } elseif ($sheet === 'DelayReason') {
+            $main  = e($db, $row['main']  ?? '');
+            $label = e($db, $row['label'] ?? '');
+            if (!$main) fail('main required');
+            $tat = (isset($row['tat']) && $row['tat'] !== '' && $row['tat'] !== null) ? (int)$row['tat'] : null;
+            if ($action === 'delete') {
+                $dm = row($db, "SELECT id FROM {$px}delayreasons WHERE name='$main' AND is_deleted='No' LIMIT 1");
+                if ($dm) {
+                    if ($label) {
+                        q($db, "UPDATE {$px}subdelayreasons SET is_deleted='Yes' WHERE reasonid={$dm['id']} AND name='$label'");
+                    } else {
+                        q($db, "UPDATE {$px}subdelayreasons SET is_deleted='Yes' WHERE reasonid={$dm['id']}");
+                        q($db, "UPDATE {$px}delayreasons SET is_deleted='Yes' WHERE id={$dm['id']}");
+                    }
+                }
+            } else {
+                if (!$label) fail('label required for delay reason');
+                $dm = row($db, "SELECT id FROM {$px}delayreasons WHERE name='$main' AND is_deleted='No' LIMIT 1");
+                if (!$dm) {
+                    insertAvailable($db, "{$px}delayreasons", ['name' => $main, 'tat' => $tat, 'is_deleted' => 'No', 'status' => 1, 'created' => now_(), 'updated' => now_()]);
+                    $dm = row($db, "SELECT id FROM {$px}delayreasons WHERE name='$main' AND is_deleted='No' LIMIT 1");
+                } else {
+                    q($db, "UPDATE {$px}delayreasons SET tat=" . ($tat === null ? 'NULL' : $tat) . ", is_deleted='No' WHERE id={$dm['id']}");
+                }
+                $sub = row($db, "SELECT id FROM {$px}subdelayreasons WHERE reasonid={$dm['id']} AND name='$label' AND is_deleted='No' LIMIT 1");
+                if ($sub) {
+                    q($db, "UPDATE {$px}subdelayreasons SET is_deleted='No' WHERE id={$sub['id']}");
+                } else {
+                    insertAvailable($db, "{$px}subdelayreasons", ['reasonid' => $dm['id'], 'name' => $label, 'is_deleted' => 'No', 'status' => 1, 'created' => now_(), 'updated' => now_()]);
+                }
+            }
+            ok();
+
+        } else {
+            fail("Unknown sheet: $sheet", 404);
+        }
+
+    case 'vmm-master-data':
+        // One call for all master data in the Settings-page shape
+        $npF = ensureCols($db, "{$px}natureofproblem", ['type' => 'VARCHAR(255) NULL AFTER name', 'tat_days' => 'INT NULL AFTER type']);
+        $natures = rows($db, "SELECT id, name as nature,
+            " . (in_array('type', $npF, true) ? 'type' : "NULL as type") . ",
+            " . (in_array('tat_days', $npF, true) ? 'tat_days' : "NULL as tat_days") . "
+            FROM {$px}natureofproblem WHERE is_deleted='No' ORDER BY name");
+        $complaintTypes = array_values(array_unique(array_filter(array_map(fn($n) => $n['type'], $natures))));
+        $dr = rows($db, "SELECT id, name, tat FROM {$px}delayreasons WHERE is_deleted='No' ORDER BY name");
+        $sub = rows($db, "SELECT id, reasonid, name FROM {$px}subdelayreasons WHERE is_deleted='No' ORDER BY name");
+        $grouped = [];
+        foreach ($dr as $main) {
+            $subs = array_values(array_filter($sub, fn($x) => (int)$x['reasonid'] === (int)$main['id']));
+            if (!$subs) continue;
+            $grouped[$main['name']] = array_map(fn($x) => ['label' => $x['name'], 'tat' => $main['tat'] !== null ? (int)$main['tat'] : null], $subs);
+        }
+        ok(['natures' => $natures, 'complaintTypes' => $complaintTypes, 'delayReasons' => $grouped]);
 
     case 'vmm-sp-vendors':
         $r = rows($db, "SELECT id, name FROM {$px}vendors WHERE is_deleted='No' AND status='1' ORDER BY name");
