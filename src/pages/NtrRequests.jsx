@@ -202,7 +202,7 @@ export default function NtrRequests() {
       const reqNo = saveRes.requestNo || '';
       setSavedReqNo(reqNo);
 
-      // 2. Send confirmation email via Graph API (shared mailbox)
+      // 2. Send confirmation email via n8n
       await vmm.sendNtrEmail({
         storeEmail: storeInfo.email || storeInfo.storeEmail || '',
         fmEmail:    storeInfo.fmEmail || storeInfo.fmemail  || '',
