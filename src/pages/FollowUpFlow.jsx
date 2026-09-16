@@ -87,7 +87,7 @@ const NODES = [
     id: 'submit', type: 'fu', position: { x: 300, y: 990 },
     data: {
       icon: '🚀', label: 'Submit to server', tone: 'green',
-      detail: 'PHP vmm-close-complaint (Closed / Partially Closed / Escalated) · vmm-update-edc · vmm-not-connected · n8n vmm-email-log-activity (Note)',
+      detail: 'PHP vmm-close-complaint (Closed / Partially Closed / Escalated) · vmm-update-edc · vmm-not-connected · vmm-log-activity (Note)',
       done: true,
     },
   },
