@@ -454,10 +454,15 @@ try {
 
     // ── Follow-up complaints list ──────────────────────────────────────────────
     case 'vmm-followup-complaints':
-        $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
-            s.storecode, s.storename, s.fmname,
-            l.status, l.remarks, l.created as last_updated,
-            esc.closuredate as edc, esc.ticketno, esc.escalationlevel
+        $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.producttype, c.productlocation,
+            c.natureofproblem, c.vendorname, c.tat, c.created,
+            s.storecode as store_code, s.storename as store_name, s.storecity as city, s.storeemail,
+            s.managername, s.managermobileno,
+            s.fmname as fm_name, s.fmemail as fm_email, s.fmmobileno as fm_mobile,
+            l.status as current_status, l.remarks as last_remark, l.created as last_updated,
+            esc.closuredate, esc.closuredate as edc, esc.ticketno, esc.escalationlevel,
+            DATEDIFF(CURDATE(), esc.closuredate) as days_overdue,
+            (SELECT COUNT(*) FROM {$px}complaintlogs ncl WHERE ncl.complaintid=c.id AND ncl.is_deleted='No' AND ncl.status='Not Connected') as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
             JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
