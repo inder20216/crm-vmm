@@ -4,8 +4,13 @@ import { vmm } from '../api/vmm';
 
 const AuthContext = createContext(null);
 
-// Hardcoded super-admins — bypass MySQL, always have full access
-const SUPER_ADMIN_EMAILS = ['inder@openmind.in', 'amandeep@openmind.in', 'intern@openmind.in', 'deepansh@openmind.in'];
+// Hardcoded users — bypass MySQL lookup. type controls label and feature access.
+const HARDCODED_USERS = {
+  'inder@openmind.in':    'superadmin',
+  'amandeep@openmind.in': 'superadmin',
+  'intern@openmind.in':   'admin',
+  'deepansh@openmind.in': 'admin',
+};
 
 export function AuthProvider({ children }) {
   const { accounts } = useMsal();
@@ -21,9 +26,10 @@ export function AuthProvider({ children }) {
     const msEmail = accounts[0].username;
     const msName  = accounts[0].name || msEmail;
 
-    // Super admins get in immediately without a DB lookup
-    if (SUPER_ADMIN_EMAILS.includes(msEmail.toLowerCase())) {
-      setCurrentUser({ id: 0, name: msName, email: msEmail, role: 'admin', type: 'superadmin' });
+    // Hardcoded users get in immediately without a DB lookup
+    const hardcodedType = HARDCODED_USERS[msEmail.toLowerCase()];
+    if (hardcodedType) {
+      setCurrentUser({ id: 0, name: msName, email: msEmail, role: 'admin', type: hardcodedType });
       return;
     }
 
