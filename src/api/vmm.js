@@ -71,7 +71,7 @@ export const vmm = {
   categorizeEmail:    (messageId, categories) => graph.categorizeEmail(messageId, categories),
   markEmailRead:      (messageId) => graph.markAsRead(messageId),
   sendNewEmail:       (data)    => graph.sendSharedMailboxEmail(data),
-  logEmailActivity:  (data)   => post(BASE,  'vmm-email-log-activity', data),
+  logEmailActivity:  (data)   => post(PHP,  'vmm-log-activity', data).catch(() => post(BASE, 'vmm-email-log-activity', data)),
   searchSentEmail:(complaintno, date) => get(BASE, 'vmm-search-sent-email', { complaintno, ...(date ? { date } : {}) }),
   sendFollowupEmail:(data) => post(BASE, 'vmm-send-followup-email', data),
 
@@ -91,7 +91,7 @@ export const vmm = {
   validateNtrArticles: (items) => post(BASE, 'vmm-ntr-validate', { items }),
   saveNtr:             (data)  => post(BASE, 'vmm-ntr-save',     data),
   fetchNtrMasterXlsx:  ()      => post(BASE, 'vmm-ntr-fetch-xlsx', {}),
-  sendNtrEmail:        (data)  => post(BASE, 'vmm-ntr-email', data),
+sendNtrEmail:        (data)   => graph.sendNtrEmailDirect(data).catch(() => post(BASE, 'vmm-ntr-email', data)),
 
   // ── User Management ──────────────────────────────────
   listUsers:    ()       => get(BASE, 'vmm-users-list'),

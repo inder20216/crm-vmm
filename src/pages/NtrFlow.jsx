@@ -84,7 +84,7 @@ const NODES = [
   },
   {
     id: 'email', type: 'ntr', position: { x: 600, y: 1050 },
-    data: { icon: '📧', label: 'Send confirmation email', tone: 'green', detail: 'POST vmm-ntr-email → store To, HO CC · lists invalid items', done: true },
+    data: { icon: '📧', label: 'Send confirmation email', tone: 'green', detail: 'Graph API → store To, HO CC · lists invalid items', done: true },
   },
   {
     id: 'done', type: 'output', targetPosition: 'top', position: { x: 600, y: 1200 },
@@ -120,7 +120,7 @@ export default function NtrFlow() {
     <div className="ntrf-page">
       <div className="page-heading">
         <h2>NTR Request Workflow</h2>
-        <p>Non-Trading Requests — list, upload, validate, save to DB, and email the store. n8n-backed today (PHP migration pending).</p>
+        <p>Non-Trading Requests — list, upload, validate, save to DB, and email the store. DB ops via n8n today; email via Graph API. n8n stays only where required.</p>
       </div>
       <div className="ntrf-container">
         <ReactFlow

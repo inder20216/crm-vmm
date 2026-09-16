@@ -439,6 +439,22 @@ try {
             VALUES ($complaintId,'Updated',1,'Call','Not Connected',$uid,NOW(),NOW(),'No')");
         ok();
 
+    // ── Log activity (Follow-up "Note") ───────────────────────────────────────
+    case 'vmm-log-activity':
+        if ($METHOD !== 'POST') fail('POST required');
+        $b = $body;
+        $complaintNo = e($db, $b['complaintNo'] ?? '');
+        $remarks     = e($db, $b['remarks']    ?? '');
+        $newStatus   = e($db, $b['newStatus']  ?? 'Open');
+        $uid         = (int)($b['uid'] ?? 1);
+        if (!$complaintNo) fail('complaintNo required');
+        $c = row($db, "SELECT id FROM {$px}complaints WHERE complaintno='$complaintNo' AND is_deleted='No' LIMIT 1");
+        if (!$c) fail('Complaint not found', 404);
+        q($db, "INSERT INTO {$px}complaintlogs
+            (complaintid,status,currentstatus,fupdonevia,remarks,uid,created,updated,is_deleted)
+            VALUES (" . (int)$c['id'] . ",'Updated','$newStatus','Email','$remarks',$uid,NOW(),NOW(),'No')");
+        ok(['complaintId' => (int)$c['id']]);
+
     // ── Update EDC ────────────────────────────────────────────────────────────
     case 'vmm-update-edc':
         if ($METHOD !== 'POST') fail('POST required');
