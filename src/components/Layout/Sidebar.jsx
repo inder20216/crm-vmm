@@ -12,6 +12,7 @@ const ADMIN_NAV = [
     ],
   },
   { label: 'NTR Requests',    icon: '📦', to: '/ntr'      },
+  { label: 'NTR Flow',        icon: '📦', to: '/ntr-flow'  },
   { label: 'Follow-up',       icon: '🔁', to: '/followup'    },
   { label: 'Follow-up Flow',  icon: '🔀', to: '/followup-flow' },
   { label: 'Bulk Close',      icon: '✅', to: '/bulk-close' },
