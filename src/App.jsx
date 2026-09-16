@@ -17,6 +17,7 @@ import UserManagement      from './pages/UserManagement';
 import Settings            from './pages/Settings';
 import FlowDiagram         from './pages/FlowDiagram';
 import EmailFlow           from './pages/EmailFlow';
+import FollowUpFlow        from './pages/FollowUpFlow';
 import MasterDataSqlFlow   from './pages/MasterDataSqlFlow';
 import DialerPanel         from './components/DialerPanel';
 import './App.css';
@@ -154,6 +155,7 @@ export default function App() {
               <Route path="/complaints/add" element={<RoleRoute adminOnly><div className="main"><CaseLoggingForm /></div></RoleRoute>} />
               <Route path="/ntr"            element={<RoleRoute adminOnly><NtrRequests /></RoleRoute>} />
               <Route path="/followup"       element={<RoleRoute adminOnly><FollowUp /></RoleRoute>} />
+              <Route path="/followup-flow"  element={<RoleRoute adminOnly><FollowUpFlow /></RoleRoute>} />
               <Route path="/bulk-close"     element={<RoleRoute adminOnly><BulkClose /></RoleRoute>} />
               <Route path="/reports"        element={<RoleRoute adminOnly><Reports /></RoleRoute>} />
               <Route path="/users"          element={<RoleRoute adminOnly><UserManagement /></RoleRoute>} />
