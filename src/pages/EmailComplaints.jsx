@@ -3,6 +3,7 @@ import { vmm } from '../api/vmm';
 import { useAuth } from '../context/AuthContext';
 import { HO_POC, AC_VENDOR_MAP } from '../auth/escalationMatrix';
 import { searchSentEmails, replyOnThread } from '../auth/graphService';
+import { mergeNatures } from '../data/natures';
 import './EmailComplaints.css';
 
 function fmtTime(dt) {
@@ -284,7 +285,7 @@ export default function EmailComplaints() {
   });
   useEffect(() => {
     vmm.getProducts().then(r => setProducts(r.products || [])).catch(() => {});
-    vmm.getNatures().then(r => setNatures(r.natures || [])).catch(() => {});
+    vmm.getNatures().then(r => setNatures(mergeNatures(r.natures))).catch(() => setNatures(mergeNatures([])));
     vmm.getOpenWips().then(res => setWipList(res.wips || [])).catch(() => {});
     fetchEmails('inbox');
   }, []); // eslint-disable-line

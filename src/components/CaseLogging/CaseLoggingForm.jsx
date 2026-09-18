@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { vmm } from '../../api/vmm';
 import { useAuth } from '../../context/AuthContext';
+import { mergeNatures } from '../../data/natures';
 
 const ATTACHMENT_MANDATORY = ['Breakdown', 'Repair'];
 
@@ -181,9 +182,9 @@ export default function CaseLoggingForm() {
     Promise.all([vmm.getProducts(), vmm.getNatures()])
       .then(([pRes, nRes]) => {
         setProducts(pRes.products || []);
-        setNatures(nRes.natures   || []);
+        setNatures(mergeNatures(nRes.natures));
       })
-      .catch(() => {})
+      .catch(() => setNatures(mergeNatures([])))
       .finally(() => setLoadingRef(false));
   }, []);
 

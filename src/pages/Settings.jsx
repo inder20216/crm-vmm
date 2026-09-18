@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { vmm } from '../api/vmm';
 import { FALLBACK_DELAY_REASONS } from '../data/delayReasons';
+import { mergeNatures } from '../data/natures';
 import './Settings.css';
 
 const NATURE_TYPES = ['Repair', 'Warranty', 'AMC', 'Preventive Maintenance', 'On-demand'];
@@ -45,12 +46,14 @@ export default function Settings() {
     setLoading(true);
     const [sheet, nat, dl] = await Promise.allSettled([vmm.getSheetMaster(), vmm.getNatures(), vmm.getDelayReasons()]);
     if (sheet.status === 'fulfilled' && sheet.value && (sheet.value.natures || sheet.value.delayReasons || sheet.value.complaintTypes)) {
-      setNatures(sheet.value.natures || []);
+      setNatures(mergeNatures(sheet.value.natures || []));
       setComplaintTypes(sheet.value.complaintTypes || []);
       const dr = sheet.value.delayReasons;
       setDelay(dr && dr.grouped ? dr.grouped : dr && Object.keys(dr).length ? dr : FALLBACK_DELAY_REASONS);
     } else {
-      if (nat.status === 'fulfilled') setNatures(nat.value.natures || []);
+      if (nat.status === 'fulfilled') setNatures(mergeNatures(nat.value.natures || []));
+      else if (sheet.value && Array.isArray(sheet.value.natures)) setNatures(mergeNatures(sheet.value.natures));
+      else setNatures(mergeNatures([]));
       if (dl.status === 'fulfilled' && dl.value.grouped) setDelay(dl.value.grouped);
       setComplaintTypes([]);
     }

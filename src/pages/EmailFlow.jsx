@@ -11,6 +11,7 @@ import ReactFlow, {
 } from 'reactflow';
 import { vmm } from '../api/vmm';
 import { STAGES, executePipeline, runParseAll, runParse } from '../workflow/emailPipeline';
+import { mergeNatures } from '../data/natures';
 import 'reactflow/dist/style.css';
 import './EmailFlow.css';
 
@@ -223,7 +224,7 @@ export default function EmailFlow() {
       });
       setRefData({
         products: products.status === 'fulfilled' ? (products.value.products || []) : [],
-        natures: natures.status === 'fulfilled' ? (natures.value.natures || []) : [],
+        natures: natures.status === 'fulfilled' ? mergeNatures(natures.value.natures || []) : mergeNatures([]),
         templates: templates.status === 'fulfilled' ? (templates.value.templates || []) : [],
       });
     });
