@@ -1,0 +1,92 @@
+.ntrf-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.ntrf-container {
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.ntrf-node {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 230px;
+  max-width: 320px;
+  background: #fff;
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  cursor: grab;
+}
+
+.ntrf-node.selected {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
+}
+
+.ntrf-handle.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  background: #6b7280;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.ntrf-handle.react-flow__handle-top { top: -5px; }
+.ntrf-handle.react-flow__handle-bottom { bottom: -5px; }
+
+.ntrf-node-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.ntrf-node-body {
+  min-width: 0;
+}
+
+.ntrf-node-title {
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.25;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ntrf-node-detail {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.ntrf-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #fff;
+}
+
+.ntrf-badge.done    { background: #22c55e; }
+.ntrf-badge.manual  { background: #f59e0b; }
+.ntrf-badge.blocked { background: #ef4444; }
+
+.ntrf-node.is-done { background: #f0fdf4; border-color: #86efac; }
+
+.ntrf-node.tone-violet { border-color: #a78bfa; }
+.ntrf-node.tone-blue   { border-color: #60a5fa; }
+.ntrf-node.tone-amber  { border-color: #fbbf24; }
+.ntrf-node.tone-green  { border-color: #34d399; }
+.ntrf-node.tone-gray   { border-color: #d1d5db; background: #f9fafb; }
