@@ -553,6 +553,87 @@ try {
         }
         ok(['employee' => $emp, 'store' => $store]);
 
+    // ── Client data feed (Vishal Wholesale) ──────────────────────────────────
+    case 'vmm-complaints-feed':
+        // Auth — pass header: X-API-Key: VMM-VISHAL-2026
+        $apiKey = $_SERVER['HTTP_X_API_KEY'] ?? $GET['key'] ?? '';
+        if ($apiKey !== 'VMM-VISHAL-2026') {
+            http_response_code(401);
+            echo json_encode(['success'=>false,'error'=>'Unauthorized']);
+            exit;
+        }
+
+        // Date param — defaults to yesterday
+        $feedDate = e($db, $GET['date'] ?? date('Y-m-d', strtotime('-1 day')));
+
+        $rows = rows($db, "
+            SELECT
+                c.complaintno                                            AS 'Complaint No',
+                DATE_FORMAT(c.created, '%d-%m-%Y %H:%i:%s')             AS 'Complaint Date',
+                cs.empcode                                               AS 'Employee Code',
+                cs.empname                                               AS 'Employee Name',
+                cs.empmobileno                                           AS 'Employee Mobile No',
+                cs.empdesignation                                        AS 'Employee Designation',
+                cs.storecode                                             AS 'Store Code',
+                cs.storename                                             AS 'Store Name',
+                cs.storeregion                                           AS 'Store Region',
+                c.productname                                            AS 'Product Name',
+                c.producttype                                            AS 'Product Type',
+                c.vendorname                                             AS 'Product Vendor',
+                cs.fmname                                                AS 'FM Name',
+                c.natureofproblem                                        AS 'Nature of Problem',
+                first_log.remarks                                        AS 'First Remarks',
+                last_log.remarks                                         AS 'Last Remarks',
+                c.tat                                                    AS 'TAT',
+                GREATEST(0, DATEDIFF(NOW(), c.created) - c.tat)         AS 'Over Due TAT',
+                IFNULL(delay_log.reasonfordelay, '')                     AS 'Last Delay Reason',
+                IFNULL(delay_log.subreasonfordelay, '')                  AS 'Last Sub Reason for Delay',
+                IFNULL(delay_log.reasonfordelay, '')                     AS 'Reason for Delay',
+                last_log.status                                          AS 'Current Status',
+                DATE_FORMAT(last_log.created, '%d-%m-%Y %H:%i:%s')      AS 'Last Updated Datetime'
+            FROM {$px}complaints c
+            JOIN {$px}complaintstores cs ON cs.id = c.storerefid AND cs.is_deleted = 'No'
+            JOIN (
+                SELECT l1.complaintid, l1.remarks, l1.status, l1.created
+                FROM {$px}complaintlogs l1
+                WHERE l1.is_deleted = 'No'
+                  AND l1.id = (SELECT MAX(l2.id) FROM {$px}complaintlogs l2 WHERE l2.complaintid = l1.complaintid AND l2.is_deleted = 'No')
+            ) last_log ON last_log.complaintid = c.id
+            JOIN (
+                SELECT l1.complaintid, l1.remarks
+                FROM {$px}complaintlogs l1
+                WHERE l1.is_deleted = 'No'
+                  AND l1.id = (SELECT MIN(l2.id) FROM {$px}complaintlogs l2 WHERE l2.complaintid = l1.complaintid AND l2.is_deleted = 'No')
+            ) first_log ON first_log.complaintid = c.id
+            LEFT JOIN (
+                SELECT l1.complaintid, l1.reasonfordelay, l1.subreasonfordelay
+                FROM {$px}complaintlogs l1
+                WHERE l1.is_deleted = 'No' AND l1.reasonfordelay != ''
+                  AND l1.id = (SELECT MAX(l2.id) FROM {$px}complaintlogs l2 WHERE l2.complaintid = l1.complaintid AND l2.is_deleted = 'No' AND l2.reasonfordelay != '')
+            ) delay_log ON delay_log.complaintid = c.id
+            WHERE c.is_deleted = 'No'
+              AND (
+                DATE(c.created) = '$feedDate'
+                OR c.id IN (SELECT complaintid FROM {$px}complaintlogs WHERE is_deleted='No' AND DATE(created) = '$feedDate')
+              )
+            ORDER BY c.created ASC
+        ");
+
+        $fmt = $GET['format'] ?? 'json';
+        if ($fmt === 'csv') {
+            header('Content-Type: text/csv; charset=utf-8');
+            header('Content-Disposition: attachment; filename="vmm-complaints-' . $feedDate . '.csv"');
+            if (!empty($rows)) {
+                echo implode(',', array_map(fn($k) => '"' . $k . '"', array_keys($rows[0]))) . "\n";
+                foreach ($rows as $row_) {
+                    echo implode(',', array_map(fn($v) => '"' . str_replace('"', '""', $v ?? '') . '"', $row_)) . "\n";
+                }
+            }
+            exit;
+        }
+
+        ok(['date' => $feedDate, 'count' => count($rows), 'complaints' => $rows]);
+
     // ── AI polish (passthrough to n8n) ────────────────────────────────────────
     case 'vmm-ai-polish':
         // Keep this in n8n (OpenAI dependency) — return as-is
