@@ -445,13 +445,65 @@ try {
         $delayMain = e($db, $prevLog['reasonfordelay']    ?? '');
         $delaySub  = e($db, $prevLog['subreasonfordelay'] ?? '');
 
+        // Log NC action
         q($db, "INSERT INTO {$px}complaintlogs
             (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
             VALUES ($complaintId,'Not Connected',1,'Not Connected','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
 
-        // Return escalation message ID so frontend can reply on the same email thread
-        $comp = row($db, "SELECT escalation_messageid FROM {$px}complaints WHERE id=$complaintId LIMIT 1");
-        ok(['messageId' => $comp['escalation_messageid'] ?? null]);
+        // Fetch store email, FM email and complaint details for the email
+        $cdet = row($db, "SELECT c.complaintno, c.productname, s.storename, s.storecode, s.storeemail, s.fmemail
+            FROM {$px}complaints c JOIN {$px}complaintstores s ON s.id=c.storerefid
+            WHERE c.id=$complaintId LIMIT 1");
+
+        $emailSent = false;
+        if ($cdet && !empty($cdet['storeemail'])) {
+            // Get app-only token
+            $ch = curl_init("https://login.microsoftonline.com/" . GRAPH_TENANT_ID . "/oauth2/v2.0/token");
+            curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>true, CURLOPT_POST=>true,
+                CURLOPT_POSTFIELDS=>http_build_query([
+                    'grant_type'=>'client_credentials','client_id'=>GRAPH_CLIENT_ID,
+                    'client_secret'=>GRAPH_CLIENT_SECRET,'scope'=>'https://graph.microsoft.com/.default',
+                ])]);
+            $tok = json_decode(curl_exec($ch), true)['access_token'] ?? null;
+            curl_close($ch);
+
+            if ($tok) {
+                $toAddr = $cdet['storeemail'];
+                $ccAddr = $cdet['fmemail'] ?? '';
+                $subj   = "Follow-up: {$cdet['complaintno']} — {$cdet['productname']} ({$cdet['storename']})";
+                $html   = "<p>Dear Store Manager,</p>"
+                    . "<p>We attempted to follow up on complaint <strong>{$cdet['complaintno']}</strong> "
+                    . "regarding <strong>{$cdet['productname']}</strong> at <strong>{$cdet['storename']} ({$cdet['storecode']})</strong>.</p>"
+                    . "<p>We were unable to reach the store at this time. "
+                    . "Kindly ensure the issue is attended to at the earliest and share the latest status with us.</p>"
+                    . "<p>Regards,<br/>VMM Helpdesk</p>";
+                $mkR = fn($e) => [['emailAddress'=>['address'=>trim($e)]]];
+                $payload = ['message'=>[
+                    'subject'=>$subj,'body'=>['contentType'=>'HTML','content'=>$html],
+                    'toRecipients'=>$mkR($toAddr),
+                    'ccRecipients'=>$ccAddr ? $mkR($ccAddr) : [],
+                ],'saveToSentItems'=>true];
+                $mailbox = urlencode(GRAPH_MAILBOX);
+                $ch2 = curl_init("https://graph.microsoft.com/v1.0/users/$mailbox/sendMail");
+                curl_setopt_array($ch2, [CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,
+                    CURLOPT_POSTFIELDS=>json_encode($payload),
+                    CURLOPT_HTTPHEADER=>["Authorization: Bearer $tok","Content-Type: application/json"]]);
+                curl_exec($ch2);
+                $sendCode = curl_getinfo($ch2, CURLINFO_HTTP_CODE);
+                curl_close($ch2);
+                $emailSent = ($sendCode < 300);
+
+                // Log email event to case history
+                $emailNote = e($db, $emailSent
+                    ? "Not Connected email sent to $toAddr" . ($ccAddr ? " (CC: $ccAddr)" : '')
+                    : "Not Connected email failed to send");
+                q($db, "INSERT INTO {$px}complaintlogs
+                    (complaintid,status,currentstatus,fupdonevia,remarks,uid,created,updated,is_deleted)
+                    VALUES ($complaintId,'Not Connected',1,'Email Sent','$emailNote',$uid,NOW(),NOW(),'No')");
+            }
+        }
+
+        ok(['success' => true, 'emailSent' => $emailSent]);
 
     // ── Update EDC ────────────────────────────────────────────────────────────
     case 'vmm-update-edc':

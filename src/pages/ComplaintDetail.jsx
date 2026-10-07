@@ -105,6 +105,8 @@ const SOURCE_STYLES = {
   'Email Reply':   { icon: '📧', bg: '#ede9fe', color: '#6d28d9' },
   'Vendor Update': { icon: '🏭', bg: '#dcfce7', color: '#15803d' },
   'EDC Followup':  { icon: '📅', bg: '#fef9c3', color: '#854d0e' },
+  'Not Connected': { icon: '📵', bg: '#fee2e2', color: '#991b1b' },
+  'Email Sent':    { icon: '✉️',  bg: '#ede9fe', color: '#5b21b6' },
 };
 
 function Field({ label, value, mono, span2 }) {
