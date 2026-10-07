@@ -446,7 +446,7 @@ try {
 
         q($db, "INSERT INTO {$px}complaintlogs
             (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
-            VALUES ($complaintId,'Updated',1,'Call','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
+            VALUES ($complaintId,'Updated',1,'Not Connected','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
 
         // Return escalation message ID so frontend can reply on the same email thread
         $comp = row($db, "SELECT escalation_messageid FROM {$px}complaints WHERE id=$complaintId LIMIT 1");
@@ -482,7 +482,9 @@ try {
         $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
             s.storecode, s.storename, s.storeemail, s.fmname, s.fmemail, s.empname, s.empmobileno,
             l.status, l.remarks, l.created as last_updated,
-            esc.closuredate as edc, esc.ticketno, esc.escalationlevel
+            esc.closuredate as edc, esc.ticketno, esc.escalationlevel,
+            DATEDIFF(CURDATE(), esc.closuredate) as days_overdue,
+            (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
             JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id

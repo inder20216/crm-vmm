@@ -129,6 +129,8 @@ export default function FollowUp() {
           empname:          bufStr(c.empname),
           empmobileno:      bufStr(c.empmobileno),
           closuredate:      bufStr(c.edc       || c.closuredate),
+          days_overdue:     parseInt(c.days_overdue) || 0,
+          nc_count:         parseInt(c.nc_count)     || 0,
           managername:      bufStr(c.managername),
           managermobileno:  bufStr(c.managermobileno),
           last_remark:      bufStr(c.last_remark),
