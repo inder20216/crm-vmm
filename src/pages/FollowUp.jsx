@@ -266,7 +266,7 @@ export default function FollowUp() {
         res = await vmm.closeComplaint({
           complaintId: selected.id,
           closureStatus: action,
-          followupMethod: method,
+          followupMethod: action === 'Updated' ? 'EDC Followup' : method,
           txnId: method === 'Call' ? txnId : '',
           mobileCalled: method === 'Call' ? mobileCalled : '',
           emailSubject: method === 'Email Reply' ? txnId : '',
