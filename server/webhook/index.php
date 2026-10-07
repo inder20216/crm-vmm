@@ -693,9 +693,9 @@ try {
 
     // ── Client data feed (Vishal Wholesale) ──────────────────────────────────
     case 'vmm-complaints-feed':
-        // Auth — pass header: X-API-Key: VMM-VISHAL-2026
+        // Auth — pass header: X-API-Key: <value from dbconfig.php VISHAL_API_KEY>
         $apiKey = $_SERVER['HTTP_X_API_KEY'] ?? $GET['key'] ?? '';
-        if ($apiKey !== 'VMM-VISHAL-2026') {
+        if ($apiKey !== VISHAL_API_KEY) {
             http_response_code(401);
             echo json_encode(['success'=>false,'error'=>'Unauthorized']);
             exit;
