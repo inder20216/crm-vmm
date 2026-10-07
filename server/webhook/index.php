@@ -447,13 +447,25 @@ try {
         if ($METHOD !== 'POST') fail('POST required');
         $b = $body;
         $complaintId = (int)($b['complaintId'] ?? 0);
-        $newEdc = e($db, $b['newClosureDate'] ?? '');
+        $newEdc      = e($db, $b['newClosureDate']  ?? '');
+        $delayMain   = e($db, $b['delayMain']       ?? '');
+        $delaySub    = e($db, $b['delaySub']        ?? '');
+        $remarks     = e($db, $b['remarks']         ?? '');
+        $uid         = (int)($b['uid']              ?? 1);
         if (!$complaintId || !$newEdc) fail('complaintId and newClosureDate required');
-        $esc = row($db, "SELECT id FROM {$px}vendorescalations WHERE complaintid=$complaintId ORDER BY id DESC LIMIT 1");
+
+        // Update EDC on latest escalation record
+        $esc = row($db, "SELECT id FROM {$px}vendorescalations WHERE complaintid=$complaintId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
         if ($esc) {
             q($db, "UPDATE {$px}vendorescalations SET closuredate='$newEdc' WHERE id=" . (int)$esc['id']);
         }
-        ok();
+
+        // Log the EDC update to complaint history
+        q($db, "INSERT INTO {$px}complaintlogs
+            (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
+            VALUES ($complaintId,'Updated',1,'Call','$delayMain','$delaySub','EDC updated to $newEdc" . ($remarks ? " — $remarks" : "") . "',$uid,NOW(),NOW(),'No')");
+
+        ok(['complaintId' => $complaintId, 'newEdc' => $newEdc]);
 
     // ── Follow-up complaints list ──────────────────────────────────────────────
     case 'vmm-followup-complaints':
