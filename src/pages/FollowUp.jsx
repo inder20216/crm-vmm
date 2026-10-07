@@ -301,7 +301,7 @@ export default function FollowUp() {
               ccEmails: ccList,
               subject:  `Follow-up: ${selected.complaintno} — ${selected.productname} (${selected.storename})`,
               htmlBody: ncBody,
-            }).catch(() => {});
+            }).catch(err => showToast('Email failed: ' + (err?.message || 'unknown error'), 'error'));
           }
         }
 

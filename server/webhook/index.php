@@ -89,7 +89,8 @@ try {
 
     case 'vmm-sp-delay-reasons':
         $r = rows($db, "SELECT id, name, tat FROM {$px}delayreasons WHERE is_deleted='No' ORDER BY name");
-        $s = rows($db, "SELECT id, reasonid, name FROM {$px}subdelayreasons WHERE is_deleted='No' ORDER BY name");
+        $subTbl = row($db, "SHOW TABLES LIKE '{$px}subdelayreasons'");
+        $s = $subTbl ? rows($db, "SELECT id, reasonid, name FROM {$px}subdelayreasons WHERE is_deleted='No' ORDER BY name") : [];
         ok(['reasons' => $r, 'subReasons' => $s]);
 
     case 'vmm-master-data':
