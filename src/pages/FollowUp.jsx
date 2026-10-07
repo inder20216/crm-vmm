@@ -277,6 +277,19 @@ export default function FollowUp() {
 
       if (res?.success !== false && !res?.error) {
         showToast(`${selected.complaintno} updated — ${action}`, 'ok');
+
+        // Not Connected — reply on the original escalation email thread
+        if (action === 'Not Connected' && res?.messageId) {
+          const ncBody = `<p>Dear Team,</p>`
+            + `<p>We attempted to follow up on complaint <strong>${selected.complaintno}</strong> `
+            + `regarding <strong>${selected.productname}</strong> at <strong>${selected.storename} (${selected.storecode})</strong>.</p>`
+            + `<p>We were unable to reach the store at this time. `
+            + `Kindly ensure the issue is attended to at the earliest and update us on the status.</p>`
+            + `<p>EDC: <strong>${selected.edc || '—'}</strong></p>`
+            + `<p>Regards,<br/>VMM Helpdesk</p>`;
+          vmm.sendEmailReply({ messageId: res.messageId, htmlBody: ncBody }).catch(() => {});
+        }
+
         if (action === 'Closed' || action === 'Resolved') {
           vmm.sendClosureEmail({
             storeCode:     selected.store_code   || '',

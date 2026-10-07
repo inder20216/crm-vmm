@@ -435,12 +435,22 @@ try {
         if ($METHOD !== 'POST') fail('POST required');
         $b = $body;
         $complaintId = (int)($b['complaintId'] ?? 0);
-        $uid = (int)($b['uid'] ?? 1);
+        $uid         = (int)($b['uid']         ?? 1);
+        $remarks     = e($db, $b['remarks']    ?? 'Not Connected');
         if (!$complaintId) fail('complaintId required');
+
+        // Carry forward delay reason from last log entry (don't reset it)
+        $prevLog   = row($db, "SELECT reasonfordelay, subreasonfordelay FROM {$px}complaintlogs WHERE complaintid=$complaintId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
+        $delayMain = e($db, $prevLog['reasonfordelay']    ?? '');
+        $delaySub  = e($db, $prevLog['subreasonfordelay'] ?? '');
+
         q($db, "INSERT INTO {$px}complaintlogs
-            (complaintid,status,currentstatus,fupdonevia,remarks,uid,created,updated,is_deleted)
-            VALUES ($complaintId,'Updated',1,'Call','Not Connected',$uid,NOW(),NOW(),'No')");
-        ok();
+            (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
+            VALUES ($complaintId,'Updated',1,'Call','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
+
+        // Return escalation message ID so frontend can reply on the same email thread
+        $comp = row($db, "SELECT escalation_messageid FROM {$px}complaints WHERE id=$complaintId LIMIT 1");
+        ok(['messageId' => $comp['escalation_messageid'] ?? null]);
 
     // ── Update EDC ────────────────────────────────────────────────────────────
     case 'vmm-update-edc':
