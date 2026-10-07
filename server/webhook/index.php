@@ -480,7 +480,7 @@ try {
     // ── Follow-up complaints list ──────────────────────────────────────────────
     case 'vmm-followup-complaints':
         $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
-            s.storecode, s.storename, s.fmname,
+            s.storecode, s.storename, s.storeemail, s.fmname, s.fmemail, s.empname, s.empmobileno,
             l.status, l.remarks, l.created as last_updated,
             esc.closuredate as edc, esc.ticketno, esc.escalationlevel
             FROM {$px}complaints c

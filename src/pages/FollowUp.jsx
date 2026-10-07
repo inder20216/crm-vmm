@@ -126,6 +126,8 @@ export default function FollowUp() {
           fm_name:          bufStr(c.fmname     || c.fm_name),
           fm_mobile:        bufStr(c.fm_mobile),
           fm_email:         bufStr(c.fmemail    || c.fm_email),
+          empname:          bufStr(c.empname),
+          empmobileno:      bufStr(c.empmobileno),
           closuredate:      bufStr(c.edc       || c.closuredate),
           managername:      bufStr(c.managername),
           managermobileno:  bufStr(c.managermobileno),
@@ -439,6 +441,7 @@ export default function FollowUp() {
                   <div className="fu-cc-field"><span>Location</span><strong>{selected.productlocation || '—'}</strong></div>
                   <div className="fu-cc-field"><span>FM</span><strong>{selected.fm_name || '—'} {selected.fm_mobile ? `· ${selected.fm_mobile}` : ''}</strong></div>
                   <div className="fu-cc-field"><span>FM Email</span><strong>{selected.fm_email || '—'}</strong></div>
+                  <div className="fu-cc-field"><span>Contact</span><strong>{selected.empname || '—'} {selected.empmobileno ? `· ${selected.empmobileno}` : ''}</strong></div>
                   <div className="fu-cc-field"><span>Manager</span><strong>{selected.managername || '—'} {selected.managermobileno ? `· ${selected.managermobileno}` : ''}</strong></div>
                   <div className="fu-cc-field"><span>EDC</span><strong style={{ color: selected.days_overdue > 0 ? '#dc2626' : 'inherit' }}>{fmtDate(selected.closuredate)}</strong></div>
                 </div>
