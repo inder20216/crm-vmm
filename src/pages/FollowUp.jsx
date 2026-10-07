@@ -293,9 +293,9 @@ export default function FollowUp() {
               + `<p>EDC: <strong>${selected.edc || '—'}</strong></p>`
               + `<p>Regards,<br/>VMM Helpdesk</p>`;
             vmm.sendNewEmail({
-              toRecipients: toList,
-              ccRecipients: ccList,
-              subject: `Follow-up: ${selected.complaintno} — ${selected.productname} (${selected.storename})`,
+              toEmail:  toList,
+              ccEmails: ccList,
+              subject:  `Follow-up: ${selected.complaintno} — ${selected.productname} (${selected.storename})`,
               htmlBody: ncBody,
             }).catch(() => {});
           }
