@@ -65,6 +65,7 @@ export const vmm = {
   fetchInbox:         ()        => get(BASE, 'vmm-email-inbox').then(r => ({ emails: r.emails || [], isIncremental: false })),
   resetInboxDelta:    ()        => Promise.resolve(),
   searchEmails:       (q)       => graph.searchEmails(q),
+  searchSentEmails:   (q)       => graph.searchSentEmails(q),
   fetchSent:          ()        => graph.fetchSent(),
   fetchThread:        (convId)  => get(BASE, 'vmm-email-thread', { conversationId: convId }),
   sendEmailReply:     (data)    => graph.replyOnThread({ messageId: data.messageId, htmlBody: data.htmlBody, toEmail: data.toRecipients, ccEmails: data.ccRecipients }),
