@@ -29,3 +29,6 @@ index (*).html
 
 # n8n workflows — contain API credentials, keep off GitHub
 VMM/
+
+# PHP DB credentials — never commit
+server/common/constraints/dbconfig.php

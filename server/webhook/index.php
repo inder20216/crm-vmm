@@ -70,12 +70,13 @@ $body   = json_decode(file_get_contents('php://input'), true) ?? [];
 $GET    = $_GET;
 $METHOD = $_SERVER['REQUEST_METHOD'];
 
+
 try {
     switch ($action) {
 
     // ── Reference data ────────────────────────────────────────────────────────
     case 'vmm-sp-products':
-        $r = rows($db, "SELECT id, name, code, shortName FROM {$px}products WHERE is_deleted='No' AND status='1' ORDER BY name");
+        $r = rows($db, "SELECT id, name, shortName FROM {$px}products WHERE is_deleted='No' AND status='1' ORDER BY name");
         ok(['products' => $r]);
 
     case 'vmm-sp-natures':
@@ -237,10 +238,15 @@ try {
         $b = $body;
 
         $complaintno = '';
-        // Generate complaint number
-        q($db, "CALL generateReferenceNo(@lastid)");
-        $r2 = row($db, "SELECT @lastid as cno");
-        $base_no = date('ymd') . $r2['cno'];
+        // Generate complaint number — increment vmm_referenceno directly
+        $refRow = row($db, "SELECT id, lastno FROM {$px}referenceno ORDER BY id DESC LIMIT 1");
+        $newRefNo = ($refRow ? (int)$refRow['lastno'] : 0) + 1;
+        if ($refRow) {
+            q($db, "UPDATE {$px}referenceno SET lastno=$newRefNo WHERE id=" . (int)$refRow['id']);
+        } else {
+            q($db, "INSERT INTO {$px}referenceno (lastno) VALUES ($newRefNo)");
+        }
+        $base_no = date('ymd') . $newRefNo;
         $prefix_code = e($db, $b['prefixCode'] ?? '');
         $complaintno = $prefix_code ? $prefix_code . '-' . $base_no : $base_no;
 
@@ -280,14 +286,14 @@ try {
         try {
             $ins_complaint = "INSERT INTO {$px}complaints
                 (complaintno,storerefid,productid,productcode,productname,producttype,vendorname,vendorid,
-                 productmodel,productlocation,typeofcomplaint,natureofproblem,tat,description,uid,created,updated,is_deleted)
+                 productmodel,productlocation,typeofcomplaint,natureofproblem,tat,uid,created,updated,is_deleted)
                 VALUES (
                 '$complaintno',$storerefid,
                 " . (int)($b['productid']??0) . ",'" . e($db,$b['productCode']??'') . "','" . e($db,$b['productname']??'') . "',
                 '" . e($db,$b['producttype']??'') . "','" . e($db,$b['vendorName']??'') . "'," . (int)($b['vendorId']??0) . ",
                 '" . e($db,$b['productModel']??'') . "','" . e($db,$b['productLocation']??'') . "',
                 '" . e($db,$b['typeOfComplaints']??'') . "','" . e($db,$b['natureOfProblem']??'') . "',
-                " . (int)($b['tat']??0) . ",'" . e($db,$b['description']??'') . "'," . (int)($b['uid']??1) . ",NOW(),NOW(),'No')";
+                " . (int)($b['tat']??0) . "," . (int)($b['uid']??1) . ",NOW(),NOW(),'No')";
             q($db, $ins_complaint);
             $complaintid = mysqli_insert_id($db);
 
