@@ -126,6 +126,7 @@ export default function FollowUp() {
           fm_name:          bufStr(c.fmname     || c.fm_name),
           fm_mobile:        bufStr(c.fm_mobile),
           fm_email:         bufStr(c.fmemail    || c.fm_email),
+          closuredate:      bufStr(c.edc       || c.closuredate),
           managername:      bufStr(c.managername),
           managermobileno:  bufStr(c.managermobileno),
           last_remark:      bufStr(c.last_remark),
