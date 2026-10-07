@@ -478,6 +478,61 @@ try {
 
         ok(['complaintId' => $complaintId, 'newEdc' => $newEdc]);
 
+    // ── Send email via app-only Graph API (no user token needed) ─────────────
+    case 'vmm-send-email':
+        if ($METHOD !== 'POST') fail('POST required');
+        $b       = $body;
+        $to      = array_filter((array)($b['to']      ?? []));
+        $cc      = array_filter((array)($b['cc']      ?? []));
+        $subject = trim($b['subject'] ?? '');
+        $html    = trim($b['html']    ?? '');
+        if (!$subject || !$html || empty($to)) fail('to, subject and html required');
+
+        // 1. Get app-only token
+        $ch = curl_init("https://login.microsoftonline.com/" . GRAPH_TENANT_ID . "/oauth2/v2.0/token");
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => http_build_query([
+                'grant_type'    => 'client_credentials',
+                'client_id'     => GRAPH_CLIENT_ID,
+                'client_secret' => GRAPH_CLIENT_SECRET,
+                'scope'         => 'https://graph.microsoft.com/.default',
+            ]),
+        ]);
+        $tokenData = json_decode(curl_exec($ch), true);
+        curl_close($ch);
+        $token = $tokenData['access_token'] ?? null;
+        if (!$token) fail('Failed to obtain mail token');
+
+        // 2. Send via Graph API
+        $mkRecip = fn($emails) => array_values(array_map(fn($e) => ['emailAddress' => ['address' => trim($e)]], $emails));
+        $payload = json_encode([
+            'message' => [
+                'subject'       => $subject,
+                'body'          => ['contentType' => 'HTML', 'content' => $html],
+                'toRecipients'  => $mkRecip($to),
+                'ccRecipients'  => $mkRecip($cc),
+            ],
+            'saveToSentItems' => true,
+        ]);
+        $mailbox = urlencode(GRAPH_MAILBOX);
+        $ch2 = curl_init("https://graph.microsoft.com/v1.0/users/$mailbox/sendMail");
+        curl_setopt_array($ch2, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $payload,
+            CURLOPT_HTTPHEADER     => ["Authorization: Bearer $token", "Content-Type: application/json"],
+        ]);
+        $sendBody = curl_exec($ch2);
+        $sendCode = curl_getinfo($ch2, CURLINFO_HTTP_CODE);
+        curl_close($ch2);
+        if ($sendCode >= 300) {
+            $err = json_decode($sendBody, true)['error']['message'] ?? "HTTP $sendCode";
+            fail($err);
+        }
+        ok(['sent' => true]);
+
     // ── Follow-up complaints list ──────────────────────────────────────────────
     case 'vmm-followup-complaints':
         $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,

@@ -296,11 +296,11 @@ export default function FollowUp() {
               + `Kindly ensure the issue is attended to at the earliest and share the latest status with us.</p>`
               + `<p>EDC: <strong>${selected.edc || '—'}</strong></p>`
               + `<p>Regards,<br/>VMM Helpdesk</p>`;
-            vmm.sendNewEmail({
-              toEmail:  toList,
-              ccEmails: ccList,
-              subject:  `Follow-up: ${selected.complaintno} — ${selected.productname} (${selected.storename})`,
-              htmlBody: ncBody,
+            vmm.sendEmailServer({
+              to:      toList,
+              cc:      ccList,
+              subject: `Follow-up: ${selected.complaintno} — ${selected.productname} (${selected.storename})`,
+              html:    ncBody,
             }).catch(err => { console.error('NC email error:', err); showToast('Email failed: ' + (err?.message || 'unknown error'), 'err'); });
           }
         }
