@@ -463,7 +463,7 @@ try {
         // Log the EDC update to complaint history
         q($db, "INSERT INTO {$px}complaintlogs
             (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
-            VALUES ($complaintId,'Updated',1,'Call','$delayMain','$delaySub','EDC updated to $newEdc" . ($remarks ? " — $remarks" : "") . "',$uid,NOW(),NOW(),'No')");
+            VALUES ($complaintId,'Updated',1,'EDC Followup','$delayMain','$delaySub','EDC updated to $newEdc" . ($remarks ? " — $remarks" : "") . "',$uid,NOW(),NOW(),'No')");
 
         ok(['complaintId' => $complaintId, 'newEdc' => $newEdc]);
 

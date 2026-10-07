@@ -104,6 +104,7 @@ const SOURCE_STYLES = {
   'Call':          { icon: '📞', bg: '#dbeafe', color: '#1d4ed8' },
   'Email Reply':   { icon: '📧', bg: '#ede9fe', color: '#6d28d9' },
   'Vendor Update': { icon: '🏭', bg: '#dcfce7', color: '#15803d' },
+  'EDC Followup':  { icon: '📅', bg: '#fef9c3', color: '#854d0e' },
 };
 
 function Field({ label, value, mono, span2 }) {
