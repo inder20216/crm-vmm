@@ -209,9 +209,11 @@ export default function FollowUp() {
       if (!dateFilter) return true;
       return String(c.closuredate || '').startsWith(dateFilter);
     })
-    .sort((a, b) => sortOrder === 'oldest'
-      ? (parseInt(a.id) - parseInt(b.id))
-      : (parseInt(b.id) - parseInt(a.id))
+    .sort((a, b) => {
+      const da = new Date(a.closuredate || '9999-12-31');
+      const db = new Date(b.closuredate || '9999-12-31');
+      return sortOrder === 'oldest' ? da - db : db - da;
+    }
     );
 
   // EDC date picker constraints
