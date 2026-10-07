@@ -78,6 +78,8 @@ export default function FollowUp() {
   const [selected, setSelected]     = useState(null);
   const [filter, setFilter]         = useState('all');
   const [search, setSearch]         = useState('');
+  const [dateFilter, setDateFilter] = useState('');
+  const [sortOrder, setSortOrder]   = useState('newest');
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast]           = useState(null);
   const [logs, setLogs]             = useState([]);
@@ -202,7 +204,15 @@ export default function FollowUp() {
           || (c.store_name  || '').toLowerCase().includes(s)
           || (c.productname || '').toLowerCase().includes(s)
           || (c.vendorname  || '').toLowerCase().includes(s);
-    });
+    })
+    .filter(c => {
+      if (!dateFilter) return true;
+      return String(c.closuredate || '').startsWith(dateFilter);
+    })
+    .sort((a, b) => sortOrder === 'oldest'
+      ? (parseInt(a.id) - parseInt(b.id))
+      : (parseInt(b.id) - parseInt(a.id))
+    );
 
   // EDC date picker constraints
   const minDate = new Date().toISOString().split('T')[0];
@@ -364,6 +374,25 @@ export default function FollowUp() {
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
+            <div className="fu-list-controls">
+              <input
+                type="date"
+                className="fu-date-filter"
+                title="Filter by EDC date"
+                value={dateFilter}
+                onChange={e => setDateFilter(e.target.value)}
+              />
+              {dateFilter && (
+                <button className="fu-clear-date" onClick={() => setDateFilter('')} title="Clear date filter">✕</button>
+              )}
+              <button
+                className={`fu-sort-btn${sortOrder === 'oldest' ? ' active' : ''}`}
+                onClick={() => setSortOrder(o => o === 'oldest' ? 'newest' : 'oldest')}
+                title={sortOrder === 'oldest' ? 'Showing oldest first — click for newest' : 'Showing newest first — click for oldest'}
+              >
+                {sortOrder === 'oldest' ? '↑ Oldest' : '↓ Newest'}
+              </button>
+            </div>
           </div>
 
           {loading ? (
