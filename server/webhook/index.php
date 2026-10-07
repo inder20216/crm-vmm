@@ -601,6 +601,120 @@ try {
             ORDER BY c.id DESC");
         ok(['complaints' => $r]);
 
+    // ── Store-level pending followups (same store, all open) ──────────────────
+    case 'vmm-store-followups':
+        $sfCode = e($db, $GET['storecode'] ?? '');
+        if (!$sfCode) fail('storecode required');
+        $sfRows = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname,
+            l.status as current_status,
+            esc.closuredate as edc,
+            DATEDIFF(CURDATE(), esc.closuredate) as days_overdue,
+            (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
+            FROM {$px}complaints c
+            JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
+            JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            WHERE s.storecode='$sfCode' AND c.is_deleted='No' AND l.status NOT IN ('Closed')
+            AND esc.closuredate <= CURDATE()
+            ORDER BY esc.closuredate ASC");
+        ok(['complaints' => $sfRows]);
+
+    // ── Bulk Not Connected (all pending complaints at a store in one action) ───
+    case 'vmm-bulk-not-connected':
+        if ($METHOD !== 'POST') fail('POST required');
+        $bnc    = $body;
+        $bncIds = array_values(array_filter(array_map('intval', (array)($bnc['complaintIds'] ?? []))));
+        if (!$bncIds) fail('complaintIds required');
+        $bncRem  = e($db, $bnc['remarks']   ?? 'Called - Not Connected');
+        $bncUid  = (int)($bnc['uid']        ?? 1);
+        $bncMain = e($db, $bnc['delayMain'] ?? '');
+        $bncSub  = e($db, $bnc['delaySub']  ?? '');
+
+        foreach ($bncIds as $bncId) {
+            q($db, "INSERT INTO {$px}complaintlogs
+                (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
+                VALUES ($bncId,'Not Connected',1,'Not Connected','$bncMain','$bncSub','$bncRem',$bncUid,NOW(),NOW(),'No')");
+        }
+
+        // Fetch store email from first complaint
+        $bncFirst = $bncIds[0];
+        $bncStore = row($db, "SELECT c.complaintno, s.storename, s.storecode, s.storeemail, s.fmemail
+            FROM {$px}complaints c JOIN {$px}complaintstores s ON s.id=c.storerefid
+            WHERE c.id=$bncFirst LIMIT 1");
+        $bncEmailSent = false;
+
+        if ($bncStore && !empty($bncStore['storeemail'])) {
+            // Build complaint table rows for email
+            $bncIdList = implode(',', $bncIds);
+            $bncCRows = rows($db, "SELECT c.complaintno, c.productname,
+                esc.closuredate as edc, DATEDIFF(CURDATE(), esc.closuredate) as days_overdue
+                FROM {$px}complaints c
+                LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+                WHERE c.id IN ($bncIdList) ORDER BY esc.closuredate ASC");
+
+            $bncTableRows = '';
+            foreach ($bncCRows as $br) {
+                $ov = (int)$br['days_overdue'];
+                $ovText = $ov > 0 ? "$ov days overdue" : 'Due today';
+                $ovColor = $ov > 0 ? '#dc2626' : '#374151';
+                $edcFmt = $br['edc'] ? date('d M Y', strtotime($br['edc'])) : '—';
+                $bncTableRows .= "<tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-family:monospace'>" . htmlspecialchars($br['complaintno']) . "</td>"
+                    . "<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0'>" . htmlspecialchars($br['productname']) . "</td>"
+                    . "<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0'>$edcFmt</td>"
+                    . "<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;color:$ovColor'>$ovText</td></tr>";
+            }
+
+            $bncSN = htmlspecialchars($bncStore['storename']);
+            $bncSC = htmlspecialchars($bncStore['storecode']);
+            $bncCnt = count($bncIds);
+            $bncHtml = "<p>Dear Store Manager,</p>"
+                . "<p>We attempted to follow up with <strong>$bncSN ($bncSC)</strong> but were unable to connect at this time.</p>"
+                . "<p>The following <strong>$bncCnt complaint(s)</strong> require your attention:</p>"
+                . "<table style='border-collapse:collapse;width:100%;font-size:13px'>"
+                . "<thead><tr style='background:#f1f5f9'>"
+                . "<th style='padding:7px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em'>Complaint No</th>"
+                . "<th style='padding:7px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em'>Product</th>"
+                . "<th style='padding:7px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em'>EDC</th>"
+                . "<th style='padding:7px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em'>Status</th>"
+                . "</tr></thead><tbody>$bncTableRows</tbody></table>"
+                . "<p style='margin-top:16px'>Kindly ensure these issues are attended to at the earliest and share the latest status with us.</p>"
+                . "<p>Regards,<br/>VMM Helpdesk</p>";
+            $bncSubj = "Follow-up Required: $bncCnt Open Complaint(s) at $bncSN ($bncSC)";
+
+            // Get Graph token
+            $bncCh = curl_init("https://login.microsoftonline.com/" . GRAPH_TENANT_ID . "/oauth2/v2.0/token");
+            curl_setopt_array($bncCh, [CURLOPT_RETURNTRANSFER=>true, CURLOPT_POST=>true,
+                CURLOPT_POSTFIELDS=>http_build_query(['grant_type'=>'client_credentials','client_id'=>GRAPH_CLIENT_ID,
+                    'client_secret'=>GRAPH_CLIENT_SECRET,'scope'=>'https://graph.microsoft.com/.default'])]);
+            $bncTok = json_decode(curl_exec($bncCh), true)['access_token'] ?? null;
+            curl_close($bncCh);
+
+            if ($bncTok) {
+                $bncMkR = fn($e) => [['emailAddress'=>['address'=>trim($e)]]];
+                $bncTo = $bncStore['storeemail'];
+                $bncCC = $bncStore['fmemail'] ?? '';
+                $bncPayload = ['message'=>['subject'=>$bncSubj,'body'=>['contentType'=>'HTML','content'=>$bncHtml],
+                    'toRecipients'=>$bncMkR($bncTo),'ccRecipients'=>$bncCC ? $bncMkR($bncCC) : []],'saveToSentItems'=>true];
+                $bncCh2 = curl_init("https://graph.microsoft.com/v1.0/users/" . urlencode(GRAPH_MAILBOX) . "/sendMail");
+                curl_setopt_array($bncCh2, [CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,
+                    CURLOPT_POSTFIELDS=>json_encode($bncPayload),
+                    CURLOPT_HTTPHEADER=>["Authorization: Bearer $bncTok","Content-Type: application/json"]]);
+                curl_exec($bncCh2);
+                $bncEmailSent = (curl_getinfo($bncCh2, CURLINFO_HTTP_CODE) < 300);
+                curl_close($bncCh2);
+
+                if ($bncEmailSent) {
+                    $bncNote = e($db, "Bulk NC email sent to $bncTo" . ($bncCC ? " (CC: $bncCC)" : '') . " — $bncCnt complaints");
+                    foreach ($bncIds as $bncId) {
+                        q($db, "INSERT INTO {$px}complaintlogs
+                            (complaintid,status,currentstatus,fupdonevia,remarks,uid,created,updated,is_deleted)
+                            VALUES ($bncId,'Not Connected',1,'Email Sent','$bncNote',$bncUid,NOW(),NOW(),'No')");
+                    }
+                }
+            }
+        }
+        ok(['success'=>true,'logged'=>count($bncIds),'emailSent'=>$bncEmailSent]);
+
     // ── Search complaints ─────────────────────────────────────────────────────
     case 'vmm-search-complaints':
         $q_text   = e($db, $GET['q']       ?? '');
@@ -683,13 +797,32 @@ try {
         $mobile = e($db, $GET['mobile'] ?? '');
         if (!$mobile) fail('mobile required');
         $emp = row($db, "SELECT id, code, name, mobileno, email, designation FROM {$px}employees WHERE mobileno='$mobile' AND is_deleted='No' AND status='1' LIMIT 1");
-        $store = null;
+        $ibStore = null; $ibOpen = []; $ibHist = [];
         if ($emp) {
-            $store = row($db, "SELECT s.id, s.code, s.name FROM {$px}stores s
+            $ibStore = row($db, "SELECT s.id, s.code AS storeCode, s.name AS storeName,
+                s.managername AS smName, s.managermobileno AS managerName
+                FROM {$px}stores s
                 JOIN {$px}complaintstores cs ON cs.storeid=s.id AND cs.empid={$emp['id']}
                 WHERE s.is_deleted='No' ORDER BY cs.id DESC LIMIT 1");
+            if ($ibStore) {
+                $ibSC = e($db, $ibStore['storeCode']);
+                $ibOpen = rows($db, "SELECT c.id, c.complaintno, c.productname, l.status as currentStatus
+                    FROM {$px}complaints c
+                    JOIN {$px}complaintstores s ON s.id=c.storerefid
+                    JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+                    WHERE s.storecode='$ibSC' AND c.is_deleted='No' AND l.status NOT IN ('Closed')
+                    ORDER BY c.id DESC LIMIT 15");
+                $ibHist = rows($db, "SELECT c.id, c.complaintno, c.productname, l.status as currentStatus, l.created as closedAt
+                    FROM {$px}complaints c
+                    JOIN {$px}complaintstores s ON s.id=c.storerefid
+                    JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+                    WHERE s.storecode='$ibSC' AND c.is_deleted='No' AND l.status IN ('Closed')
+                    AND c.created >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+                    ORDER BY c.id DESC LIMIT 10");
+            }
         }
-        ok(['employee' => $emp, 'store' => $store]);
+        ok(['found' => !!$emp, 'employee' => $emp, 'store' => $ibStore,
+            'openCount' => count($ibOpen), 'complaints' => $ibOpen, 'historical' => $ibHist]);
 
     // ── Client data feed (Vishal Wholesale) ──────────────────────────────────
     case 'vmm-complaints-feed':

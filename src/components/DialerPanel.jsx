@@ -58,8 +58,10 @@ export default function DialerPanel() {
           const isOutbound = pendingOutbound.current;
           pendingOutbound.current = false;
           const phone = normalizePhone(data?.caller?.phone || '');
-          setCallState({ phone, callId: data?.callId || null, direction: isOutbound ? 'outbound' : 'inbound', ended: false });
+          const callId = data?.callId || null;
+          setCallState({ phone, callId, direction: isOutbound ? 'outbound' : 'inbound', ended: false });
           setOpen(true);
+          if (isOutbound && callId) window.__vmmOnCallStarted?.(callId, phone);
           if (!isOutbound && phone) {
             setCallerInfo(null);
             setLookingUp(true);
@@ -145,6 +147,20 @@ export default function DialerPanel() {
                     </div>
                   ) : (
                     <div className="dp-no-complaints">No open complaints for this store</div>
+                  )}
+                  {callerInfo.historical?.length > 0 && (
+                    <div className="dp-open-complaints" style={{ marginTop: 6 }}>
+                      <div className="dp-complaints-label" style={{ color: '#64748b' }}>Recent closed (90d)</div>
+                      <div className="dp-complaints-list">
+                        {callerInfo.historical.map(cmp => (
+                          <button key={cmp.id} className="dp-complaint-row" style={{ opacity: .7 }} onClick={() => openComplaint(cmp.id)}>
+                            <span className="dp-cno">{cmp.complaintno}</span>
+                            <span className="dp-cprod">{cmp.productname}</span>
+                            <span className="dp-cstatus" style={{ color: '#16a34a' }}>Closed</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </div>
               ) : (

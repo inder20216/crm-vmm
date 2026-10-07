@@ -102,6 +102,43 @@
   white-space: pre-wrap; word-break: break-word;
 }
 
+/* ── Call button ── */
+.fu-call-btn {
+  padding: 2px 9px; border: 1.5px solid #7c3aed; border-radius: 6px;
+  font-size: 11px; font-weight: 700; cursor: pointer;
+  background: #ede9fe; color: #6d28d9; white-space: nowrap;
+}
+.fu-call-btn:hover { background: #7c3aed; color: #fff; }
+
+/* ── Store complaints panel ── */
+.fu-store-panel {
+  background: #fff; border: 1.5px solid #c4b5fd; border-radius: 12px;
+  overflow: hidden; margin-bottom: 16px;
+}
+.fu-store-panel-title {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px; font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .06em; color: #5b21b6;
+  background: #f5f3ff; border-bottom: 1px solid #e2e8f0;
+}
+.fu-store-loading { font-weight: 400; color: #94a3b8; font-size: 11px; }
+.fu-bulk-nc-btn {
+  padding: 5px 12px; border: none; border-radius: 7px;
+  font-size: 12px; font-weight: 700; cursor: pointer;
+  background: #ea580c; color: #fff;
+}
+.fu-bulk-nc-btn:hover:not(:disabled) { background: #c2410c; }
+.fu-bulk-nc-btn:disabled { opacity: .6; cursor: default; }
+.fu-store-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.fu-store-table tr { border-bottom: 1px solid #f1f5f9; cursor: pointer; }
+.fu-store-table tr:last-child { border-bottom: none; }
+.fu-store-table tr:hover { background: #faf5ff; }
+.fu-store-row-active { background: #ede9fe !important; }
+.fu-st-no   { padding: 7px 12px; font-family: monospace; font-weight: 700; color: #1e1b4b; white-space: nowrap; }
+.fu-st-prod { padding: 7px 8px; color: #374151; }
+.fu-st-edc  { padding: 7px 8px; color: #64748b; white-space: nowrap; font-size: 11px; }
+.fu-st-late { padding: 7px 12px; white-space: nowrap; }
+
 /* ── Form ── */
 .fu-form { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; }
 .fu-form-section-title {

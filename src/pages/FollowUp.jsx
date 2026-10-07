@@ -84,6 +84,8 @@ export default function FollowUp() {
   const [toast, setToast]           = useState(null);
   const [logs, setLogs]             = useState([]);
   const [logsLoading, setLogsLoading] = useState(false);
+  const [storeComplaints, setStoreComplaints] = useState([]);
+  const [storeLoading,    setStoreLoading]    = useState(false);
 
   // Form state
   const [method,       setMethod]       = useState('Call');
@@ -150,7 +152,7 @@ export default function FollowUp() {
   const resetForm = (c) => {
     setMethod('Call');
     setTxnId('');
-    setMobileCalled(c?.fm_mobile || c?.managermobileno || '');
+    setMobileCalled(c?.empmobileno || c?.fm_mobile || c?.managermobileno || '');
     setVendorTicket('');
     setAction('Partially Closed');
     setDelayMain(''); setDelaySub(''); setNewEdc('');
@@ -176,11 +178,59 @@ export default function FollowUp() {
     resetForm(c);
     setLogs([]);
     setLogsLoading(true);
+    setStoreComplaints([]);
     vmm.getComplaintDetail(c.id)
       .then(res => { if (res.success) setLogs((res.logs || []).map(l => ({ ...l, status: bufStr(l.status), remarks: bufStr(l.remarks) }))); })
       .catch(() => {})
       .finally(() => setLogsLoading(false));
+    if (c.store_code) {
+      setStoreLoading(true);
+      vmm.getStoreFollowups(c.store_code)
+        .then(res => { if (res.success) setStoreComplaints(res.complaints || []); })
+        .catch(() => {})
+        .finally(() => setStoreLoading(false));
+    }
   };
+
+  const handleCallStore = () => {
+    const num = (selected?.empmobileno || '').replace(/\D/g, '');
+    if (!num) return;
+    setMobileCalled(num);
+    changeAction('Not Connected');
+    window.__vmmDial?.(num);
+  };
+
+  const handleBulkNC = async () => {
+    if (!storeComplaints.length || submitting) return;
+    setSubmitting(true);
+    try {
+      const ids = storeComplaints.map(c => c.id);
+      const res = await vmm.bulkNotConnected({ complaintIds: ids, remarks: remarks || 'Called - Not Connected', uid: 1 });
+      if (res?.success) {
+        showToast(`NC logged for ${res.logged} complaint(s)${res.emailSent ? ' · email sent to store' : ''}`, 'ok');
+        const idSet = new Set(ids);
+        setComplaints(prev => prev.map(c => idSet.has(c.id) ? { ...c, current_status: 'Not Connected', nc_count: (c.nc_count || 0) + 1 } : c));
+        setStoreComplaints([]);
+        setLogsLoading(true);
+        vmm.getComplaintDetail(selected.id)
+          .then(r => { if (r.success) setLogs((r.logs || []).map(l => ({ ...l, status: bufStr(l.status), remarks: bufStr(l.remarks) }))); })
+          .catch(() => {})
+          .finally(() => setLogsLoading(false));
+      } else {
+        showToast(res?.message || 'Bulk NC failed', 'err');
+      }
+    } catch { showToast('Connection error. Please try again.', 'err'); }
+    finally { setSubmitting(false); }
+  };
+
+  // Auto-populate txnId when SparkTG fires the call-started event (outbound)
+  useEffect(() => {
+    window.__vmmOnCallStarted = (callId, phone) => {
+      if (callId) setTxnId(String(callId));
+      if (phone)  setMobileCalled(phone.replace(/\D/g, ''));
+    };
+    return () => { delete window.__vmmOnCallStarted; };
+  }, []);
 
   const overdue = complaints.filter(c => c.days_overdue > 0);
   const today   = complaints.filter(c => {
@@ -455,7 +505,12 @@ export default function FollowUp() {
                   <div className="fu-cc-field"><span>Location</span><strong>{selected.productlocation || '—'}</strong></div>
                   <div className="fu-cc-field"><span>FM</span><strong>{selected.fm_name || '—'} {selected.fm_mobile ? `· ${selected.fm_mobile}` : ''}</strong></div>
                   <div className="fu-cc-field"><span>FM Email</span><strong>{selected.fm_email || '—'}</strong></div>
-                  <div className="fu-cc-field"><span>Contact</span><strong>{selected.empname || '—'} {selected.empmobileno ? `· ${selected.empmobileno}` : ''}</strong></div>
+                  <div className="fu-cc-field"><span>Contact</span><strong style={{ display:'flex', alignItems:'center', gap:6 }}>
+                    <span>{selected.empname || '—'}{selected.empmobileno ? ` · ${selected.empmobileno}` : ''}</span>
+                    {selected.empmobileno && (
+                      <button className="fu-call-btn" onClick={handleCallStore} title={`Call ${selected.empmobileno}`}>📞 Call</button>
+                    )}
+                  </strong></div>
                   <div className="fu-cc-field"><span>Manager</span><strong>{selected.managername || '—'} {selected.managermobileno ? `· ${selected.managermobileno}` : ''}</strong></div>
                   <div className="fu-cc-field"><span>EDC</span><strong style={{ color: selected.days_overdue > 0 ? '#dc2626' : 'inherit' }}>{fmtDate(selected.closuredate)}</strong></div>
                 </div>
@@ -463,6 +518,44 @@ export default function FollowUp() {
                   <div className="fu-cc-last-remark">Last: {bufStr(selected.last_remark)}</div>
                 )}
               </div>
+
+              {/* ── Store Complaints Panel ── */}
+              {(storeLoading || storeComplaints.length > 0) && (
+                <div className="fu-store-panel">
+                  <div className="fu-store-panel-title">
+                    <span>All open complaints at this store{storeComplaints.length > 0 ? ` (${storeComplaints.length})` : ''}</span>
+                    {storeLoading && <span className="fu-store-loading"> Loading…</span>}
+                    {!storeLoading && storeComplaints.length > 0 && (
+                      <button
+                        className="fu-bulk-nc-btn"
+                        onClick={handleBulkNC}
+                        disabled={submitting}
+                        title="Log Not Connected for all open complaints at this store and send one consolidated email"
+                      >
+                        📵 Mark All NC ({storeComplaints.length})
+                      </button>
+                    )}
+                  </div>
+                  {storeComplaints.length > 0 && (
+                    <table className="fu-store-table">
+                      <tbody>
+                        {storeComplaints.map(c => (
+                          <tr key={c.id} className={c.id === selected?.id ? 'fu-store-row-active' : ''} onClick={() => selectComplaint({ ...selected, ...c, store_code: selected.store_code })}>
+                            <td className="fu-st-no">{bufStr(c.complaintno)}</td>
+                            <td className="fu-st-prod">{bufStr(c.productname)}</td>
+                            <td className="fu-st-edc">{fmtDate(c.edc)}</td>
+                            <td className="fu-st-late">
+                              {parseInt(c.days_overdue) > 0
+                                ? <span className="fu-badge fu-badge-red">{c.days_overdue}d late</span>
+                                : <span className="fu-badge fu-badge-status-open">Due</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
 
               {/* ── Case History ── */}
               <div className="fu-history">
