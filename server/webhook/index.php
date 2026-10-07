@@ -447,7 +447,7 @@ try {
 
         q($db, "INSERT INTO {$px}complaintlogs
             (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
-            VALUES ($complaintId,'Updated',1,'Not Connected','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
+            VALUES ($complaintId,'Not Connected',1,'Not Connected','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
 
         // Return escalation message ID so frontend can reply on the same email thread
         $comp = row($db, "SELECT escalation_messageid FROM {$px}complaints WHERE id=$complaintId LIMIT 1");
