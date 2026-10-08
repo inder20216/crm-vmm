@@ -788,9 +788,12 @@ try {
     case 'vmm-user-role':
         $email = e($db, $GET['email'] ?? '');
         if (!$email) fail('email required');
-        $u = row($db, "SELECT id, name, email, role FROM {$px}users WHERE email='$email' AND is_deleted='No' AND status='1' LIMIT 1");
+        $u = row($db, "SELECT * FROM {$px}users WHERE email='$email' LIMIT 1");
         if (!$u) fail('User not found', 404);
-        ok(['found' => true, 'user' => array_merge($u, ['type' => $u['role']]), 'role' => $u['role']]);
+        if (($u['is_deleted'] ?? 'No') === 'Yes') fail('User not found', 404);
+        if (isset($u['status']) && (string)$u['status'] === '0') fail('User not found', 404);
+        $urole = $u['role'] ?? $u['user_type'] ?? $u['type'] ?? 'agent';
+        ok(['found' => true, 'user' => ['id' => $u['id'], 'name' => $u['name'] ?? $u['username'] ?? $email, 'email' => $u['email'] ?? $email, 'role' => $urole, 'type' => $urole], 'role' => $urole]);
 
     // ── SparkTG inbound ───────────────────────────────────────────────────────
     case 'vmm-sparktg-inbound':
