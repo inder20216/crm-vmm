@@ -106,7 +106,7 @@ Error generating stack: `+e.message+`
     <p style="margin:0 0 16px">Dear Store Manager,</p>
     <p style="margin:0 0 20px">
       We are pleased to inform you that your store ticket, <strong>${o}</strong>, for
-      <strong>${a||`the reported issue`}</strong> has successfully been ${s===`Closed`?`closed`:s.toLowerCase()}.${i&&c?` The same was confirmed by FM <strong>${i}</strong> on <strong>${c}</strong>.`:``}
+      <strong>${a||`the reported issue`}</strong> has successfully been ${s===`Closed`?`closed`:s.toLowerCase()}.${l&&c?` Confirmed by <strong>${l}</strong> on <strong>${c}</strong>.`:c?` Closure date: <strong>${c}</strong>.`:``}
     </p>
     ${l?`<p style="margin:0 0 16px">Closed by: <strong>${l}</strong></p>`:``}
     ${u?`<p style="margin:0 0 20px;padding:12px 14px;background:#f8fafc;border-left:3px solid #6366f1;font-size:13px"><strong>Remarks:</strong> ${u}</p>`:``}
