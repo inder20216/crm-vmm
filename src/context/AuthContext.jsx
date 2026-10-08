@@ -4,12 +4,11 @@ import { vmm } from '../api/vmm';
 
 const AuthContext = createContext(null);
 
-// Hardcoded users — bypass MySQL lookup. type controls label and feature access.
+// Hardcoded superadmins only — everyone else is looked up in vmm_users table.
 const HARDCODED_USERS = {
   'inder@openmind.in':    'superadmin',
   'amandeep@openmind.in': 'superadmin',
   'intern@openmind.in':   'admin',
-  'deepansh@openmind.in': 'admin',
 };
 
 export function AuthProvider({ children }) {
@@ -36,13 +35,13 @@ export function AuthProvider({ children }) {
     setRoleLoading(true);
     vmm.getUserRole(msEmail)
       .then(res => {
-        if (res.found) {
+        if (res.found && res.user) {
           setCurrentUser({
             id:    res.user.id,
             name:  res.user.name || msName,
             email: msEmail,
-            role:  res.user.role,
-            type:  res.user.type,
+            role:  res.user.role  || 'agent',
+            type:  res.user.type  || 'agent',
           });
         } else {
           setCurrentUser(null);
