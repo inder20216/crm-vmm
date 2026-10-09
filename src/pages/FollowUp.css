@@ -13,6 +13,7 @@
 .fu-hstat-red   { background: #fee2e2; color: #dc2626; }
 .fu-hstat-amber { background: #fef3c7; color: #92400e; }
 .fu-hstat-blue  { background: #dbeafe; color: #1d4ed8; }
+.fu-hstat-sub   { font-size: 9px; font-weight: 500; opacity: .75; margin-top: 2px; text-transform: none; letter-spacing: 0; }
 
 /* ── Body split ── */
 .fu-body { display: flex; flex: 1; overflow: hidden; }
@@ -134,10 +135,134 @@
 .fu-store-table tr:last-child { border-bottom: none; }
 .fu-store-table tr:hover { background: #faf5ff; }
 .fu-store-row-active { background: #ede9fe !important; }
+.fu-store-row-done   { background: #f0fdf4; color: #86efac; }
+.fu-store-row-done .fu-st-no,
+.fu-store-row-done .fu-st-prod { color: #16a34a; opacity: .7; }
 .fu-st-no   { padding: 7px 12px; font-family: monospace; font-weight: 700; color: #1e1b4b; white-space: nowrap; }
 .fu-st-prod { padding: 7px 8px; color: #374151; }
 .fu-st-edc  { padding: 7px 8px; color: #64748b; white-space: nowrap; font-size: 11px; }
 .fu-st-late { padding: 7px 12px; white-space: nowrap; }
+
+/* ── Assignment UI ── */
+.fu-assign-toggle {
+  margin-left: auto; padding: 5px 13px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer;
+  border: 1.5px solid #7c3aed; color: #7c3aed; background: #fff; transition: all .15s;
+}
+.fu-assign-toggle.active { background: #7c3aed; color: #fff; }
+.fu-assign-toggle:hover:not(.active) { background: #f5f3ff; }
+.fu-assign-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; background: #ede9fe; border-radius: 8px; margin-top: 6px;
+  border: 1.5px solid #7c3aed22;
+}
+.fu-assign-count { font-size: 12px; font-weight: 700; color: #7c3aed; white-space: nowrap; }
+.fu-assign-user {
+  flex: 1; min-width: 140px; padding: 5px 8px; border: 1.5px solid #c4b5fd;
+  border-radius: 6px; font-size: 12px; background: #fff; color: #1e1b4b;
+}
+.fu-assign-btn {
+  padding: 5px 14px; border: none; border-radius: 6px; font-size: 12px; font-weight: 700;
+  background: #7c3aed; color: #fff; cursor: pointer; white-space: nowrap;
+}
+.fu-assign-btn:disabled { opacity: .6; cursor: default; }
+.fu-row-check { pointer-events: none; accent-color: #7c3aed; margin-right: 6px; flex-shrink: 0; }
+.fu-row-selected { background: #ede9fe !important; border-left: 3px solid #7c3aed; }
+.fu-row { display: flex; flex-direction: column; align-items: flex-start; }
+.fu-row-selected.fu-row:hover { background: #ddd6fe !important; }
+.fu-quickselect {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px; background: #faf5ff; border: 1px solid #ddd6fe; border-radius: 8px; margin-top: 4px;
+}
+.fu-qs-header { display: flex; align-items: center; justify-content: space-between; }
+.fu-qs-label { font-size: 10px; font-weight: 800; color: #7c3aed; text-transform: uppercase; letter-spacing: .07em; }
+.fu-qs-hint { font-size: 10px; color: #a78bfa; }
+.fu-qs-presets { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.fu-qs-group-label { font-size: 11px; color: #94a3b8; white-space: nowrap; }
+.fu-qs-divider { width: 1px; height: 18px; background: #ddd6fe; flex-shrink: 0; }
+.fu-qs-mode {
+  padding: 3px 6px; border: 1px solid #c4b5fd; border-radius: 5px; font-size: 11px;
+  background: #fff; color: #1e1b4b; cursor: pointer; max-width: 110px;
+}
+.fu-qs-date { padding: 3px 6px; border: 1px solid #c4b5fd; border-radius: 5px; font-size: 11px; background: #fff; color: #1e1b4b; max-width: 130px; }
+.fu-qs-to { font-size: 11px; color: #94a3b8; }
+.fu-qs-btn {
+  padding: 3px 9px; border: 1px solid #c4b5fd; border-radius: 5px; font-size: 11px; font-weight: 600;
+  background: #fff; color: #7c3aed; cursor: pointer; transition: all .12s; white-space: nowrap;
+}
+.fu-qs-btn:hover { background: #7c3aed; color: #fff; border-color: #7c3aed; }
+.fu-qs-apply {
+  padding: 3px 9px; border: none; border-radius: 5px; font-size: 11px; font-weight: 700;
+  background: #7c3aed; color: #fff; cursor: pointer; white-space: nowrap;
+}
+.fu-qs-apply:disabled { opacity: .45; cursor: default; }
+.fu-qs-clear { padding: 2px 8px; border: none; border-radius: 5px; font-size: 11px; font-weight: 600; background: #fee2e2; color: #dc2626; cursor: pointer; white-space: nowrap; }
+
+/* ── Auto-dial start button ── */
+.fu-autodial-start {
+  width: 100%; padding: 10px; margin-bottom: 8px;
+  background: linear-gradient(135deg, #7c3aed, #4f46e5); color: #fff;
+  border: none; border-radius: 8px; font-size: 13px; font-weight: 700;
+  cursor: pointer; letter-spacing: .02em; transition: opacity .15s;
+}
+.fu-autodial-start:hover:not(:disabled) { opacity: .9; }
+.fu-autodial-start:disabled { opacity: .5; cursor: default; }
+
+/* ── Auto-dial banner ── */
+.fu-ad-banner {
+  border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
+  background: #1e1b4b; color: #fff; flex-shrink: 0;
+}
+.fu-ad-dialing    { background: #1e1b4b; }
+.fu-ad-form       { background: #14532d; }
+.fu-ad-auto-nc    { background: #431407; }
+.fu-ad-idle       { background: #1e293b; }
+.fu-ad-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.fu-ad-progress { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fu-ad-label { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: #a78bfa; }
+.fu-ad-count { font-size: 12px; font-weight: 700; background: rgba(255,255,255,.12); padding: 2px 8px; border-radius: 20px; }
+.fu-ad-cno  { font-size: 11px; color: rgba(255,255,255,.6); font-family: monospace; }
+.fu-ad-stop { padding: 4px 10px; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; }
+.fu-ad-stop:hover { background: rgba(239,68,68,.4); }
+.fu-ad-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fu-ad-ringing { font-size: 12px; color: #a5f3fc; animation: fu-pulse 1.2s ease-in-out infinite; }
+@keyframes fu-pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+.fu-ad-connected {
+  padding: 6px 16px; background: #16a34a; color: #fff; border: none; border-radius: 7px;
+  font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.fu-ad-connected:hover { background: #15803d; }
+.fu-ad-nc-btn {
+  padding: 6px 16px; background: #dc2626; color: #fff; border: none; border-radius: 7px;
+  font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.fu-ad-nc-btn:hover { background: #b91c1c; }
+.fu-ad-form-hint { font-size: 12px; color: rgba(255,255,255,.8); }
+.fu-ad-processing { color: #fbbf24; }
+
+/* ── Redial modal ── */
+.fu-redial-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+}
+.fu-redial-modal {
+  background: #fff; border-radius: 16px; padding: 32px 28px; max-width: 360px; width: 90%;
+  text-align: center; box-shadow: 0 24px 60px rgba(0,0,0,.3);
+}
+.fu-rm-icon  { font-size: 40px; margin-bottom: 12px; }
+.fu-rm-title { font-size: 18px; font-weight: 800; color: #1e1b4b; margin: 0 0 8px; }
+.fu-rm-body  { font-size: 13px; color: #64748b; line-height: 1.6; margin: 0 0 20px; }
+.fu-rm-btns  { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.fu-rm-redial {
+  padding: 11px; background: #7c3aed; color: #fff; border: none; border-radius: 9px;
+  font-size: 14px; font-weight: 700; cursor: pointer;
+}
+.fu-rm-redial:hover { background: #6d28d9; }
+.fu-rm-next {
+  padding: 11px; background: #f1f5f9; color: #1e1b4b; border: none; border-radius: 9px;
+  font-size: 14px; font-weight: 700; cursor: pointer;
+}
+.fu-rm-next:hover { background: #e2e8f0; }
+.fu-rm-stop { background: none; border: none; color: #94a3b8; font-size: 12px; cursor: pointer; text-decoration: underline; }
 
 /* ── Form ── */
 .fu-form { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; }

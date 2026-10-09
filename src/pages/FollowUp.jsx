@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { vmm } from '../api/vmm';
+import { useAuth } from '../context/AuthContext';
+import { HO_POC } from '../auth/escalationMatrix';
 import './FollowUp.css';
 
 // Fallback used until the API responds — keeps dropdowns populated instantly
@@ -73,6 +75,9 @@ const STATUS_COLORS = {
 };
 
 export default function FollowUp() {
+  const { currentUser } = useAuth();
+  const isAdmin = currentUser?.role === 'admin';
+
   const [complaints, setComplaints] = useState([]);
   const [loading, setLoading]       = useState(true);
   const [selected, setSelected]     = useState(null);
@@ -86,6 +91,37 @@ export default function FollowUp() {
   const [logsLoading, setLogsLoading] = useState(false);
   const [storeComplaints, setStoreComplaints] = useState([]);
   const [storeLoading,    setStoreLoading]    = useState(false);
+  const [storeUpdatedIds, setStoreUpdatedIds] = useState(new Set());
+
+  // Assignment state
+  const [users,             setUsers]             = useState([]);
+  const [assignMode,        setAssignMode]        = useState(false);
+  const [selectedIds,       setSelectedIds]       = useState(new Set());
+  const [assignUserId,      setAssignUserId]      = useState('');
+  const [assignedComplaints, setAssignedComplaints] = useState([]);
+  const [assignedLoading,   setAssignedLoading]   = useState(false);
+  const [qsMode,  setQsMode]  = useState('after');
+  const [qsDate1, setQsDate1] = useState('');
+  const [qsDate2, setQsDate2] = useState('');
+
+  // Auto-dial state (refs keep callbacks stale-closure-free)
+  const [autoMode,        setAutoMode]        = useState(false);
+  const [autoQueue,       setAutoQueue]       = useState([]);
+  const [autoIndex,       setAutoIndex]       = useState(0);
+  const [autoCallState,   setAutoCallState]   = useState('idle'); // idle|dialing|form|auto-nc|disconnected
+  const [isRedial,        setIsRedial]        = useState(false);
+  const [showRedialModal, setShowRedialModal] = useState(false);
+  const autoModeRef      = useRef(false);
+  const autoQueueRef     = useRef([]);
+  const autoIndexRef     = useRef(0);
+  const isRedialRef      = useRef(false);
+  const autoCallStateRef = useRef('idle');
+
+  const syncAutoMode      = (v) => { autoModeRef.current      = v; setAutoMode(v); };
+  const syncAutoQueue     = (v) => { autoQueueRef.current     = v; setAutoQueue(v); };
+  const syncAutoIndex     = (v) => { autoIndexRef.current     = v; setAutoIndex(v); };
+  const syncIsRedial      = (v) => { isRedialRef.current      = v; setIsRedial(v); };
+  const syncAutoCallState = (v) => { autoCallStateRef.current = v; setAutoCallState(v); };
 
   // Form state
   const [method,       setMethod]       = useState('Call');
@@ -110,6 +146,44 @@ export default function FollowUp() {
       })
       .catch(() => {}); // keep fallback on error
   }, []);
+
+  // Load user list for assignment dropdown (admin only)
+  useEffect(() => {
+    if (!isAdmin) return;
+    vmm.getFollowupUsers().then(res => { if (res.success) setUsers(res.users || []); }).catch(() => {});
+  }, [isAdmin]);
+
+  // Load assigned complaints when "Assigned to Me" tab is selected
+  useEffect(() => {
+    if (filter !== 'mine' || !currentUser?.id) return;
+    setAssignedLoading(true);
+    vmm.getMyFollowups(currentUser.id)
+      .then(res => {
+        if (res.success) setAssignedComplaints(res.complaints.map(c => ({
+          ...c,
+          complaintno:     bufStr(c.complaintno),
+          current_status:  bufStr(c.status || c.current_status),
+          store_code:      bufStr(c.storecode  || c.store_code),
+          store_name:      bufStr(c.storename  || c.store_name),
+          storeemail:      bufStr(c.storeemail),
+          productname:     bufStr(c.productname),
+          vendorname:      bufStr(c.vendorname),
+          fm_name:         bufStr(c.fmname     || c.fm_name),
+          fm_mobile:       bufStr(c.fm_mobile),
+          fm_email:        bufStr(c.fmemail    || c.fm_email),
+          empname:         bufStr(c.empname),
+          empmobileno:     bufStr(c.empmobileno),
+          closuredate:     bufStr(c.edc        || c.closuredate),
+          days_overdue:    parseInt(c.days_overdue) || 0,
+          nc_count:        parseInt(c.nc_count)     || 0,
+          managername:     bufStr(c.managername),
+          managermobileno: bufStr(c.managermobileno),
+          last_remark:     bufStr(c.last_remark),
+        })));
+      })
+      .catch(() => {})
+      .finally(() => setAssignedLoading(false));
+  }, [filter, currentUser?.id]);
 
   useEffect(() => {
     vmm.getFollowUpComplaints()
@@ -173,16 +247,20 @@ export default function FollowUp() {
     }
   };
 
-  const selectComplaint = (c) => {
+  const selectComplaint = (c, keepStorePanel = false) => {
+    setSubmitting(false);
     setSelected(c);
     resetForm(c);
     setLogs([]);
     setLogsLoading(true);
-    setStoreComplaints([]);
     vmm.getComplaintDetail(c.id)
       .then(res => { if (res.success) setLogs((res.logs || []).map(l => ({ ...l, status: bufStr(l.status), remarks: bufStr(l.remarks) }))); })
       .catch(() => {})
       .finally(() => setLogsLoading(false));
+    if (!keepStorePanel) {
+      setStoreComplaints([]);
+      setStoreUpdatedIds(new Set());
+    }
     if (c.store_code) {
       setStoreLoading(true);
       vmm.getStoreFollowups(c.store_code)
@@ -223,6 +301,131 @@ export default function FollowUp() {
     finally { setSubmitting(false); }
   };
 
+  const todayStr  = () => new Date().toISOString().split('T')[0];
+  const daysAgo   = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().split('T')[0]; };
+
+  const selectByEdc = (test) => {
+    const matches = displayed.filter(c => {
+      if (!c.closuredate) return false;
+      return test(String(c.closuredate).substring(0, 10));
+    });
+    setSelectedIds(prev => { const n = new Set(prev); matches.forEach(c => n.add(c.id)); return n; });
+  };
+
+  const selectByMonth = (month) => {
+    if (!month) return;
+    selectByEdc(edc => edc.startsWith(month));
+  };
+
+  const handleQsApply = () => {
+    if (!qsDate1) return;
+    if (qsMode === 'after')                     selectByEdc(edc => edc > qsDate1);
+    else if (qsMode === 'before')               selectByEdc(edc => edc < qsDate1);
+    else if (qsMode === 'custom')               selectByEdc(edc => edc === qsDate1);
+    else if (qsMode === 'between' && qsDate2)   selectByEdc(edc => edc >= qsDate1 && edc <= qsDate2);
+  };
+
+  // ── Auto-dial ────────────────────────────────────────────────────────────────
+  const dialAutoNext = useCallback((nextIdx) => {
+    const queue = autoQueueRef.current;
+    if (nextIdx >= queue.length) {
+      syncAutoMode(false);
+      syncAutoCallState('idle');
+      return;
+    }
+    syncAutoIndex(nextIdx);
+    syncIsRedial(false);
+    const c = queue[nextIdx];
+    selectComplaint(c);
+    changeAction('Not Connected');
+    const phone = (c.empmobileno || c.managermobileno || '').replace(/\D/g, '');
+    if (phone) {
+      setTimeout(() => { syncAutoCallState('dialing'); window.__vmmDial?.(phone); }, 1200);
+    } else {
+      dialAutoNext(nextIdx + 1); // no phone — skip
+    }
+  }, []);
+
+  const doAutoNC = useCallback(async () => {
+    const c = autoQueueRef.current[autoIndexRef.current];
+    if (!c) return;
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+    const newEdc = tomorrow.toISOString().split('T')[0];
+    try {
+      await vmm.notConnected({
+        complaintId: c.id, complaintno: c.complaintno,
+        remarks: isRedialRef.current ? 'Auto-dial: Not Connected (redial — no email)' : 'Auto-dial: Not Connected',
+        uid: 1, newClosureDate: newEdc, suppressEmail: true,
+      });
+      const upd = { current_status: 'Not Connected', nc_count: (c.nc_count || 0) + 1, closuredate: newEdc };
+      setComplaints(prev       => prev.map(x => x.id === c.id ? { ...x, ...upd } : x));
+      setAssignedComplaints(prev => prev.map(x => x.id === c.id ? { ...x, ...upd } : x));
+    } catch { /* silent — still advance */ }
+    dialAutoNext(autoIndexRef.current + 1);
+  }, []);
+
+  const startAutoDial = () => {
+    const queue = assignedComplaints
+      .filter(c => !['Closed','Resolved'].includes(c.current_status))
+      .sort((a, b) => new Date(a.closuredate || '9999') - new Date(b.closuredate || '9999'));
+    if (!queue.length) { showToast('No assigned complaints to dial', 'err'); return; }
+    syncAutoQueue(queue);
+    syncAutoMode(true);
+    dialAutoNext(0);
+  };
+
+  const stopAutoDial = () => { syncAutoMode(false); syncAutoCallState('idle'); setShowRedialModal(false); };
+
+  const handleAutoConnected = () => syncAutoCallState('form');
+
+  const handleRedial = () => {
+    setShowRedialModal(false);
+    syncIsRedial(true);
+    const c = autoQueueRef.current[autoIndexRef.current];
+    const phone = (c?.empmobileno || c?.managermobileno || '').replace(/\D/g, '');
+    if (phone) { syncAutoCallState('dialing'); window.__vmmDial?.(phone); }
+  };
+
+  const handleContinueNext = () => { setShowRedialModal(false); dialAutoNext(autoIndexRef.current + 1); };
+
+  // Register call-ended callback once (uses refs — no stale closures)
+  useEffect(() => {
+    window.__vmmOnCallEnded = () => {
+      if (!autoModeRef.current) return;
+      const cs = autoCallStateRef.current;
+      if (cs === 'dialing')    syncAutoCallState('auto-nc');
+      else if (cs === 'form')  syncAutoCallState('disconnected');
+    };
+    return () => { delete window.__vmmOnCallEnded; };
+  }, []);
+
+  // React to auto-dial state transitions
+  useEffect(() => {
+    if (autoCallState === 'auto-nc')     doAutoNC();
+    if (autoCallState === 'disconnected') setShowRedialModal(true);
+  }, [autoCallState, doAutoNC]);
+
+  const handleAssign = async () => {
+    if (!assignUserId || !selectedIds.size || submitting) return;
+    setSubmitting(true);
+    try {
+      const assignments = [...selectedIds].map(id => ({ complaint_id: id, user_id: parseInt(assignUserId) }));
+      const res = await vmm.assignFollowups({ assignments, assigned_by: currentUser?.id || 0 });
+      if (res?.success !== false) {
+        const name = users.find(u => String(u.id) === String(assignUserId))?.name || 'user';
+        showToast(`${res.assigned} complaint(s) assigned to ${name}`, 'ok');
+        setSelectedIds(new Set());
+        setAssignMode(false);
+        setAssignUserId('');
+        // Refresh mine list if open
+        if (filter === 'mine') setAssignedComplaints([]);
+      } else {
+        showToast('Assignment failed', 'err');
+      }
+    } catch { showToast('Connection error', 'err'); }
+    finally { setSubmitting(false); }
+  };
+
   // Auto-populate txnId when SparkTG fires the call-started event (outbound)
   useEffect(() => {
     window.__vmmOnCallStarted = (callId, phone) => {
@@ -239,12 +442,14 @@ export default function FollowUp() {
     return String(c.closuredate).startsWith(t);
   });
 
-  const displayed = complaints
+  const sourceList = filter === 'mine' ? assignedComplaints : complaints;
+
+  const displayed = sourceList
     .filter(c => {
       if (filter === 'overdue') return c.days_overdue > 0;
       if (filter === 'today')   return today.some(t => t.id === c.id);
       if (filter === 'nc')      return c.nc_count > 0;
-      return true;
+      return true; // 'all' and 'mine'
     })
     .filter(c => {
       if (!search.trim()) return true;
@@ -307,6 +512,7 @@ export default function FollowUp() {
           uid,
         });
       } else if (action === 'Not Connected') {
+        const hoEmail = (HO_POC[selected.productname] || HO_POC['DEFAULT'])?.email || '';
         res = await vmm.notConnected({
           complaintId: selected.id,
           complaintno: selected.complaintno,
@@ -316,6 +522,7 @@ export default function FollowUp() {
           mobileCalled,
           newClosureDate: newEdc || '',
           escalationLevel: nextLevel,
+          hoEmail,
         });
       } else if (action === 'Note') {
         res = await vmm.logEmailActivity({
@@ -345,8 +552,21 @@ export default function FollowUp() {
 
       if (res?.success !== false && !res?.error) {
         showToast(`${selected.complaintno} updated — ${action}`, 'ok');
+        if (autoModeRef.current && autoCallStateRef.current === 'form') {
+          syncAutoCallState('idle');
+          setTimeout(() => dialAutoNext(autoIndexRef.current + 1), 1200);
+        }
 
         // Email is sent server-side inside vmm-not-connected PHP endpoint
+
+        // Track this complaint as updated + find next in store panel
+        const doneId = selected.id;
+        const updatedIds = new Set([...storeUpdatedIds, doneId]);
+        setStoreUpdatedIds(updatedIds);
+
+        const nextInStore = storeComplaints.find(
+          c => c.id !== doneId && !updatedIds.has(c.id) && !['Closed','Resolved'].includes(c.current_status)
+        );
 
         if (action === 'Closed' || action === 'Resolved') {
           vmm.sendClosureEmail({
@@ -362,12 +582,16 @@ export default function FollowUp() {
             closedBy,
             remarks,
           }).catch(() => {});
-          setComplaints(prev => prev.filter(c => c.id !== selected.id));
-          setSelected(null);
+          setComplaints(prev => prev.filter(c => c.id !== doneId));
+          if (nextInStore) {
+            selectComplaint({ ...nextInStore, store_code: selected.store_code, storeemail: selected.storeemail, fm_email: selected.fm_email, fm_name: selected.fm_name }, true);
+          } else {
+            setSelected(null);
+          }
         } else {
           const ncAdd = action === 'Not Connected' ? 1 : 0;
           setComplaints(prev => prev.map(c => {
-            if (c.id !== selected.id) return c;
+            if (c.id !== doneId) return c;
             const edcUpdate = (action === 'Escalated' || action === 'Partially Closed' || action === 'Update EDC') && newEdc
               ? {
                   closuredate: newEdc,
@@ -376,12 +600,16 @@ export default function FollowUp() {
               : {};
             return { ...c, current_status: action, nc_count: (c.nc_count || 0) + ncAdd, ...edcUpdate };
           }));
-          resetForm(selected);
-          setLogsLoading(true);
-          vmm.getComplaintDetail(selected.id)
-            .then(r => { if (r.success) setLogs((r.logs || []).map(l => ({ ...l, status: bufStr(l.status), remarks: bufStr(l.remarks) }))); })
-            .catch(() => {})
-            .finally(() => setLogsLoading(false));
+          if (nextInStore) {
+            selectComplaint({ ...nextInStore, store_code: selected.store_code, storeemail: selected.storeemail, fm_email: selected.fm_email, fm_name: selected.fm_name }, true);
+          } else {
+            resetForm(selected);
+            setLogsLoading(true);
+            vmm.getComplaintDetail(doneId)
+              .then(r => { if (r.success) setLogs((r.logs || []).map(l => ({ ...l, status: bufStr(l.status), remarks: bufStr(l.remarks) }))); })
+              .catch(() => {})
+              .finally(() => setLogsLoading(false));
+          }
         }
       } else {
         showToast(res?.message || res?.error || 'Update failed', 'err');
@@ -404,7 +632,14 @@ export default function FollowUp() {
           <p className="fu-subtitle">Open cases requiring action</p>
         </div>
         <div className="fu-header-stats">
-          <div className="fu-hstat fu-hstat-red"><span>{overdue.length}</span>Overdue</div>
+          <div className="fu-hstat fu-hstat-red">
+            <span>{overdue.length}</span>
+            Overdue
+            {(() => {
+              const oldest = overdue.reduce((o, c) => !o || new Date(c.closuredate) < new Date(o.closuredate) ? c : o, null);
+              return oldest ? <div className="fu-hstat-sub">since {fmtDate(oldest.closuredate)}</div> : null;
+            })()}
+          </div>
           <div className="fu-hstat fu-hstat-amber"><span>{today.length}</span>Due Today</div>
           <div className="fu-hstat fu-hstat-blue"><span>{complaints.length}</span>Total Open</div>
         </div>
@@ -416,10 +651,63 @@ export default function FollowUp() {
         <div className="fu-list-panel">
           <div className="fu-list-toolbar">
             <div className="fu-filter-tabs">
-              {[['all','All'], ['overdue','Overdue'], ['today','Due Today'], ['nc','NC']].map(([k,l]) => (
-                <button key={k} className={`fu-ftab${filter===k?' active':''}`} onClick={() => setFilter(k)}>{l}</button>
+              {[['all','All'], ['overdue','Overdue'], ['today','Due Today'], ['nc','NC'], ['mine','Assigned to Me']].map(([k,l]) => (
+                <button key={k} className={`fu-ftab${filter===k?' active':''}`} onClick={() => { setFilter(k); setAssignMode(false); setSelectedIds(new Set()); }}>{l}</button>
               ))}
             </div>
+            {isAdmin && filter !== 'mine' && (
+              <button
+                className={`fu-assign-toggle${assignMode ? ' active' : ''}`}
+                onClick={() => { setAssignMode(a => !a); setSelectedIds(new Set()); setAssignUserId(''); }}
+              >
+                {assignMode ? '✕ Cancel' : '⊕ Assign'}
+              </button>
+            )}
+            {assignMode && (
+              <div className="fu-quickselect">
+                <div className="fu-qs-header">
+                  <span className="fu-qs-label">Quick Select</span>
+                  {selectedIds.size > 0
+                    ? <button className="fu-qs-clear" onClick={() => setSelectedIds(new Set())}>✕ Clear ({selectedIds.size})</button>
+                    : <span className="fu-qs-hint">Select complaints below or use filters</span>
+                  }
+                </div>
+
+                <div className="fu-qs-presets">
+                  <button className="fu-qs-btn" onClick={() => selectByEdc(edc => edc === daysAgo(1))}>Yesterday</button>
+                  <button className="fu-qs-btn" onClick={() => selectByEdc(edc => edc >= daysAgo(6) && edc <= todayStr())}>Last 6 days</button>
+                  <button className="fu-qs-btn" onClick={() => selectByEdc(edc => edc >= daysAgo(30) && edc <= todayStr())}>Last 30 days</button>
+                  <span className="fu-qs-divider" />
+                  <select className="fu-qs-mode" value={qsMode} onChange={e => { setQsMode(e.target.value); setQsDate1(''); setQsDate2(''); }}>
+                    <option value="after">After date</option>
+                    <option value="before">Before date</option>
+                    <option value="between">Between dates</option>
+                    <option value="custom">Specific date</option>
+                  </select>
+                  <input type="date" className="fu-qs-date" value={qsDate1} onChange={e => setQsDate1(e.target.value)} />
+                  {qsMode === 'between' && <>
+                    <span className="fu-qs-to">–</span>
+                    <input type="date" className="fu-qs-date" value={qsDate2} onChange={e => setQsDate2(e.target.value)} />
+                  </>}
+                  <button className="fu-qs-apply" onClick={handleQsApply} disabled={!qsDate1 || (qsMode === 'between' && !qsDate2)}>+ Add</button>
+                  <span className="fu-qs-divider" />
+                  <span className="fu-qs-group-label">Month</span>
+                  <input type="month" className="fu-qs-date" onChange={e => { selectByMonth(e.target.value); e.target.value = ''; }} />
+                </div>
+              </div>
+            )}
+            {assignMode && selectedIds.size > 0 && (
+              <div className="fu-assign-bar">
+                <span className="fu-assign-count">{selectedIds.size} selected</span>
+                <select className="fu-assign-user" value={assignUserId} onChange={e => setAssignUserId(e.target.value)}>
+                  <option value="">— Assign to —</option>
+                  {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select>
+                <button className="fu-assign-btn" onClick={handleAssign} disabled={!assignUserId || submitting}>
+                  {submitting ? 'Assigning…' : 'Assign →'}
+                </button>
+              </div>
+            )}
             <input
               className="fu-search"
               placeholder="Search complaint / store / product…"
@@ -447,18 +735,44 @@ export default function FollowUp() {
             </div>
           </div>
 
-          {loading ? (
+          {filter === 'mine' && !autoMode && (
+            <button
+              className="fu-autodial-start"
+              onClick={startAutoDial}
+              disabled={assignedComplaints.filter(c => !['Closed','Resolved'].includes(c.current_status)).length === 0}
+            >
+              ⚡ Start Auto-Dial
+              {assignedComplaints.length > 0
+                ? ` (${assignedComplaints.filter(c => !['Closed','Resolved'].includes(c.current_status)).length} cases)`
+                : ' — no cases assigned yet'}
+            </button>
+          )}
+
+          {(loading && filter !== 'mine') || (assignedLoading && filter === 'mine') ? (
             <div className="fu-list-empty">Loading…</div>
           ) : displayed.length === 0 ? (
-            <div className="fu-list-empty">No complaints found.</div>
+            <div className="fu-list-empty">{filter === 'mine' ? 'No complaints assigned to you.' : 'No complaints found.'}</div>
           ) : (
             <div className="fu-list">
               {displayed.map(c => (
                 <div
                   key={c.id}
-                  className={`fu-row${selected?.id === c.id ? ' active' : ''}${c.days_overdue > 0 ? ' overdue' : ''}`}
-                  onClick={() => selectComplaint(c)}
+                  className={`fu-row${selected?.id === c.id ? ' active' : ''}${c.days_overdue > 0 ? ' overdue' : ''}${assignMode && selectedIds.has(c.id) ? ' fu-row-selected' : ''}`}
+                  onClick={() => {
+                    if (assignMode) {
+                      setSelectedIds(prev => {
+                        const next = new Set(prev);
+                        next.has(c.id) ? next.delete(c.id) : next.add(c.id);
+                        return next;
+                      });
+                    } else {
+                      selectComplaint(c);
+                    }
+                  }}
                 >
+                  {assignMode && (
+                    <input type="checkbox" className="fu-row-check" readOnly checked={selectedIds.has(c.id)} onClick={e => e.stopPropagation()} />
+                  )}
                   <div className="fu-row-top">
                     <span className="fu-row-no">{c.complaintno}</span>
                     <div className="fu-row-badges">
@@ -478,8 +792,51 @@ export default function FollowUp() {
           )}
         </div>
 
+        {/* ── Redial Modal ── */}
+        {showRedialModal && (
+          <div className="fu-redial-overlay">
+            <div className="fu-redial-modal">
+              <div className="fu-rm-icon">📞</div>
+              <h3 className="fu-rm-title">Call Disconnected</h3>
+              <p className="fu-rm-body">The call ended before you submitted the follow-up. What would you like to do?</p>
+              <div className="fu-rm-btns">
+                <button className="fu-rm-redial" onClick={handleRedial}>📞 Redial same number</button>
+                <button className="fu-rm-next"   onClick={handleContinueNext}>→ Continue with next</button>
+              </div>
+              <button className="fu-rm-stop" onClick={stopAutoDial}>⏹ Stop Auto-Dial</button>
+            </div>
+          </div>
+        )}
+
         {/* ── Right: Action Panel ── */}
         <div className="fu-action-panel">
+          {/* Auto-dial banner */}
+          {autoMode && (
+            <div className={`fu-ad-banner fu-ad-${autoCallState}`}>
+              <div className="fu-ad-top">
+                <div className="fu-ad-progress">
+                  <span className="fu-ad-label">⚡ Auto-Dial</span>
+                  <span className="fu-ad-count">{autoIndex + 1} / {autoQueue.length}</span>
+                  <span className="fu-ad-cno">{autoQueue[autoIndex]?.complaintno}</span>
+                </div>
+                <button className="fu-ad-stop" onClick={stopAutoDial}>⏹ Stop</button>
+              </div>
+              {autoCallState === 'dialing' && (
+                <div className="fu-ad-actions">
+                  <div className="fu-ad-ringing">📡 Dialing…</div>
+                  <button className="fu-ad-connected" onClick={handleAutoConnected}>✅ Connected</button>
+                  <button className="fu-ad-nc-btn" onClick={() => syncAutoCallState('auto-nc')}>📵 Not Connected</button>
+                </div>
+              )}
+              {autoCallState === 'form' && (
+                <div className="fu-ad-form-hint">📞 Connected — fill in the details below and submit</div>
+              )}
+              {(autoCallState === 'auto-nc' || autoCallState === 'idle') && autoMode && (
+                <div className="fu-ad-form-hint fu-ad-processing">⏳ Processing…</div>
+              )}
+            </div>
+          )}
+
           {!selected ? (
             <div className="fu-no-selection">
               <div className="fu-no-sel-icon">↖</div>
@@ -513,6 +870,20 @@ export default function FollowUp() {
                   </strong></div>
                   <div className="fu-cc-field"><span>Manager</span><strong>{selected.managername || '—'} {selected.managermobileno ? `· ${selected.managermobileno}` : ''}</strong></div>
                   <div className="fu-cc-field"><span>EDC</span><strong style={{ color: selected.days_overdue > 0 ? '#dc2626' : 'inherit' }}>{fmtDate(selected.closuredate)}</strong></div>
+                  {(() => {
+                    const reminderCount = logs.filter(l => l.status === 'Escalated').length;
+                    if (reminderCount === 0) return null;
+                    const over = reminderCount >= 3;
+                    return (
+                      <div className="fu-cc-field">
+                        <span>Reminders Sent</span>
+                        <strong style={{ color: over ? '#dc2626' : '#92400e', display:'flex', alignItems:'center', gap:6 }}>
+                          {reminderCount}
+                          {over && <span style={{ fontSize:11, background:'#fef2f2', color:'#dc2626', border:'1px solid #fecaca', borderRadius:4, padding:'1px 6px' }}>3+ — close from our side</span>}
+                        </strong>
+                      </div>
+                    );
+                  })()}
                 </div>
                 {selected.last_remark && (
                   <div className="fu-cc-last-remark">Last: {bufStr(selected.last_remark)}</div>
@@ -523,7 +894,13 @@ export default function FollowUp() {
               {(storeLoading || storeComplaints.length > 0) && (
                 <div className="fu-store-panel">
                   <div className="fu-store-panel-title">
-                    <span>All open complaints at this store{storeComplaints.length > 0 ? ` (${storeComplaints.length})` : ''}</span>
+                    <span>All open complaints at this store{storeComplaints.length > 0 ? ` (${storeComplaints.length})` : ''}
+                      {storeUpdatedIds.size > 0 && (
+                        <span style={{ marginLeft:8, fontSize:11, background: storeUpdatedIds.size >= storeComplaints.length ? '#dcfce7' : '#fef9c3', color: storeUpdatedIds.size >= storeComplaints.length ? '#15803d' : '#92400e', border: `1px solid ${storeUpdatedIds.size >= storeComplaints.length ? '#86efac' : '#fcd34d'}`, borderRadius:4, padding:'1px 7px', fontWeight:600 }}>
+                          {storeUpdatedIds.size} of {storeComplaints.length} updated{storeUpdatedIds.size >= storeComplaints.length ? ' ✓' : ''}
+                        </span>
+                      )}
+                    </span>
                     {storeLoading && <span className="fu-store-loading"> Loading…</span>}
                     {!storeLoading && storeComplaints.length > 0 && (
                       <button
@@ -540,7 +917,7 @@ export default function FollowUp() {
                     <table className="fu-store-table">
                       <tbody>
                         {storeComplaints.map(c => (
-                          <tr key={c.id} className={c.id === selected?.id ? 'fu-store-row-active' : ''} onClick={() => selectComplaint({ ...selected, ...c, store_code: selected.store_code })}>
+                          <tr key={c.id} className={`${c.id === selected?.id ? 'fu-store-row-active' : ''} ${storeUpdatedIds.has(c.id) ? 'fu-store-row-done' : ''}`} onClick={() => selectComplaint({ ...selected, ...c, store_code: selected.store_code }, true)}>
                             <td className="fu-st-no">{bufStr(c.complaintno)}</td>
                             <td className="fu-st-prod">{bufStr(c.productname)}</td>
                             <td className="fu-st-edc">{fmtDate(c.edc)}</td>
@@ -641,7 +1018,7 @@ export default function FollowUp() {
                     {[
                       ['Closed',           'Closed / Resolved'],
                       ['Partially Closed', 'Partially Closed'],
-                      ['Escalated',        'Escalated'],
+                      ['Escalated',        `Escalated${logs.filter(l => l.status === 'Escalated').length > 0 ? ` (${logs.filter(l => l.status === 'Escalated').length} sent)` : ''}`],
                       ['Update EDC',       'Update EDC'],
                       ['Not Connected',    'Not Connected'],
                       ['Note',             'Add Note Only'],

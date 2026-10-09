@@ -127,7 +127,7 @@ export default function App() {
   return (
     <BrowserRouter basename="/crm-vmm">
       <div className="app-shell">
-        <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} role={currentUser.role} />
+        <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} role={currentUser.role} userType={currentUser.type} />
         <div className="app-body">
           <header className="top-bar">
             <span className="top-bar-title">VMM Facility Management CRM</span>
@@ -156,7 +156,7 @@ export default function App() {
               <Route path="/complaints/add" element={<RoleRoute adminOnly><div className="main"><CaseLoggingForm /></div></RoleRoute>} />
               <Route path="/ntr"              element={<RoleRoute adminOnly><NtrRequests /></RoleRoute>} />
               <Route path="/ntr-flow"         element={<RoleRoute adminOnly><NtrFlow /></RoleRoute>} />
-              <Route path="/followup"         element={<RoleRoute adminOnly><FollowUp /></RoleRoute>} />
+              <Route path="/followup"         element={<FollowUp />} />
               <Route path="/followup-flow"    element={<RoleRoute adminOnly><FollowUpFlow /></RoleRoute>} />
               <Route path="/bulk-close"       element={<RoleRoute adminOnly><BulkClose /></RoleRoute>} />
               <Route path="/reports"          element={<RoleRoute adminOnly><Reports /></RoleRoute>} />

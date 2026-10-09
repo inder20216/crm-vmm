@@ -18,10 +18,10 @@ const ADMIN_NAV = [
   { label: 'Bulk Close',      icon: '✅', to: '/bulk-close'    },
   { label: 'Reports',         icon: '📊', to: '/reports'       },
   { label: 'User Management', icon: '👥', to: '/users'         },
-  { label: 'Process Flow',    icon: '🔀', to: '/flow'          },
-  { label: 'Email Flow',      icon: '📬', to: '/email-flow'    },
-  { label: 'Master Data SQL', icon: '🗄️', to: '/master-data-flow' },
-  { label: 'Settings',        icon: '⚙️', to: '/settings'      },
+  { label: 'Process Flow',    icon: '🔀', to: '/flow',             superadminOnly: true },
+  { label: 'Email Flow',      icon: '📬', to: '/email-flow',       superadminOnly: true },
+  { label: 'Master Data SQL', icon: '🗄️', to: '/master-data-flow', superadminOnly: true },
+  { label: 'Settings',        icon: '⚙️', to: '/settings',         superadminOnly: true },
 ];
 
 const USER_NAV = [
@@ -32,11 +32,13 @@ const USER_NAV = [
       { label: 'Search',      to: '/complaints/search' },
     ],
   },
+  { label: 'Follow-up', icon: '🔁', to: '/followup' },
 ];
 
-export default function Sidebar({ collapsed, onToggle, role }) {
+export default function Sidebar({ collapsed, onToggle, role, userType }) {
   const location = useLocation();
-  const NAV = role === 'admin' ? ADMIN_NAV : USER_NAV;
+  const baseNav  = role === 'admin' ? ADMIN_NAV : USER_NAV;
+  const NAV      = baseNav.filter(item => !item.superadminOnly || userType === 'superadmin');
 
   const isParentActive = (children) =>
     children?.some(c => location.pathname.startsWith(c.to));

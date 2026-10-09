@@ -75,6 +75,7 @@ export default function DialerPanel() {
 
         case 'hide_dialer':
           setCallState(prev => prev ? { ...prev, ended: true } : null);
+          window.__vmmOnCallEnded?.();
           break;
 
         default: break;

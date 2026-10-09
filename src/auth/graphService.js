@@ -802,7 +802,7 @@ export async function sendClosureEmailDirect({
     <p style="margin:0 0 16px">Dear Store Manager,</p>
     <p style="margin:0 0 20px">
       We are pleased to inform you that your store ticket, <strong>${complaintno}</strong>, for
-      <strong>${productName || 'the reported issue'}</strong> has successfully been ${closureStatus === 'Closed' ? 'closed' : closureStatus.toLowerCase()}.${fmName && closureDate ? ` The same was confirmed by FM <strong>${fmName}</strong> on <strong>${closureDate}</strong>.` : ''}
+      <strong>${productName || 'the reported issue'}</strong> has successfully been ${closureStatus === 'Closed' ? 'closed' : closureStatus.toLowerCase()}.${closedBy && closureDate ? ` Confirmed by <strong>${closedBy}</strong> on <strong>${closureDate}</strong>.` : closureDate ? ` Closure date: <strong>${closureDate}</strong>.` : ''}
     </p>
     ${closedBy ? `<p style="margin:0 0 16px">Closed by: <strong>${closedBy}</strong></p>` : ''}
     ${remarks ? `<p style="margin:0 0 20px;padding:12px 14px;background:#f8fafc;border-left:3px solid #6366f1;font-size:13px"><strong>Remarks:</strong> ${remarks}</p>` : ''}

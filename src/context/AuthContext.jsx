@@ -7,8 +7,9 @@ const AuthContext = createContext(null);
 // Hardcoded superadmins only — everyone else is looked up in vmm_users table.
 const HARDCODED_USERS = {
   'inder@openmind.in':    'superadmin',
-  'amandeep@openmind.in': 'superadmin',
+  'amandeep@openmind.in': 'admin',
   'intern@openmind.in':   'admin',
+  'kajal@openmind.in':    'admin',
 };
 
 export function AuthProvider({ children }) {

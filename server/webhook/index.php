@@ -424,20 +424,26 @@ try {
         q($db, $ins_log);
         $logid = mysqli_insert_id($db);
 
-        if ($closureStatus === 'Partially Closed' && $newEdc) {
-            q($db, "INSERT INTO {$px}vendorescalations
-                (logid,complaintid,escalationlevel,ticketno,closuredate,uid,uuid,created,updated,is_deleted)
-                VALUES ($logid,$complaintId,$escLevel,'$vendorTicketNo','$newEdc',$uid,0,NOW(),NOW(),'No')");
+        if ($newEdc) {
+            $existingEsc = row($db, "SELECT id FROM {$px}vendorescalations WHERE complaintid=$complaintId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
+            if ($existingEsc) {
+                q($db, "UPDATE {$px}vendorescalations SET closuredate='$newEdc', escalationlevel=$escLevel, logid=$logid, updated=NOW() WHERE id=" . (int)$existingEsc['id']);
+            } else {
+                q($db, "INSERT INTO {$px}vendorescalations (logid,complaintid,escalationlevel,ticketno,closuredate,uid,uuid,created,updated,is_deleted) VALUES ($logid,$complaintId,$escLevel,'$vendorTicketNo','$newEdc',$uid,0,NOW(),NOW(),'No')");
+            }
         }
         ok(['complaintId' => $complaintId, 'closureStatus' => $closureStatus]);
 
     // ── Not connected ─────────────────────────────────────────────────────────
     case 'vmm-not-connected':
         if ($METHOD !== 'POST') fail('POST required');
-        $b = $body;
-        $complaintId = (int)($b['complaintId'] ?? 0);
-        $uid         = (int)($b['uid']         ?? 1);
-        $remarks     = e($db, $b['remarks']    ?? 'Not Connected');
+        $b             = $body;
+        $complaintId   = (int)($b['complaintId']    ?? 0);
+        $uid           = (int)($b['uid']            ?? 1);
+        $remarks       = e($db, $b['remarks']       ?? 'Not Connected');
+        $suppressEmail = !empty($b['suppressEmail']);
+        $newEdc        = e($db, $b['newClosureDate'] ?? '');
+        $hoEmail       = e($db, $b['hoEmail']        ?? '');
         if (!$complaintId) fail('complaintId required');
 
         // Carry forward delay reason from last log entry (don't reset it)
@@ -450,13 +456,19 @@ try {
             (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
             VALUES ($complaintId,'Not Connected',1,'Not Connected','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
 
+        // Update EDC if provided (auto-dial sets EDC to tomorrow)
+        if ($newEdc) {
+            $esc = row($db, "SELECT id FROM {$px}vendorescalations WHERE complaintid=$complaintId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
+            if ($esc) q($db, "UPDATE {$px}vendorescalations SET closuredate='$newEdc' WHERE id=" . (int)$esc['id']);
+        }
+
         // Fetch store email, FM email and complaint details for the email
         $cdet = row($db, "SELECT c.complaintno, c.productname, s.storename, s.storecode, s.storeemail, s.fmemail
             FROM {$px}complaints c JOIN {$px}complaintstores s ON s.id=c.storerefid
             WHERE c.id=$complaintId LIMIT 1");
 
         $emailSent = false;
-        if ($cdet && !empty($cdet['storeemail'])) {
+        if (!$suppressEmail && $cdet && !empty($cdet['storeemail'])) {
             // Get app-only token
             $ch = curl_init("https://login.microsoftonline.com/" . GRAPH_TENANT_ID . "/oauth2/v2.0/token");
             curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>true, CURLOPT_POST=>true,
@@ -469,7 +481,7 @@ try {
 
             if ($tok) {
                 $toAddr = $cdet['storeemail'];
-                $ccAddr = $cdet['fmemail'] ?? '';
+                $fmAddr = $cdet['fmemail'] ?? '';
                 $subj   = "Follow-up: {$cdet['complaintno']} — {$cdet['productname']} ({$cdet['storename']})";
                 $html   = "<p>Dear Store Manager,</p>"
                     . "<p>We attempted to follow up on complaint <strong>{$cdet['complaintno']}</strong> "
@@ -478,10 +490,13 @@ try {
                     . "Kindly ensure the issue is attended to at the earliest and share the latest status with us.</p>"
                     . "<p>Regards,<br/>VMM Helpdesk</p>";
                 $mkR = fn($e) => [['emailAddress'=>['address'=>trim($e)]]];
+                $ccList = [];
+                if ($fmAddr) $ccList[] = ['emailAddress'=>['address'=>trim($fmAddr)]];
+                if ($hoEmail) $ccList[] = ['emailAddress'=>['address'=>trim($hoEmail)]];
                 $payload = ['message'=>[
                     'subject'=>$subj,'body'=>['contentType'=>'HTML','content'=>$html],
                     'toRecipients'=>$mkR($toAddr),
-                    'ccRecipients'=>$ccAddr ? $mkR($ccAddr) : [],
+                    'ccRecipients'=>$ccList,
                 ],'saveToSentItems'=>true];
                 $mailbox = urlencode(GRAPH_MAILBOX);
                 $ch2 = curl_init("https://graph.microsoft.com/v1.0/users/$mailbox/sendMail");
@@ -494,8 +509,9 @@ try {
                 $emailSent = ($sendCode < 300);
 
                 // Log email event to case history
+                $ccLog = implode(', ', array_filter([$fmAddr, $hoEmail]));
                 $emailNote = e($db, $emailSent
-                    ? "Not Connected email sent to $toAddr" . ($ccAddr ? " (CC: $ccAddr)" : '')
+                    ? "Not Connected email sent to $toAddr" . ($ccLog ? " (CC: $ccLog)" : '')
                     : "Not Connected email failed to send");
                 q($db, "INSERT INTO {$px}complaintlogs
                     (complaintid,status,currentstatus,fupdonevia,remarks,uid,created,updated,is_deleted)
@@ -618,6 +634,67 @@ try {
             AND esc.closuredate <= CURDATE()
             ORDER BY esc.closuredate ASC");
         ok(['complaints' => $sfRows]);
+
+    // ── Follow-up users list (for assignment dropdown) ────────────────────────
+    case 'vmm-followup-users':
+        $fuAll = rows($db, "SELECT * FROM {$px}users
+            WHERE (is_deleted IS NULL OR is_deleted != 'Yes')
+            AND (status IS NULL OR CAST(status AS CHAR) != '0')
+            AND (email LIKE '%@openmind.in' OR email LIKE '%@openmindserviceslimited.in')
+            AND email NOT IN ('inder@openmind.in','amandeep@openmind.in','intern@openmind.in')
+            ORDER BY name");
+        $fuUsers = array_values(array_filter(array_map(function($u) {
+            $nm = trim($u['name'] ?? $u['username'] ?? '');
+            if (!$nm) return null;
+            return ['id' => $u['id'], 'name' => $nm, 'email' => $u['email'] ?? ''];
+        }, $fuAll)));
+        ok(['users' => $fuUsers]);
+
+    // ── Assign follow-up complaints to users ──────────────────────────────────
+    case 'vmm-assign-followup':
+        if ($METHOD !== 'POST') fail('POST required');
+        $asgns = $body['assignments'] ?? [];
+        $asgBy = (int)($body['assigned_by'] ?? 0);
+        $db->query("CREATE TABLE IF NOT EXISTS {$px}followup_assignments (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            complaint_id INT NOT NULL,
+            assigned_to  INT NOT NULL,
+            assigned_by  INT NOT NULL,
+            assigned_at  DATETIME DEFAULT NOW(),
+            UNIQUE KEY uq_cmp (complaint_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $aCount = 0;
+        foreach ($asgns as $a) {
+            $cid = (int)($a['complaint_id'] ?? 0);
+            $uid = (int)($a['user_id'] ?? 0);
+            if (!$cid || !$uid) continue;
+            $db->query("INSERT INTO {$px}followup_assignments (complaint_id, assigned_to, assigned_by)
+                VALUES ($cid, $uid, $asgBy)
+                ON DUPLICATE KEY UPDATE assigned_to=$uid, assigned_by=$asgBy, assigned_at=NOW()");
+            $aCount++;
+        }
+        ok(['assigned' => $aCount]);
+
+    // ── My assigned follow-ups ─────────────────────────────────────────────────
+    case 'vmm-my-followups':
+        $mfUid = (int)($GET['user_id'] ?? 0);
+        if (!$mfUid) fail('user_id required');
+        $tExists = row($db, "SELECT COUNT(*) as n FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='{$px}followup_assignments'");
+        if (!($tExists['n'] ?? 0)) { ok(['complaints' => []]); break; }
+        $mfRows = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
+            s.storecode, s.storename, s.storeemail, s.fmname, s.fmemail, s.empname, s.empmobileno,
+            l.status, l.remarks, l.created as last_updated,
+            esc.closuredate as edc, esc.ticketno, esc.escalationlevel,
+            DATEDIFF(CURDATE(), esc.closuredate) as days_overdue,
+            (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
+            FROM {$px}complaints c
+            JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
+            JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id AND fa.assigned_to=$mfUid
+            WHERE c.is_deleted='No' AND l.status NOT IN ('Closed')
+            ORDER BY esc.closuredate ASC");
+        ok(['complaints' => $mfRows]);
 
     // ── Bulk Not Connected (all pending complaints at a store in one action) ───
     case 'vmm-bulk-not-connected':
