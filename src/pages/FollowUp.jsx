@@ -960,11 +960,34 @@ export default function FollowUp() {
                     </thead>
                     <tbody>
                       {logs.map((l, i) => {
-                        const sc = STATUS_COLORS[l.status] || 'blue';
+                        const sc         = STATUS_COLORS[l.status] || 'blue';
+                        const dMain      = bufStr(l.reasonfordelay);
+                        const dSub       = bufStr(l.subreasonfordelay);
+                        const escEdc     = bufStr(l.closuredate);
+                        const closeEdc   = bufStr(l.closureinformdate);
                         return (
                           <tr key={l.id || i}>
                             <td className="fu-log-date">{fmtDateTime(l.created)}</td>
-                            <td className="fu-log-remarks">{bufStr(l.remarks) || '—'}</td>
+                            <td className="fu-log-remarks">
+                              <div>{bufStr(l.remarks) || '—'}</div>
+                              {dMain && (
+                                <div style={{ marginTop:4 }}>
+                                  <span style={{ display:'inline-block', padding:'2px 8px', borderRadius:6, fontSize:10, fontWeight:700, background:'#fef3c7', color:'#92400e' }}>
+                                    ⏳ {dMain}{dSub ? ` — ${dSub}` : ''}
+                                  </span>
+                                </div>
+                              )}
+                              {escEdc && (
+                                <div style={{ marginTop:3, fontSize:11, color:'#6d28d9' }}>
+                                  📅 EDC — <strong>{fmtDate(escEdc)}</strong>
+                                </div>
+                              )}
+                              {closeEdc && (
+                                <div style={{ marginTop:3, fontSize:11, color:'#16a34a' }}>
+                                  ✓ Closure date — <strong>{fmtDate(closeEdc)}</strong>
+                                </div>
+                              )}
+                            </td>
                             <td><span className={`fu-log-status fu-log-status-${sc}`}>{l.status || 'Open'}</span></td>
                           </tr>
                         );

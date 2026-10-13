@@ -532,6 +532,7 @@ export default function ComplaintDetail() {
                       const delayMain = bufStr(row.reasonfordelay);
                       const delaySub  = bufStr(row.subreasonfordelay);
                       const logEdc    = bufStr(row.closureinformdate);
+                      const escEdc    = bufStr(row.closuredate);
                       const closedBy  = bufStr(row.caseclosedby);
                       // Fall back to remarks-extracted delay only if no dedicated column
                       const delayFallback = !delayMain ? extractDelay(row.remarks) : null;
@@ -563,9 +564,14 @@ export default function ComplaintDetail() {
                                 </span>
                               </div>
                             )}
-                            {logEdc && (
+                            {escEdc && (
                               <div style={{ marginTop:4, fontSize:11, color:'#6d28d9' }}>
-                                📅 EDC — <strong>{fmtDate(logEdc)}</strong>
+                                📅 EDC — <strong>{fmtDate(escEdc)}</strong>
+                              </div>
+                            )}
+                            {logEdc && (
+                              <div style={{ marginTop:4, fontSize:11, color:'#16a34a' }}>
+                                ✓ Closure date — <strong>{fmtDate(logEdc)}</strong>
                               </div>
                             )}
                             {closedBy && (

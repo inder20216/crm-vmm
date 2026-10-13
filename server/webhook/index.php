@@ -464,11 +464,11 @@ try {
             VALUES ($complaintId,'Not Connected',1,'Not Connected','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
         $logid = mysqli_insert_id($db);
 
-        // Update EDC if provided — INSERT if no escalation row exists yet
+        // Update EDC if provided — also update logid so history JOIN links to this NC log
         if ($newEdc) {
             $esc = row($db, "SELECT id FROM {$px}vendorescalations WHERE complaintid=$complaintId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
             if ($esc) {
-                q($db, "UPDATE {$px}vendorescalations SET closuredate='$newEdc', updated=NOW() WHERE id=" . (int)$esc['id']);
+                q($db, "UPDATE {$px}vendorescalations SET closuredate='$newEdc', logid=$logid, updated=NOW() WHERE id=" . (int)$esc['id']);
             } else {
                 q($db, "INSERT INTO {$px}vendorescalations (logid,complaintid,escalationlevel,ticketno,closuredate,uid,uuid,created,updated,is_deleted) VALUES ($logid,$complaintId,1,'','$newEdc',$uid,0,NOW(),NOW(),'No')");
             }
