@@ -237,7 +237,7 @@ export default function FollowUp() {
     setAction(val);
     setClosedBy('');
     if (val === 'Not Connected') {
-      const d = new Date(); d.setDate(d.getDate() + 3);
+      const d = new Date(); d.setDate(d.getDate() + 1);
       setNewEdc(d.toISOString().split('T')[0]);
       setMethod('Call');
       // Pre-fill delay reason from the last log that has one
@@ -1043,7 +1043,7 @@ export default function FollowUp() {
                 {/* Not Connected info */}
                 {action === 'Not Connected' && (
                   <div style={{ padding: '10px 14px', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8, fontSize: 12, color: '#92400e', margin: '4px 0' }}>
-                    ⚡ EDC auto-set to <strong>today + 3 days ({newEdc})</strong>. A reminder email will be sent to the store automatically.
+                    ⚡ EDC auto-set to <strong>tomorrow ({newEdc})</strong>. A reminder email will be sent to the store automatically.
                   </div>
                 )}
 
