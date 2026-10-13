@@ -285,16 +285,18 @@ try {
 
         mysqli_begin_transaction($db);
         try {
+            $tat_days = (int)($b['tat'] ?? 0);
+            $edc_val  = $tat_days > 0 ? "'" . date('Y-m-d', strtotime("+$tat_days days")) . "'" : 'NULL';
             $ins_complaint = "INSERT INTO {$px}complaints
                 (complaintno,storerefid,productid,productcode,productname,producttype,vendorname,vendorid,
-                 productmodel,productlocation,typeofcomplaint,natureofproblem,tat,uid,created,updated,is_deleted)
+                 productmodel,productlocation,typeofcomplaint,natureofproblem,tat,closuredate,uid,created,updated,is_deleted)
                 VALUES (
                 '$complaintno',$storerefid,
                 " . (int)($b['productid']??0) . ",'" . e($db,$b['productCode']??'') . "','" . e($db,$b['productname']??'') . "',
                 '" . e($db,$b['producttype']??'') . "','" . e($db,$b['vendorName']??'') . "'," . (int)($b['vendorId']??0) . ",
                 '" . e($db,$b['productModel']??'') . "','" . e($db,$b['productLocation']??'') . "',
                 '" . e($db,$b['typeOfComplaints']??'') . "','" . e($db,$b['natureOfProblem']??'') . "',
-                " . (int)($b['tat']??0) . "," . (int)($b['uid']??1) . ",NOW(),NOW(),'No')";
+                " . (int)($b['tat']??0) . ",$edc_val," . (int)($b['uid']??1) . ",NOW(),NOW(),'No')";
             q($db, $ins_complaint);
             $complaintid = mysqli_insert_id($db);
 
@@ -357,6 +359,7 @@ try {
         if ($newEdc) {
             q($db, "INSERT INTO {$px}vendorescalations (logid,complaintid,escalationlevel,ticketno,closuredate,uid,created,updated,is_deleted)
                 VALUES ($logid,$complaintId,$escLevel,'$vendorTicketNo','$newEdc',$uid,NOW(),NOW(),'No')");
+            q($db, "UPDATE {$px}complaints SET closuredate='$newEdc', updated=NOW() WHERE id=$complaintId");
         }
         ok(['complaintId' => $complaintId, 'status' => $status]);
 
@@ -389,6 +392,7 @@ try {
         q($db, "INSERT INTO {$px}vendorescalations
             (logid,complaintid,escalationlevel,ticketno,closuredate,uid,uuid,created,updated,is_deleted)
             VALUES ($logid,$complaintId,$escLevel,'$vendorTicketNo','$newEdc',$uid,0,NOW(),NOW(),'No')");
+        if ($newEdc) q($db, "UPDATE {$px}complaints SET closuredate='$newEdc', updated=NOW() WHERE id=$complaintId");
 
         ok(['complaintId' => $complaintId, 'status' => 'Escalated']);
 
@@ -431,6 +435,7 @@ try {
             } else {
                 q($db, "INSERT INTO {$px}vendorescalations (logid,complaintid,escalationlevel,ticketno,closuredate,uid,uuid,created,updated,is_deleted) VALUES ($logid,$complaintId,$escLevel,'$vendorTicketNo','$newEdc',$uid,0,NOW(),NOW(),'No')");
             }
+            q($db, "UPDATE {$px}complaints SET closuredate='$newEdc', updated=NOW() WHERE id=$complaintId");
         }
         ok(['complaintId' => $complaintId, 'closureStatus' => $closureStatus]);
 
@@ -472,6 +477,7 @@ try {
             } else {
                 q($db, "INSERT INTO {$px}vendorescalations (logid,complaintid,escalationlevel,ticketno,closuredate,uid,uuid,created,updated,is_deleted) VALUES ($logid,$complaintId,1,'','$newEdc',$uid,0,NOW(),NOW(),'No')");
             }
+            q($db, "UPDATE {$px}complaints SET closuredate='$newEdc', updated=NOW() WHERE id=$complaintId");
         }
 
         // Fetch store email, FM email and complaint details for the email
@@ -545,11 +551,12 @@ try {
         $uid         = (int)($b['uid']              ?? 1);
         if (!$complaintId || !$newEdc) fail('complaintId and newClosureDate required');
 
-        // Update EDC on latest escalation record
+        // Update EDC on latest escalation record and directly on complaint
         $esc = row($db, "SELECT id FROM {$px}vendorescalations WHERE complaintid=$complaintId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
         if ($esc) {
             q($db, "UPDATE {$px}vendorescalations SET closuredate='$newEdc' WHERE id=" . (int)$esc['id']);
         }
+        q($db, "UPDATE {$px}complaints SET closuredate='$newEdc', updated=NOW() WHERE id=$complaintId");
 
         // Log the EDC update to complaint history
         q($db, "INSERT INTO {$px}complaintlogs
@@ -616,10 +623,11 @@ try {
     // ── Follow-up complaints list ──────────────────────────────────────────────
     case 'vmm-followup-complaints':
         $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
+            c.closuredate as edc,
             s.storecode, s.storename, s.storeemail, s.fmname, s.fmemail, s.empname, s.empmobileno,
             l.status, l.remarks, l.created as last_updated,
-            esc.closuredate as edc, esc.ticketno, esc.escalationlevel,
-            DATEDIFF(CURDATE(), esc.closuredate) as days_overdue,
+            esc.ticketno, esc.escalationlevel,
+            DATEDIFF(CURDATE(), c.closuredate) as days_overdue,
             (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
@@ -635,8 +643,8 @@ try {
         if (!$sfCode) fail('storecode required');
         $sfRows = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname,
             l.status as current_status,
-            esc.closuredate as edc,
-            DATEDIFF(CURDATE(), esc.closuredate) as days_overdue,
+            c.closuredate as edc,
+            DATEDIFF(CURDATE(), c.closuredate) as days_overdue,
             (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
