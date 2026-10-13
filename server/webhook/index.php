@@ -446,20 +446,32 @@ try {
         $hoEmail       = e($db, $b['hoEmail']        ?? '');
         if (!$complaintId) fail('complaintId required');
 
-        // Carry forward delay reason from last log entry (don't reset it)
-        $prevLog   = row($db, "SELECT reasonfordelay, subreasonfordelay FROM {$px}complaintlogs WHERE complaintid=$complaintId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
-        $delayMain = e($db, $prevLog['reasonfordelay']    ?? '');
-        $delaySub  = e($db, $prevLog['subreasonfordelay'] ?? '');
+        // Use delay reason from form if provided, else carry forward from last log
+        $formDelayMain = e($db, $b['delayMain'] ?? '');
+        $formDelaySub  = e($db, $b['delaySub']  ?? '');
+        if ($formDelayMain) {
+            $delayMain = $formDelayMain;
+            $delaySub  = $formDelaySub;
+        } else {
+            $prevLog   = row($db, "SELECT reasonfordelay, subreasonfordelay FROM {$px}complaintlogs WHERE complaintid=$complaintId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
+            $delayMain = e($db, $prevLog['reasonfordelay']    ?? '');
+            $delaySub  = e($db, $prevLog['subreasonfordelay'] ?? '');
+        }
 
         // Log NC action
         q($db, "INSERT INTO {$px}complaintlogs
             (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
             VALUES ($complaintId,'Not Connected',1,'Not Connected','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
+        $logid = mysqli_insert_id($db);
 
-        // Update EDC if provided (auto-dial sets EDC to tomorrow)
+        // Update EDC if provided — INSERT if no escalation row exists yet
         if ($newEdc) {
             $esc = row($db, "SELECT id FROM {$px}vendorescalations WHERE complaintid=$complaintId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
-            if ($esc) q($db, "UPDATE {$px}vendorescalations SET closuredate='$newEdc' WHERE id=" . (int)$esc['id']);
+            if ($esc) {
+                q($db, "UPDATE {$px}vendorescalations SET closuredate='$newEdc', updated=NOW() WHERE id=" . (int)$esc['id']);
+            } else {
+                q($db, "INSERT INTO {$px}vendorescalations (logid,complaintid,escalationlevel,ticketno,closuredate,uid,uuid,created,updated,is_deleted) VALUES ($logid,$complaintId,1,'','$newEdc',$uid,0,NOW(),NOW(),'No')");
+            }
         }
 
         // Fetch store email, FM email and complaint details for the email

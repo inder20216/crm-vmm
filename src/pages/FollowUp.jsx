@@ -235,15 +235,21 @@ export default function FollowUp() {
 
   const changeAction = (val) => {
     setAction(val);
-    setDelayMain(''); setDelaySub(''); setClosedBy('');
+    setClosedBy('');
     if (val === 'Not Connected') {
       const d = new Date(); d.setDate(d.getDate() + 3);
       setNewEdc(d.toISOString().split('T')[0]);
       setMethod('Call');
+      // Pre-fill delay reason from the last log that has one
+      const lastWithReason = [...logs].reverse().find(l => l.reasonfordelay);
+      setDelayMain(lastWithReason?.reasonfordelay  || '');
+      setDelaySub (lastWithReason?.subreasonfordelay || '');
     } else if (val === 'Closed') {
       setNewEdc(new Date().toISOString().split('T')[0]);
+      setDelayMain(''); setDelaySub('');
     } else {
       setNewEdc('');
+      setDelayMain(''); setDelaySub('');
     }
   };
 
@@ -523,6 +529,8 @@ export default function FollowUp() {
           newClosureDate: newEdc || '',
           escalationLevel: nextLevel,
           hoEmail,
+          delayMain,
+          delaySub,
         });
       } else if (action === 'Note') {
         res = await vmm.logEmailActivity({
@@ -590,16 +598,14 @@ export default function FollowUp() {
           }
         } else {
           const ncAdd = action === 'Not Connected' ? 1 : 0;
-          setComplaints(prev => prev.map(c => {
-            if (c.id !== doneId) return c;
-            const edcUpdate = (action === 'Escalated' || action === 'Partially Closed' || action === 'Update EDC') && newEdc
-              ? {
-                  closuredate: newEdc,
-                  days_overdue: Math.round((new Date().setHours(0,0,0,0) - new Date(newEdc).setHours(0,0,0,0)) / 86400000),
-                }
-              : {};
-            return { ...c, current_status: action, nc_count: (c.nc_count || 0) + ncAdd, ...edcUpdate };
-          }));
+          const edcChanged = (action === 'Escalated' || action === 'Partially Closed' || action === 'Update EDC' || action === 'Not Connected') && newEdc;
+          const edcUpdate = edcChanged ? {
+            closuredate:  newEdc,
+            days_overdue: Math.round((new Date().setHours(0,0,0,0) - new Date(newEdc).setHours(0,0,0,0)) / 86400000),
+          } : {};
+          setComplaints(prev => prev.map(c => c.id !== doneId ? c : { ...c, current_status: action, nc_count: (c.nc_count || 0) + ncAdd, ...edcUpdate }));
+          // Keep the detail card in sync with new status/EDC
+          setSelected(prev => prev ? { ...prev, current_status: action, ...(edcChanged ? edcUpdate : {}) } : null);
           if (nextInStore) {
             selectComplaint({ ...nextInStore, store_code: selected.store_code, storeemail: selected.storeemail, fm_email: selected.fm_email, fm_name: selected.fm_name }, true);
           } else {
@@ -1041,8 +1047,8 @@ export default function FollowUp() {
                   </div>
                 )}
 
-                {/* Delay reason — for Partially Closed, Escalated, Update EDC, Closed */}
-                {(action === 'Partially Closed' || action === 'Escalated' || action === 'Update EDC' || action === 'Closed') && (
+                {/* Delay reason — for Partially Closed, Escalated, Update EDC, Closed, Not Connected */}
+                {(action === 'Partially Closed' || action === 'Escalated' || action === 'Update EDC' || action === 'Closed' || action === 'Not Connected') && (
                   <div className="fu-two-col">
                     <div className="fu-form-field">
                       <label className="fu-label">Delay Reason — Main</label>
@@ -1056,7 +1062,7 @@ export default function FollowUp() {
                       <select className="fu-select" value={delaySub} disabled={!delayMain} onChange={e => {
                         const sub = e.target.value;
                         setDelaySub(sub);
-                        if (action !== 'Closed') {
+                        if (action !== 'Closed' && action !== 'Not Connected') {
                           if (sub === 'Payment under process') {
                             setNewEdc(nextPaymentCycleDate().toISOString().split('T')[0]);
                           } else {
