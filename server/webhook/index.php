@@ -32,8 +32,8 @@ function ok($data = [])  { echo json_encode(array_merge(['success'=>true], $data
 function fail($msg, $code = 400) { http_response_code($code); echo json_encode(['success'=>false,'error'=>$msg]); exit; }
 function e($db, $v)       { return mysqli_real_escape_string($db, (string)($v ?? '')); }
 function q($db, $sql)     { $r = mysqli_query($db, $sql); if (!$r) throw new Exception(mysqli_error($db)); return $r; }
-function rows($db, $sql)  { $r = q($db,$sql); $a=[]; while($row=mysqli_fetch_assoc($r)) $a[]=$row; return $a; }
-function row($db, $sql)   { $r = q($db,$sql); return mysqli_fetch_assoc($r) ?: null; }
+function rows($db, $sql)  { $r = q($db,$sql); $a=[]; while($row=mysqli_fetch_assoc($r)) $a[]=$row; mysqli_free_result($r); return $a; }
+function row($db, $sql)   { $r = q($db,$sql); $row = mysqli_fetch_assoc($r); mysqli_free_result($r); return $row ?: null; }
 function now_()           { return date('Y-m-d H:i:s'); }
 function ensureCols($db, $table, $cols) {
     $existing = [];
@@ -449,6 +449,8 @@ try {
         $suppressEmail = !empty($b['suppressEmail']);
         $newEdc        = e($db, $b['newClosureDate'] ?? '');
         $hoEmail       = e($db, $b['hoEmail']        ?? '');
+        $ncMobile      = e($db, $b['mobileCalled']   ?? '');
+        $ncTxnId       = e($db, $b['txnId']          ?? '');
         if (!$complaintId) fail('complaintId required');
 
         // Use delay reason from form if provided, else carry forward from last log
@@ -463,10 +465,14 @@ try {
             $delaySub  = e($db, $prevLog['subreasonfordelay'] ?? '');
         }
 
-        // Log NC action
+        // Inherit the last real case status so the status column stays consistent
+        $prevReal = row($db, "SELECT status FROM {$px}complaintlogs WHERE complaintid=$complaintId AND is_deleted='No' AND status IN ('Logged','Open','Escalated','Closed','Resolved','Partially Closed') ORDER BY id DESC LIMIT 1");
+        $ncStatus = $prevReal['status'] ?? 'Open';
+
+        // Log NC action — fupdonevia marks the action, status carries the real case status
         q($db, "INSERT INTO {$px}complaintlogs
-            (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
-            VALUES ($complaintId,'Not Connected',1,'Not Connected','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
+            (complaintid,status,currentstatus,fupdonevia,mobileno,txnid,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
+            VALUES ($complaintId,'$ncStatus',1,'Not Connected','$ncMobile','$ncTxnId','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
         $logid = mysqli_insert_id($db);
 
         // Update EDC if provided — also update logid so history JOIN links to this NC log
@@ -623,17 +629,19 @@ try {
     // ── Follow-up complaints list ──────────────────────────────────────────────
     case 'vmm-followup-complaints':
         $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
-            c.closuredate as edc,
-            s.storecode, s.storename, s.storeemail, s.fmname, s.fmemail, s.empname, s.empmobileno,
-            l.status, l.remarks, l.created as last_updated,
+            GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) as edc,
+            s.storecode, s.storename, s.storeemail, s.fmname, s.fmemail, s.empname, s.empmobileno, s.emptalternativeno,
+            s.managername, s.managermobileno, s.asmname, s.asmmobileno, s.fmmobileno as fm_mobile,
+            l.status, l.remarks as last_remark, l.reasonfordelay as last_delay_main,
+            l.subreasonfordelay as last_delay_sub, l.created as last_updated,
             esc.ticketno, esc.escalationlevel,
-            DATEDIFF(CURDATE(), c.closuredate) as days_overdue,
+            DATEDIFF(CURDATE(), GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01'))) as days_overdue,
             (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
             JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
             LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
-            WHERE c.is_deleted='No' AND l.status NOT IN ('Closed')
+            WHERE c.is_deleted='No' AND l.status NOT IN ('Closed') AND c.productname != 'Pest Control'
             ORDER BY c.id DESC");
         ok(['complaints' => $r]);
 
@@ -643,17 +651,31 @@ try {
         if (!$sfCode) fail('storecode required');
         $sfRows = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname,
             l.status as current_status,
-            c.closuredate as edc,
-            DATEDIFF(CURDATE(), c.closuredate) as days_overdue,
+            GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) as edc,
+            DATEDIFF(CURDATE(), GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01'))) as days_overdue,
             (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
             JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
             LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
-            WHERE s.storecode='$sfCode' AND c.is_deleted='No' AND l.status NOT IN ('Closed')
-            AND esc.closuredate <= CURDATE()
-            ORDER BY esc.closuredate ASC");
+            WHERE s.storecode='$sfCode' AND c.is_deleted='No' AND l.status NOT IN ('Closed') AND c.productname != 'Pest Control'
+            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()
+            ORDER BY GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) ASC");
         ok(['complaints' => $sfRows]);
+
+    // ── Store employees (call queue) ──────────────────────────────────────────
+    case 'vmm-store-employees':
+        $seCode = e($db, $GET['storecode'] ?? '');
+        if (!$seCode) fail('storecode required');
+        $seRows = rows($db, "SELECT id, code, name, mobileno, alternative, designation
+            FROM {$px}employees
+            WHERE is_deleted='No' AND mobileno != '' AND mobileno != '0'
+            AND LOWER(email) LIKE LOWER(CONCAT('$seCode.%'))
+            ORDER BY
+              CASE WHEN LOWER(designation) LIKE '%sm%' AND LOWER(designation) NOT LIKE '%asm%' THEN 0
+                   WHEN LOWER(designation) LIKE '%asm%' THEN 1
+                   ELSE 2 END, name");
+        ok(['employees' => $seRows]);
 
     // ── Follow-up users list (for assignment dropdown) ────────────────────────
     case 'vmm-followup-users':
@@ -702,18 +724,21 @@ try {
         $tExists = row($db, "SELECT COUNT(*) as n FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='{$px}followup_assignments'");
         if (!($tExists['n'] ?? 0)) { ok(['complaints' => []]); break; }
         $mfRows = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
-            s.storecode, s.storename, s.storeemail, s.fmname, s.fmemail, s.empname, s.empmobileno,
-            l.status, l.remarks, l.created as last_updated,
-            esc.closuredate as edc, esc.ticketno, esc.escalationlevel,
-            DATEDIFF(CURDATE(), esc.closuredate) as days_overdue,
+            s.storecode, s.storename, s.storeemail, s.fmname, s.fmemail, s.empname, s.empmobileno, s.emptalternativeno,
+            s.managername, s.managermobileno, s.asmname, s.asmmobileno, s.fmmobileno as fm_mobile,
+            l.status, l.remarks as last_remark, l.reasonfordelay as last_delay_main,
+            l.subreasonfordelay as last_delay_sub, l.created as last_updated,
+            GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) as edc, esc.ticketno, esc.escalationlevel,
+            DATEDIFF(CURDATE(), GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01'))) as days_overdue,
             (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
             JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
             LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
             JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id AND fa.assigned_to=$mfUid
-            WHERE c.is_deleted='No' AND l.status NOT IN ('Closed')
-            ORDER BY esc.closuredate ASC");
+            WHERE c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
+            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()
+            ORDER BY GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) ASC");
         ok(['complaints' => $mfRows]);
 
     // ── Bulk Not Connected (all pending complaints at a store in one action) ───
@@ -722,15 +747,28 @@ try {
         $bnc    = $body;
         $bncIds = array_values(array_filter(array_map('intval', (array)($bnc['complaintIds'] ?? []))));
         if (!$bncIds) fail('complaintIds required');
-        $bncRem  = e($db, $bnc['remarks']   ?? 'Called - Not Connected');
-        $bncUid  = (int)($bnc['uid']        ?? 1);
-        $bncMain = e($db, $bnc['delayMain'] ?? '');
-        $bncSub  = e($db, $bnc['delaySub']  ?? '');
+        $bncRem    = e($db, $bnc['remarks']        ?? 'Called - Not Connected');
+        $bncUid    = (int)($bnc['uid']             ?? 1);
+        $bncMain   = e($db, $bnc['delayMain']      ?? '');
+        $bncSub    = e($db, $bnc['delaySub']       ?? '');
+        $bncEdc    = e($db, $bnc['newClosureDate']  ?? date('Y-m-d', strtotime('+1 day')));
+        $bncMobile = e($db, $bnc['mobileCalled']    ?? '');
+        $bncTxnId  = e($db, $bnc['txnId']           ?? '');
+
+        // Batch-fetch the last real case status for all complaints being processed
+        $bncIdStr = implode(',', $bncIds);
+        $bncRsRows = rows($db, "SELECT l.complaintid, l.status FROM {$px}complaintlogs l WHERE l.id IN (SELECT MAX(l2.id) FROM {$px}complaintlogs l2 WHERE l2.complaintid IN ($bncIdStr) AND l2.is_deleted='No' AND l2.status IN ('Logged','Open','Escalated','Closed','Resolved','Partially Closed') GROUP BY l2.complaintid)");
+        $bncStatusMap = [];
+        foreach ($bncRsRows as $rs) $bncStatusMap[(int)$rs['complaintid']] = $rs['status'];
 
         foreach ($bncIds as $bncId) {
+            $bncStatus = $bncStatusMap[$bncId] ?? 'Open';
             q($db, "INSERT INTO {$px}complaintlogs
-                (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
-                VALUES ($bncId,'Not Connected',1,'Not Connected','$bncMain','$bncSub','$bncRem',$bncUid,NOW(),NOW(),'No')");
+                (complaintid,status,currentstatus,fupdonevia,mobileno,txnid,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
+                VALUES ($bncId,'$bncStatus',1,'Not Connected','$bncMobile','$bncTxnId','$bncMain','$bncSub','$bncRem',$bncUid,NOW(),NOW(),'No')");
+            $bncLogId = mysqli_insert_id($db);
+            q($db, "UPDATE {$px}vendorescalations SET closuredate='$bncEdc', logid=$bncLogId, updated=NOW() WHERE complaintid=$bncId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
+            q($db, "UPDATE {$px}complaints SET closuredate='$bncEdc', updated=NOW() WHERE id=$bncId");
         }
 
         // Fetch store email from first complaint
@@ -744,10 +782,9 @@ try {
             // Build complaint table rows for email
             $bncIdList = implode(',', $bncIds);
             $bncCRows = rows($db, "SELECT c.complaintno, c.productname,
-                esc.closuredate as edc, DATEDIFF(CURDATE(), esc.closuredate) as days_overdue
+                c.closuredate as edc, DATEDIFF(CURDATE(), c.closuredate) as days_overdue
                 FROM {$px}complaints c
-                LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
-                WHERE c.id IN ($bncIdList) ORDER BY esc.closuredate ASC");
+                WHERE c.id IN ($bncIdList) ORDER BY c.closuredate ASC");
 
             $bncTableRows = '';
             foreach ($bncCRows as $br) {
@@ -800,14 +837,7 @@ try {
                 $bncEmailSent = (curl_getinfo($bncCh2, CURLINFO_HTTP_CODE) < 300);
                 curl_close($bncCh2);
 
-                if ($bncEmailSent) {
-                    $bncNote = e($db, "Bulk NC email sent to $bncTo" . ($bncCC ? " (CC: $bncCC)" : '') . " — $bncCnt complaints");
-                    foreach ($bncIds as $bncId) {
-                        q($db, "INSERT INTO {$px}complaintlogs
-                            (complaintid,status,currentstatus,fupdonevia,remarks,uid,created,updated,is_deleted)
-                            VALUES ($bncId,'Not Connected',1,'Email Sent','$bncNote',$bncUid,NOW(),NOW(),'No')");
-                    }
-                }
+                // Email sent — do NOT insert extra complaintlogs entries; latest log must remain the NC log
             }
         }
         ok(['success'=>true,'logged'=>count($bncIds),'emailSent'=>$bncEmailSent]);
@@ -823,16 +853,19 @@ try {
         if ($q_text) $where .= " AND (c.complaintno LIKE '%$q_text%' OR s.storecode LIKE '%$q_text%' OR s.storename LIKE '%$q_text%' OR c.productname LIKE '%$q_text%' OR esc.ticketno LIKE '%$q_text%')";
         if ($from)   $where .= " AND c.created >= '$from 00:00:00'";
         if ($to)     $where .= " AND c.created <= '$to 23:59:59'";
-        if ($status) $where .= " AND l.status='$status'";
-        if ($edc)    $where .= " AND esc.closuredate <= '$edc 23:59:59'";
+        $realStatuses = "'Logged','Open','Escalated','Closed','Resolved','Partially Closed'";
+        if ($status === 'Pending')  $where .= " AND l.status NOT IN ('Closed','Resolved')";
+        elseif ($status === 'Resolved') $where .= " AND l.status IN ('Closed','Resolved')";
+        elseif ($status) $where .= " AND l.status='$status'";
+        if ($edc)    $where .= " AND c.closuredate <= '$edc'";
         $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
             s.storecode, s.storename, s.fmname,
             l.status, l.remarks,
-            esc.closuredate as edc, esc.ticketno,
+            c.closuredate as edc, esc.ticketno,
             DATEDIFF(NOW(), c.created) as aging
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
-            JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+            JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No' AND l2.status IN ($realStatuses))) l ON l.complaintid=c.id
             LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
             WHERE $where ORDER BY c.id DESC LIMIT 500");
         ok(['complaints' => $r]);
@@ -961,6 +994,10 @@ try {
                 IFNULL(delay_log.subreasonfordelay, '')                  AS 'Last Sub Reason for Delay',
                 IFNULL(delay_log.reasonfordelay, '')                     AS 'Reason for Delay',
                 last_log.status                                          AS 'Current Status',
+                CASE
+                    WHEN c.closuredate IS NULL AND feed_esc.closuredate IS NULL THEN ''
+                    ELSE DATE_FORMAT(GREATEST(IFNULL(c.closuredate,'1970-01-01'), IFNULL(feed_esc.closuredate,'1970-01-01')), '%d-%m-%Y')
+                END                                                      AS 'EDC',
                 DATE_FORMAT(last_log.created, '%d-%m-%Y %H:%i:%s')      AS 'Last Updated Datetime'
             FROM {$px}complaints c
             JOIN {$px}complaintstores cs ON cs.id = c.storerefid AND cs.is_deleted = 'No'
@@ -982,6 +1019,12 @@ try {
                 WHERE l1.is_deleted = 'No' AND l1.reasonfordelay != ''
                   AND l1.id = (SELECT MAX(l2.id) FROM {$px}complaintlogs l2 WHERE l2.complaintid = l1.complaintid AND l2.is_deleted = 'No' AND l2.reasonfordelay != '')
             ) delay_log ON delay_log.complaintid = c.id
+            LEFT JOIN (
+                SELECT e1.complaintid, e1.closuredate
+                FROM {$px}vendorescalations e1
+                WHERE e1.is_deleted = 'No'
+                  AND e1.id = (SELECT MAX(e2.id) FROM {$px}vendorescalations e2 WHERE e2.complaintid = e1.complaintid AND e2.is_deleted = 'No')
+            ) feed_esc ON feed_esc.complaintid = c.id
             WHERE c.is_deleted = 'No'
               AND (
                 DATE(c.created) = '$feedDate'

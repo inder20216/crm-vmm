@@ -100,9 +100,12 @@ export default function FollowUp() {
   const [assignUserId,      setAssignUserId]      = useState('');
   const [assignedComplaints, setAssignedComplaints] = useState([]);
   const [assignedLoading,   setAssignedLoading]   = useState(false);
-  const [qsMode,  setQsMode]  = useState('after');
-  const [qsDate1, setQsDate1] = useState('');
-  const [qsDate2, setQsDate2] = useState('');
+  const [qsMode,       setQsMode]       = useState('after');
+  const [qsDate1,      setQsDate1]      = useState('');
+  const [qsDate2,      setQsDate2]      = useState('');
+  const [compactView,  setCompactView]  = useState(false);
+  const [calledNums,      setCalledNums]      = useState(new Set());
+  const [storeEmployees,  setStoreEmployees]  = useState([]);
 
   // Auto-dial state (refs keep callbacks stale-closure-free)
   const [autoMode,        setAutoMode]        = useState(false);
@@ -111,17 +114,27 @@ export default function FollowUp() {
   const [autoCallState,   setAutoCallState]   = useState('idle'); // idle|dialing|form|auto-nc|disconnected
   const [isRedial,        setIsRedial]        = useState(false);
   const [showRedialModal, setShowRedialModal] = useState(false);
+  const [redialCtx,       setRedialCtx]       = useState('nc');  // 'nc'|'done'|'disconnected'
+  const [pinRemarks,      setPinRemarks]      = useState(false);
+  const [dialingEmp,      setDialingEmp]      = useState(null);  // { name, designation, num }
   const autoModeRef      = useRef(false);
   const autoQueueRef     = useRef([]);
   const autoIndexRef     = useRef(0);
   const isRedialRef      = useRef(false);
   const autoCallStateRef = useRef('idle');
+  const dialedPhoneRef      = useRef('');
+  const txnIdRef            = useRef('');
+  const pinRemarksRef       = useRef(false);
+  const storeEmpQueueRef    = useRef([]);
+  const storeEmpIdxRef      = useRef(0);
+  const dialEmpAtIndexRef   = useRef(null);
 
   const syncAutoMode      = (v) => { autoModeRef.current      = v; setAutoMode(v); };
   const syncAutoQueue     = (v) => { autoQueueRef.current     = v; setAutoQueue(v); };
   const syncAutoIndex     = (v) => { autoIndexRef.current     = v; setAutoIndex(v); };
   const syncIsRedial      = (v) => { isRedialRef.current      = v; setIsRedial(v); };
   const syncAutoCallState = (v) => { autoCallStateRef.current = v; setAutoCallState(v); };
+  const syncPinRemarks    = (v) => { pinRemarksRef.current    = v; setPinRemarks(v); };
 
   // Form state
   const [method,       setMethod]       = useState('Call');
@@ -171,14 +184,19 @@ export default function FollowUp() {
           fm_name:         bufStr(c.fmname     || c.fm_name),
           fm_mobile:       bufStr(c.fm_mobile),
           fm_email:        bufStr(c.fmemail    || c.fm_email),
-          empname:         bufStr(c.empname),
-          empmobileno:     bufStr(c.empmobileno),
-          closuredate:     bufStr(c.edc        || c.closuredate),
-          days_overdue:    parseInt(c.days_overdue) || 0,
-          nc_count:        parseInt(c.nc_count)     || 0,
-          managername:     bufStr(c.managername),
-          managermobileno: bufStr(c.managermobileno),
-          last_remark:     bufStr(c.last_remark),
+          empname:           bufStr(c.empname),
+          empmobileno:       bufStr(c.empmobileno),
+          emptalternativeno: bufStr(c.emptalternativeno),
+          asmname:           bufStr(c.asmname),
+          asmmobileno:       bufStr(c.asmmobileno),
+          closuredate:      bufStr(c.edc        || c.closuredate),
+          days_overdue:     parseInt(c.days_overdue) || 0,
+          nc_count:         parseInt(c.nc_count)     || 0,
+          managername:      bufStr(c.managername),
+          managermobileno:  bufStr(c.managermobileno),
+          last_remark:      bufStr(c.last_remark),
+          last_delay_main:  bufStr(c.last_delay_main),
+          last_delay_sub:   bufStr(c.last_delay_sub),
         })));
       })
       .catch(() => {})
@@ -204,14 +222,19 @@ export default function FollowUp() {
           fm_name:          bufStr(c.fmname     || c.fm_name),
           fm_mobile:        bufStr(c.fm_mobile),
           fm_email:         bufStr(c.fmemail    || c.fm_email),
-          empname:          bufStr(c.empname),
-          empmobileno:      bufStr(c.empmobileno),
-          closuredate:      bufStr(c.edc       || c.closuredate),
-          days_overdue:     parseInt(c.days_overdue) || 0,
-          nc_count:         parseInt(c.nc_count)     || 0,
-          managername:      bufStr(c.managername),
-          managermobileno:  bufStr(c.managermobileno),
+          empname:           bufStr(c.empname),
+          empmobileno:       bufStr(c.empmobileno),
+          emptalternativeno: bufStr(c.emptalternativeno),
+          asmname:           bufStr(c.asmname),
+          asmmobileno:       bufStr(c.asmmobileno),
+          closuredate:       bufStr(c.edc       || c.closuredate),
+          days_overdue:      parseInt(c.days_overdue) || 0,
+          nc_count:          parseInt(c.nc_count)     || 0,
+          managername:       bufStr(c.managername),
+          managermobileno:   bufStr(c.managermobileno),
           last_remark:      bufStr(c.last_remark),
+          last_delay_main:  bufStr(c.last_delay_main),
+          last_delay_sub:   bufStr(c.last_delay_sub),
         })));
       })
       .catch(() => {})
@@ -225,12 +248,13 @@ export default function FollowUp() {
 
   const resetForm = (c) => {
     setMethod('Call');
-    setTxnId('');
-    setMobileCalled(c?.empmobileno || c?.fm_mobile || c?.managermobileno || '');
+    setTxnId(''); txnIdRef.current = '';
+    setMobileCalled('');
     setVendorTicket('');
-    setAction('Partially Closed');
+    setAction('');
     setDelayMain(''); setDelaySub(''); setNewEdc('');
-    setClosedBy(''); setRemarks('');
+    if (!pinRemarksRef.current) setRemarks('');
+    setClosedBy('');
   };
 
   const changeAction = (val) => {
@@ -240,10 +264,10 @@ export default function FollowUp() {
       const d = new Date(); d.setDate(d.getDate() + 1);
       setNewEdc(d.toISOString().split('T')[0]);
       setMethod('Call');
-      // Pre-fill delay reason from the last log that has one
+      // Pre-fill delay reason from the last log that has one, or from complaint card data
       const lastWithReason = [...logs].reverse().find(l => l.reasonfordelay);
-      setDelayMain(lastWithReason?.reasonfordelay  || '');
-      setDelaySub (lastWithReason?.subreasonfordelay || '');
+      setDelayMain(lastWithReason?.reasonfordelay   || selected?.last_delay_main || '');
+      setDelaySub (lastWithReason?.subreasonfordelay || selected?.last_delay_sub  || '');
     } else if (val === 'Closed') {
       setNewEdc(new Date().toISOString().split('T')[0]);
       setDelayMain(''); setDelaySub('');
@@ -256,6 +280,8 @@ export default function FollowUp() {
   const selectComplaint = (c, keepStorePanel = false) => {
     setSubmitting(false);
     setSelected(c);
+    setCalledNums(new Set());
+    setStoreEmployees([]);
     resetForm(c);
     setLogs([]);
     setLogsLoading(true);
@@ -273,15 +299,19 @@ export default function FollowUp() {
         .then(res => { if (res.success) setStoreComplaints(res.complaints || []); })
         .catch(() => {})
         .finally(() => setStoreLoading(false));
+      vmm.getStoreEmployees(c.store_code)
+        .then(res => { if (res.success) setStoreEmployees(res.employees || []); })
+        .catch(() => {});
     }
   };
 
-  const handleCallStore = () => {
-    const num = (selected?.empmobileno || '').replace(/\D/g, '');
-    if (!num) return;
-    setMobileCalled(num);
+  const handleCallStore = (num) => {
+    const n = (num || selected?.empmobileno || '').replace(/\D/g, '');
+    if (!n) return;
+    setMobileCalled(n);
+    setCalledNums(prev => new Set([...prev, n]));
     changeAction('Not Connected');
-    window.__vmmDial?.(num);
+    window.__vmmDial?.(n);
   };
 
   const handleBulkNC = async () => {
@@ -289,11 +319,23 @@ export default function FollowUp() {
     setSubmitting(true);
     try {
       const ids = storeComplaints.map(c => c.id);
-      const res = await vmm.bulkNotConnected({ complaintIds: ids, remarks: remarks || 'Called - Not Connected', uid: 1 });
+      const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+      const bncEdc = tomorrow.toISOString().split('T')[0];
+      const res = await vmm.bulkNotConnected({
+        complaintIds: ids,
+        remarks: remarks || 'Called - Not Connected',
+        uid: currentUser?.id || 1,
+        newClosureDate: bncEdc,
+        delayMain,
+        delaySub,
+        mobileCalled,
+        txnId,
+      });
       if (res?.success) {
         showToast(`NC logged for ${res.logged} complaint(s)${res.emailSent ? ' · email sent to store' : ''}`, 'ok');
         const idSet = new Set(ids);
-        setComplaints(prev => prev.map(c => idSet.has(c.id) ? { ...c, current_status: 'Not Connected', nc_count: (c.nc_count || 0) + 1 } : c));
+        const bncDaysOverdue = Math.round((new Date().setHours(0,0,0,0) - new Date(bncEdc).setHours(0,0,0,0)) / 86400000);
+        setComplaints(prev => prev.map(c => idSet.has(c.id) ? { ...c, current_status: 'Not Connected', nc_count: (c.nc_count || 0) + 1, closuredate: bncEdc, days_overdue: bncDaysOverdue } : c));
         setStoreComplaints([]);
         setLogsLoading(true);
         vmm.getComplaintDetail(selected.id)
@@ -331,24 +373,55 @@ export default function FollowUp() {
     else if (qsMode === 'between' && qsDate2)   selectByEdc(edc => edc >= qsDate1 && edc <= qsDate2);
   };
 
-  // ── Auto-dial ────────────────────────────────────────────────────────────────
+  // ── Auto-dial helpers ────────────────────────────────────────────────────────
+  // Dial the employee at position idx within the current store's emp queue.
+  // If all exhausted → trigger auto-NC.
+  const dialEmpAtIndex = useCallback((idx) => {
+    const emps = storeEmpQueueRef.current;
+    if (idx >= emps.length) {
+      syncAutoCallState('auto-nc');
+      return;
+    }
+    const emp = emps[idx];
+    storeEmpIdxRef.current = idx;
+    const phone = (emp.mobileno || '').replace(/\D/g, '');
+    if (!phone) { syncAutoCallState('auto-nc'); return; }
+    dialedPhoneRef.current = phone;
+    setDialingEmp({ name: emp.name, designation: emp.designation, num: emp.mobileno });
+    syncAutoCallState('dialing');
+    window.__vmmDial?.(phone);
+  }, []);
+
+  // Keep stable ref so __vmmOnCallEnded (registered once) can always call the latest version
+  useEffect(() => { dialEmpAtIndexRef.current = dialEmpAtIndex; }, [dialEmpAtIndex]);
+
   const dialAutoNext = useCallback((nextIdx) => {
     const queue = autoQueueRef.current;
     if (nextIdx >= queue.length) {
       syncAutoMode(false);
       syncAutoCallState('idle');
+      setShowRedialModal(false);
       return;
     }
     syncAutoIndex(nextIdx);
     syncIsRedial(false);
+    setShowRedialModal(false);
     const c = queue[nextIdx];
     selectComplaint(c);
-    changeAction('Not Connected');
-    const phone = (c.empmobileno || c.managermobileno || '').replace(/\D/g, '');
-    if (phone) {
-      setTimeout(() => { syncAutoCallState('dialing'); window.__vmmDial?.(phone); }, 1200);
+
+    if (c.store_code) {
+      vmm.getStoreEmployees(c.store_code)
+        .then(res => {
+          const all = res.employees || [];
+          const d = (e) => (e.designation || '').toLowerCase();
+          const smAsm = all.filter(e => d(e).includes('sm') || d(e).includes('asm'));
+          storeEmpQueueRef.current = smAsm.length ? smAsm : all.slice(0, 1);
+          storeEmpIdxRef.current = 0;
+          dialEmpAtIndexRef.current?.(0);
+        })
+        .catch(() => dialAutoNext(nextIdx + 1));
     } else {
-      dialAutoNext(nextIdx + 1); // no phone — skip
+      dialAutoNext(nextIdx + 1);
     }
   }, []);
 
@@ -356,18 +429,27 @@ export default function FollowUp() {
     const c = autoQueueRef.current[autoIndexRef.current];
     if (!c) return;
     const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
-    const newEdc = tomorrow.toISOString().split('T')[0];
+    const bncEdc = tomorrow.toISOString().split('T')[0];
     try {
       await vmm.notConnected({
-        complaintId: c.id, complaintno: c.complaintno,
-        remarks: isRedialRef.current ? 'Auto-dial: Not Connected (redial — no email)' : 'Auto-dial: Not Connected',
-        uid: 1, newClosureDate: newEdc, suppressEmail: true,
+        complaintId:    c.id,
+        complaintno:    c.complaintno,
+        remarks:        isRedialRef.current ? 'Called - Not Connected (Redial)' : 'Called - Not Connected',
+        uid:            currentUser?.id || 1,
+        newClosureDate: bncEdc,
+        suppressEmail:  isRedialRef.current,
+        followupMethod: 'Call',
+        mobileCalled:   dialedPhoneRef.current || '',
+        txnId:          txnIdRef.current || '',
       });
-      const upd = { current_status: 'Not Connected', nc_count: (c.nc_count || 0) + 1, closuredate: newEdc };
-      setComplaints(prev       => prev.map(x => x.id === c.id ? { ...x, ...upd } : x));
+      const upd = { current_status: 'Not Connected', nc_count: (c.nc_count || 0) + 1, closuredate: bncEdc };
+      setComplaints(prev         => prev.map(x => x.id === c.id ? { ...x, ...upd } : x));
       setAssignedComplaints(prev => prev.map(x => x.id === c.id ? { ...x, ...upd } : x));
-    } catch { /* silent — still advance */ }
-    dialAutoNext(autoIndexRef.current + 1);
+      setSelected(prev           => prev?.id === c.id ? { ...prev, ...upd } : prev);
+    } catch { /* silent */ }
+    syncAutoCallState('idle');
+    setRedialCtx('nc');
+    setShowRedialModal(true);
   }, []);
 
   const startAutoDial = () => {
@@ -382,33 +464,52 @@ export default function FollowUp() {
 
   const stopAutoDial = () => { syncAutoMode(false); syncAutoCallState('idle'); setShowRedialModal(false); };
 
-  const handleAutoConnected = () => syncAutoCallState('form');
-
   const handleRedial = () => {
     setShowRedialModal(false);
     syncIsRedial(true);
     const c = autoQueueRef.current[autoIndexRef.current];
-    const phone = (c?.empmobileno || c?.managermobileno || '').replace(/\D/g, '');
-    if (phone) { syncAutoCallState('dialing'); window.__vmmDial?.(phone); }
+    if (!c) return;
+    // Redial restarts from the first employee
+    storeEmpIdxRef.current = 0;
+    dialEmpAtIndexRef.current?.(0);
   };
 
-  const handleContinueNext = () => { setShowRedialModal(false); dialAutoNext(autoIndexRef.current + 1); };
+  const handleContinueNext = async () => {
+    setShowRedialModal(false);
+    if (redialCtx === 'disconnected') {
+      // Call ended without form submit — log NC then advance
+      await doAutoNC();
+    } else {
+      dialAutoNext(autoIndexRef.current + 1);
+    }
+  };
 
   // Register call-ended callback once (uses refs — no stale closures)
   useEffect(() => {
     window.__vmmOnCallEnded = () => {
       if (!autoModeRef.current) return;
       const cs = autoCallStateRef.current;
-      if (cs === 'dialing')    syncAutoCallState('auto-nc');
-      else if (cs === 'form')  syncAutoCallState('disconnected');
+      if (cs === 'dialing') {
+        // Try the next SM/ASM employee before logging NC
+        const nextEmpIdx = storeEmpIdxRef.current + 1;
+        if (nextEmpIdx < storeEmpQueueRef.current.length) {
+          dialEmpAtIndexRef.current?.(nextEmpIdx);
+        } else {
+          // All employees tried — auto-log NC
+          syncAutoCallState('auto-nc');
+        }
+      } else if (cs === 'form') {
+        syncAutoCallState('disconnected');
+        setRedialCtx('disconnected');
+        setShowRedialModal(true);
+      }
     };
     return () => { delete window.__vmmOnCallEnded; };
   }, []);
 
   // React to auto-dial state transitions
   useEffect(() => {
-    if (autoCallState === 'auto-nc')     doAutoNC();
-    if (autoCallState === 'disconnected') setShowRedialModal(true);
+    if (autoCallState === 'auto-nc') doAutoNC();
   }, [autoCallState, doAutoNC]);
 
   const handleAssign = async () => {
@@ -432,11 +533,14 @@ export default function FollowUp() {
     finally { setSubmitting(false); }
   };
 
-  // Auto-populate txnId when SparkTG fires the call-started event (outbound)
+  // Auto-populate txnId/mobileCalled from SparkTG; auto-transition to form in auto-dial
   useEffect(() => {
     window.__vmmOnCallStarted = (callId, phone) => {
-      if (callId) setTxnId(String(callId));
+      if (callId) { setTxnId(String(callId)); txnIdRef.current = String(callId); }
       if (phone)  setMobileCalled(phone.replace(/\D/g, ''));
+      if (autoModeRef.current && autoCallStateRef.current === 'dialing') {
+        syncAutoCallState('form');
+      }
     };
     return () => { delete window.__vmmOnCallStarted; };
   }, []);
@@ -494,7 +598,7 @@ export default function FollowUp() {
 
   const handleSubmit = async () => {
     if (!selected) return;
-    if ((action === 'Partially Closed' || action === 'Escalated' || action === 'Closed' || action === 'Update EDC') && !newEdc) {
+    if ((action === 'Partially Closed' || action === 'Escalated' || action === 'Closed') && !newEdc) {
       showToast('Date of closure is required', 'err'); return;
     }
     if (!remarks.trim() && action !== 'Closed' && action !== 'Not Connected') {
@@ -503,21 +607,11 @@ export default function FollowUp() {
 
     setSubmitting(true);
     try {
-      const uid = 1;
+      const uid = currentUser?.id || 1;
       const nextLevel = (selected.escalationlevel || 0) + 1;
       let res;
 
-      if (action === 'Update EDC') {
-        res = await vmm.updateEdc({
-          complaintId:     selected.id,
-          newClosureDate:  newEdc,
-          escalationLevel: nextLevel,
-          delayMain,
-          delaySub,
-          remarks,
-          uid,
-        });
-      } else if (action === 'Not Connected') {
+      if (action === 'Not Connected') {
         const hoEmail = (HO_POC[selected.productname] || HO_POC['DEFAULT'])?.email || '';
         res = await vmm.notConnected({
           complaintId: selected.id,
@@ -560,9 +654,10 @@ export default function FollowUp() {
 
       if (res?.success !== false && !res?.error) {
         showToast(`${selected.complaintno} updated — ${action}`, 'ok');
-        if (autoModeRef.current && autoCallStateRef.current === 'form') {
+        if (autoModeRef.current) {
           syncAutoCallState('idle');
-          setTimeout(() => dialAutoNext(autoIndexRef.current + 1), 1200);
+          setRedialCtx('done');
+          setShowRedialModal(true);
         }
 
         // Email is sent server-side inside vmm-not-connected PHP endpoint
@@ -598,14 +693,17 @@ export default function FollowUp() {
           }
         } else {
           const ncAdd = action === 'Not Connected' ? 1 : 0;
-          const edcChanged = (action === 'Escalated' || action === 'Partially Closed' || action === 'Update EDC' || action === 'Not Connected') && newEdc;
+          const edcChanged = (action === 'Escalated' || action === 'Partially Closed' || action === 'Not Connected') && newEdc;
           const edcUpdate = edcChanged ? {
             closuredate:  newEdc,
             days_overdue: Math.round((new Date().setHours(0,0,0,0) - new Date(newEdc).setHours(0,0,0,0)) / 86400000),
           } : {};
-          setComplaints(prev => prev.map(c => c.id !== doneId ? c : { ...c, current_status: action, nc_count: (c.nc_count || 0) + ncAdd, ...edcUpdate }));
-          // Keep the detail card in sync with new status/EDC
-          setSelected(prev => prev ? { ...prev, current_status: action, ...(edcChanged ? edcUpdate : {}) } : null);
+          const delayUpdate = (action === 'Not Connected' || action === 'Escalated' || action === 'Partially Closed') && delayMain
+            ? { last_delay_main: delayMain, last_delay_sub: delaySub }
+            : {};
+          setComplaints(prev => prev.map(c => c.id !== doneId ? c : { ...c, current_status: action, nc_count: (c.nc_count || 0) + ncAdd, ...edcUpdate, ...delayUpdate }));
+          // Keep the detail card in sync with new status/EDC/delay
+          setSelected(prev => prev ? { ...prev, current_status: action, ...(edcChanged ? edcUpdate : {}), ...delayUpdate } : null);
           if (nextInStore) {
             selectComplaint({ ...nextInStore, store_code: selected.store_code, storeemail: selected.storeemail, fm_email: selected.fm_email, fm_name: selected.fm_name }, true);
           } else {
@@ -738,6 +836,13 @@ export default function FollowUp() {
               >
                 {sortOrder === 'oldest' ? '↑ Oldest' : '↓ Newest'}
               </button>
+              <button
+                className={`fu-sort-btn${compactView ? ' active' : ''}`}
+                onClick={() => setCompactView(v => !v)}
+                title={compactView ? 'Switch to individual complaint view' : 'Switch to compact store view'}
+              >
+                {compactView ? '≡ Detail' : '⊞ Store'}
+              </button>
             </div>
           </div>
 
@@ -758,7 +863,70 @@ export default function FollowUp() {
             <div className="fu-list-empty">Loading…</div>
           ) : displayed.length === 0 ? (
             <div className="fu-list-empty">{filter === 'mine' ? 'No complaints assigned to you.' : 'No complaints found.'}</div>
-          ) : (
+          ) : compactView ? (() => {
+            // Build store groups
+            const storeMap = new Map();
+            for (const c of displayed) {
+              const key = c.store_code || '—';
+              if (!storeMap.has(key)) storeMap.set(key, { store_code: c.store_code, store_name: bufStr(c.store_name), fm_name: c.fm_name || c.fmname || '', complaints: [], overdue: 0, minEdc: null });
+              const g = storeMap.get(key);
+              g.complaints.push(c);
+              if ((c.days_overdue ?? 0) > 0) g.overdue++;
+              const edc = c.closuredate || c.edc || null;
+              if (edc && (!g.minEdc || edc < g.minEdc)) g.minEdc = edc;
+            }
+            const groups = [...storeMap.values()].sort((a, b) => {
+              const da = new Date(a.minEdc || '9999-12-31');
+              const db = new Date(b.minEdc || '9999-12-31');
+              return sortOrder === 'oldest' ? da - db : db - da;
+            });
+            return (
+              <div className="fu-list">
+                {groups.map(g => {
+                  const allSel = assignMode && g.complaints.length > 0 && g.complaints.every(c => selectedIds.has(c.id));
+                  const someSel = assignMode && !allSel && g.complaints.some(c => selectedIds.has(c.id));
+                  return (
+                    <div
+                      key={g.store_code}
+                      className={`fu-store-group-row${allSel ? ' fu-row-selected' : ''}${someSel ? ' fu-row-partial' : ''}`}
+                      onClick={() => {
+                        if (assignMode) {
+                          setSelectedIds(prev => {
+                            const next = new Set(prev);
+                            if (allSel) g.complaints.forEach(c => next.delete(c.id));
+                            else g.complaints.forEach(c => next.add(c.id));
+                            return next;
+                          });
+                        } else {
+                          selectComplaint(g.complaints[0]);
+                        }
+                      }}
+                    >
+                      {assignMode && (
+                        <input
+                          type="checkbox"
+                          className="fu-row-check"
+                          readOnly
+                          checked={allSel}
+                          ref={el => { if (el) el.indeterminate = someSel; }}
+                          onClick={e => e.stopPropagation()}
+                        />
+                      )}
+                      <div className="fu-sgr-main">
+                        <span className="fu-sgr-code">{g.store_code}</span>
+                        <span className="fu-sgr-name">{g.store_name}</span>
+                      </div>
+                      <div className="fu-sgr-meta">
+                        {g.overdue > 0 && <span className="fu-badge fu-badge-red">{g.overdue} overdue</span>}
+                        <span className="fu-badge fu-badge-blue">{g.complaints.length} pending</span>
+                      </div>
+                      {g.fm_name && <div className="fu-sgr-fm">FM: {g.fm_name}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })() : (
             <div className="fu-list">
               {displayed.map(c => (
                 <div
@@ -792,22 +960,37 @@ export default function FollowUp() {
                   <div className="fu-row-store">{c.store_code} · {bufStr(c.store_name)}</div>
                   <div className="fu-row-product">{bufStr(c.productname)} {c.vendorname ? `· ${c.vendorname}` : ''}</div>
                   <div className="fu-row-edc">EDC: {fmtDate(c.closuredate)}</div>
+                  {c.last_delay_main && (
+                    <div className="fu-row-delay">⏳ {c.last_delay_main}{c.last_delay_sub ? ` — ${c.last_delay_sub}` : ''}</div>
+                  )}
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {/* ── Redial Modal ── */}
+        {/* ── Redial / Continue Modal ── */}
         {showRedialModal && (
           <div className="fu-redial-overlay">
             <div className="fu-redial-modal">
-              <div className="fu-rm-icon">📞</div>
-              <h3 className="fu-rm-title">Call Disconnected</h3>
-              <p className="fu-rm-body">The call ended before you submitted the follow-up. What would you like to do?</p>
+              <div className="fu-rm-icon">
+                {redialCtx === 'done' ? '✅' : redialCtx === 'nc' ? '📵' : '⚠️'}
+              </div>
+              <h3 className="fu-rm-title">
+                {redialCtx === 'done'         ? 'Submitted!'
+                  : redialCtx === 'nc'        ? 'Not Connected — Logged'
+                  : 'Call Ended'}
+              </h3>
+              <p className="fu-rm-body">
+                {redialCtx === 'done'         ? 'Follow-up logged. What next?'
+                  : redialCtx === 'nc'        ? 'NC logged automatically. What next?'
+                  : 'Call ended before submission. Continue will log this as NC.'}
+              </p>
               <div className="fu-rm-btns">
-                <button className="fu-rm-redial" onClick={handleRedial}>📞 Redial same number</button>
-                <button className="fu-rm-next"   onClick={handleContinueNext}>→ Continue with next</button>
+                <button className="fu-rm-redial" onClick={handleRedial}>📞 Redial</button>
+                <button className="fu-rm-next"   onClick={handleContinueNext}>
+                  {redialCtx === 'disconnected' ? '📵 NC & Next' : '→ Next'}
+                </button>
               </div>
               <button className="fu-rm-stop" onClick={stopAutoDial}>⏹ Stop Auto-Dial</button>
             </div>
@@ -829,13 +1012,19 @@ export default function FollowUp() {
               </div>
               {autoCallState === 'dialing' && (
                 <div className="fu-ad-actions">
-                  <div className="fu-ad-ringing">📡 Dialing…</div>
-                  <button className="fu-ad-connected" onClick={handleAutoConnected}>✅ Connected</button>
-                  <button className="fu-ad-nc-btn" onClick={() => syncAutoCallState('auto-nc')}>📵 Not Connected</button>
+                  <div className="fu-ad-ringing">
+                    📡 Dialing
+                    {dialingEmp && <span className="fu-ad-emp"> {dialingEmp.name} ({dialingEmp.designation || 'Store'}) — {dialingEmp.num}</span>}
+                    <span className="fu-ad-hint-sub"> — fill in details while waiting</span>
+                  </div>
                 </div>
               )}
               {autoCallState === 'form' && (
-                <div className="fu-ad-form-hint">📞 Connected — fill in the details below and submit</div>
+                <div className="fu-ad-form-hint">
+                  📞 Call in progress
+                  {dialingEmp && <span className="fu-ad-emp"> — {dialingEmp.name} ({dialingEmp.designation || 'Store'})</span>}
+                  <span className="fu-ad-hint-sub"> — fill in details and submit</span>
+                </div>
               )}
               {(autoCallState === 'auto-nc' || autoCallState === 'idle') && autoMode && (
                 <div className="fu-ad-form-hint fu-ad-processing">⏳ Processing…</div>
@@ -866,16 +1055,45 @@ export default function FollowUp() {
                   <div className="fu-cc-field"><span>Product</span><strong>{bufStr(selected.productname)} ({selected.producttype})</strong></div>
                   <div className="fu-cc-field"><span>Vendor</span><strong>{selected.vendorname || '—'}</strong></div>
                   <div className="fu-cc-field"><span>Location</span><strong>{selected.productlocation || '—'}</strong></div>
-                  <div className="fu-cc-field"><span>FM</span><strong>{selected.fm_name || '—'} {selected.fm_mobile ? `· ${selected.fm_mobile}` : ''}</strong></div>
-                  <div className="fu-cc-field"><span>FM Email</span><strong>{selected.fm_email || '—'}</strong></div>
-                  <div className="fu-cc-field"><span>Contact</span><strong style={{ display:'flex', alignItems:'center', gap:6 }}>
-                    <span>{selected.empname || '—'}{selected.empmobileno ? ` · ${selected.empmobileno}` : ''}</span>
-                    {selected.empmobileno && (
-                      <button className="fu-call-btn" onClick={handleCallStore} title={`Call ${selected.empmobileno}`}>📞 Call</button>
-                    )}
-                  </strong></div>
-                  <div className="fu-cc-field"><span>Manager</span><strong>{selected.managername || '—'} {selected.managermobileno ? `· ${selected.managermobileno}` : ''}</strong></div>
+                  <div className="fu-cc-field"><span>FM</span><strong>{selected.fm_name || '—'} {selected.fm_email ? `· ${selected.fm_email}` : ''}</strong></div>
+                  <div className="fu-cc-field fu-cc-field-full">
+                    <span>Call Queue</span>
+                    <div className="fu-call-queue">
+                      {storeEmployees.length === 0 ? (
+                        <span style={{ fontSize: 11, color: '#94a3b8' }}>Loading…</span>
+                      ) : (() => {
+                        const rows = [];
+                        storeEmployees.forEach(emp => {
+                          if (emp.mobileno && emp.mobileno !== '0') rows.push({ name: emp.name, desig: emp.designation, num: emp.mobileno });
+                          if (emp.alternative && emp.alternative !== '0') rows.push({ name: emp.name, desig: `${emp.designation} (Alt)`, num: emp.alternative });
+                        });
+                        return rows.filter(r => r.num).map((r, i) => {
+                          const clean = r.num.replace(/\D/g, '');
+                          const called = calledNums.has(clean);
+                          return (
+                            <div key={i} className={`fu-cq-row${called ? ' fu-cq-called' : ''}`}>
+                              <span className="fu-cq-idx">{i + 1}</span>
+                              <div className="fu-cq-info">
+                                <span className="fu-cq-label">{r.desig} — {r.name}</span>
+                                <span className="fu-cq-num">{r.num}</span>
+                              </div>
+                              <button
+                                className={`fu-call-btn${called ? ' fu-call-btn-done' : ''}`}
+                                onClick={() => handleCallStore(r.num)}
+                                title={called ? `Called — dial again` : `Call ${r.num}`}
+                              >
+                                {called ? '✓ Retry' : '📞 Call'}
+                              </button>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
                   <div className="fu-cc-field"><span>EDC</span><strong style={{ color: selected.days_overdue > 0 ? '#dc2626' : 'inherit' }}>{fmtDate(selected.closuredate)}</strong></div>
+                  {selected.last_delay_main && (
+                    <div className="fu-cc-field"><span>Delay Reason</span><strong style={{ color:'#92400e' }}>{selected.last_delay_main}{selected.last_delay_sub ? ` — ${selected.last_delay_sub}` : ''}</strong></div>
+                  )}
                   {(() => {
                     const reminderCount = logs.filter(l => l.status === 'Escalated').length;
                     if (reminderCount === 0) return null;
@@ -963,7 +1181,7 @@ export default function FollowUp() {
                         const sc         = STATUS_COLORS[l.status] || 'blue';
                         const dMain      = bufStr(l.reasonfordelay);
                         const dSub       = bufStr(l.subreasonfordelay);
-                        const escEdc     = bufStr(l.closuredate);
+                        const escEdc     = bufStr(l.closuredate) || (l.fupdonevia === 'EDC Followup' ? (() => { const m = (bufStr(l.remarks)||'').match(/EDC updated to (\d{4}-\d{2}-\d{2})/); return m ? m[1] : null; })() : null);
                         const closeEdc   = bufStr(l.closureinformdate);
                         return (
                           <tr key={l.id || i}>
@@ -1048,7 +1266,6 @@ export default function FollowUp() {
                       ['Closed',           'Closed / Resolved'],
                       ['Partially Closed', 'Partially Closed'],
                       ['Escalated',        `Escalated${logs.filter(l => l.status === 'Escalated').length > 0 ? ` (${logs.filter(l => l.status === 'Escalated').length} sent)` : ''}`],
-                      ['Update EDC',       'Update EDC'],
                       ['Not Connected',    'Not Connected'],
                       ['Note',             'Add Note Only'],
                     ].map(([val, lbl]) => (
@@ -1070,8 +1287,8 @@ export default function FollowUp() {
                   </div>
                 )}
 
-                {/* Delay reason — for Partially Closed, Escalated, Update EDC, Closed, Not Connected */}
-                {(action === 'Partially Closed' || action === 'Escalated' || action === 'Update EDC' || action === 'Closed' || action === 'Not Connected') && (
+                {/* Delay reason — for Partially Closed, Escalated, Closed, Not Connected */}
+                {(action === 'Partially Closed' || action === 'Escalated' || action === 'Closed' || action === 'Not Connected') && (
                   <div className="fu-two-col">
                     <div className="fu-form-field">
                       <label className="fu-label">Delay Reason — Main</label>
@@ -1109,7 +1326,7 @@ export default function FollowUp() {
                 )}
 
                 {/* Date field */}
-                {(action === 'Partially Closed' || action === 'Escalated' || action === 'Update EDC' || action === 'Not Connected' || action === 'Closed') && (
+                {(action === 'Partially Closed' || action === 'Escalated' || action === 'Not Connected' || action === 'Closed') && (
                   <div className="fu-form-field">
                     <label className="fu-label">
                       {action === 'Closed'        ? 'Date of Closure (as per info received)'
@@ -1138,8 +1355,16 @@ export default function FollowUp() {
 
                 {/* Remarks */}
                 <div className="fu-form-field">
-                  <label className="fu-label">
-                    Remarks {(action !== 'Closed' && action !== 'Not Connected') && <span className="fu-req">*</span>}
+                  <label className="fu-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>Remarks {(action !== 'Closed' && action !== 'Not Connected') && <span className="fu-req">*</span>}</span>
+                    <button
+                      type="button"
+                      className={`fu-pin-btn${pinRemarks ? ' active' : ''}`}
+                      onClick={() => syncPinRemarks(!pinRemarks)}
+                      title={pinRemarks ? 'Remarks pinned — same for all complaints. Click to unpin.' : 'Pin remarks to reuse across all complaints'}
+                    >
+                      {pinRemarks ? '📌 Pinned' : '📌 Pin for all'}
+                    </button>
                   </label>
                   <textarea
                     className="fu-textarea"
@@ -1151,11 +1376,11 @@ export default function FollowUp() {
                 </div>
 
                 <button
-                  className={`fu-submit-btn fu-submit-${action.toLowerCase().replace(/\s+/g,'-')}`}
+                  className={`fu-submit-btn${action ? ` fu-submit-${action.toLowerCase().replace(/\s+/g,'-')}` : ''}`}
                   onClick={handleSubmit}
-                  disabled={submitting}
+                  disabled={submitting || !action}
                 >
-                  {submitting ? 'Saving…' : `Submit — ${action}`}
+                  {submitting ? 'Saving…' : action ? `Submit — ${action}` : 'Select an action above'}
                 </button>
               </div>
             </>

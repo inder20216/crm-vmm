@@ -114,12 +114,8 @@ export default function SearchComplaints() {
           />
           <select className="sc-select" value={statusF} onChange={e => setStatusF(e.target.value)}>
             <option value="">Status — All</option>
-            <option>Logged</option>
-            <option>Open</option>
-            <option>Escalated</option>
-            <option>Not Connected</option>
-            <option>Partially Closed</option>
-            <option>Closed</option>
+            <option value="Pending">Pending (Not Closed)</option>
+            <option value="Resolved">Resolved (Closed)</option>
           </select>
           <select className="sc-select" value={typeF} onChange={e => setTypeF(e.target.value)}>
             <option value="">Type — All</option>

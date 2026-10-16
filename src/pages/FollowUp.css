@@ -66,6 +66,7 @@
 .fu-row-store  { font-size: 12px; font-weight: 600; color: #374151; }
 .fu-row-product { font-size: 11px; color: #64748b; margin-top: 2px; }
 .fu-row-edc    { font-size: 10px; color: #94a3b8; margin-top: 3px; }
+.fu-row-delay  { font-size: 10px; color: #92400e; margin-top: 2px; }
 
 /* ── Badges ── */
 .fu-badge { padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 700; white-space: nowrap; }
@@ -107,9 +108,29 @@
 .fu-call-btn {
   padding: 2px 9px; border: 1.5px solid #7c3aed; border-radius: 6px;
   font-size: 11px; font-weight: 700; cursor: pointer;
-  background: #ede9fe; color: #6d28d9; white-space: nowrap;
+  background: #ede9fe; color: #6d28d9; white-space: nowrap; flex-shrink: 0;
 }
 .fu-call-btn:hover { background: #7c3aed; color: #fff; }
+.fu-call-btn-done { background: #dcfce7 !important; color: #15803d !important; border-color: #86efac !important; }
+/* Pin remarks button */
+.fu-pin-btn { font-size: 10px; font-weight: 600; color: #64748b; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 5px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+.fu-pin-btn:hover { background: #e2e8f0; }
+.fu-pin-btn.active { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+.fu-call-btn-done:hover { background: #16a34a !important; color: #fff !important; }
+
+/* ── Call Queue ── */
+.fu-cc-field-full { grid-column: 1 / -1; border-right: none !important; }
+.fu-call-queue { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
+.fu-cq-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px; border-radius: 6px; background: #f8fafc; border: 1px solid #e2e8f0;
+}
+.fu-cq-row.fu-cq-called { background: #f0fdf4; border-color: #bbf7d0; }
+.fu-cq-idx { font-size: 10px; font-weight: 800; color: #94a3b8; width: 14px; text-align: center; flex-shrink: 0; }
+.fu-cq-called .fu-cq-idx { color: #16a34a; }
+.fu-cq-info { flex: 1; min-width: 0; }
+.fu-cq-label { display: block; font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+.fu-cq-num { display: block; font-size: 12px; font-weight: 600; color: #1e293b; font-family: monospace; }
 
 /* ── Store complaints panel ── */
 .fu-store-panel {
@@ -169,6 +190,22 @@
 .fu-row-selected { background: #ede9fe !important; border-left: 3px solid #7c3aed; }
 .fu-row { display: flex; flex-direction: column; align-items: flex-start; }
 .fu-row-selected.fu-row:hover { background: #ddd6fe !important; }
+/* Compact store-group rows */
+.fu-badge-blue { background: #dbeafe; color: #1d4ed8; }
+.fu-store-group-row {
+  display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding: 9px 12px; border-bottom: 1px solid #e5e7eb; cursor: pointer;
+  border-left: 3px solid transparent; transition: background .15s;
+}
+.fu-store-group-row:hover { background: #f0f4ff; }
+.fu-store-group-row.fu-row-selected { background: #ede9fe !important; border-left-color: #7c3aed; }
+.fu-store-group-row.fu-row-partial { border-left-color: #c4b5fd; }
+.fu-store-group-row.fu-row-selected:hover { background: #ddd6fe !important; }
+.fu-sgr-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.fu-sgr-code { font-family: monospace; font-size: 13px; font-weight: 700; color: #1e1b4b; white-space: nowrap; }
+.fu-sgr-name { font-size: 12px; color: #374151; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fu-sgr-meta { display: flex; gap: 4px; flex-shrink: 0; }
+.fu-sgr-fm { width: 100%; font-size: 10px; color: #64748b; padding-left: 2px; }
 .fu-quickselect {
   display: flex; flex-direction: column; gap: 6px;
   padding: 8px 10px; background: #faf5ff; border: 1px solid #ddd6fe; border-radius: 8px; margin-top: 4px;
@@ -238,6 +275,8 @@
 .fu-ad-nc-btn:hover { background: #b91c1c; }
 .fu-ad-form-hint { font-size: 12px; color: rgba(255,255,255,.8); }
 .fu-ad-processing { color: #fbbf24; }
+.fu-ad-emp { font-weight: 700; color: #a5f3fc; margin-left: 4px; }
+.fu-ad-hint-sub { opacity: .7; margin-left: 4px; }
 
 /* ── Redial modal ── */
 .fu-redial-overlay {

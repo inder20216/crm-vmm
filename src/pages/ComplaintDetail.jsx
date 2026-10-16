@@ -188,7 +188,8 @@ export default function ComplaintDetail() {
     vmm.getComplaintDetail(id)
       .then(res => {
         if (res.success) {
-          const complaint = cleanObj(res.complaint);
+          const raw = cleanObj(res.complaint);
+          const complaint = { ...raw, edc: raw.closuredate || raw.edc || '' };
           setData({
             ...res,
             complaint,
@@ -209,12 +210,15 @@ export default function ComplaintDetail() {
     setLogsRefreshing(true);
     vmm.getComplaintDetail(id)
       .then(res => {
-        if (res.success) setData(prev => ({
-          ...prev,
-          complaint: cleanObj(res.complaint),
-          logs: (res.logs || []).map(l => ({ ...l, status: bufStr(l.status), remarks: bufStr(l.remarks) })),
-          escalations: (res.escalations || []).map(e => ({ ...e, ticketno: bufStr(e.ticketno) })),
-        }));
+        if (res.success) setData(prev => {
+          const raw2 = cleanObj(res.complaint);
+          return {
+            ...prev,
+            complaint: { ...raw2, edc: raw2.closuredate || raw2.edc || '' },
+            logs: (res.logs || []).map(l => ({ ...l, status: bufStr(l.status), remarks: bufStr(l.remarks) })),
+            escalations: (res.escalations || []).map(e => ({ ...e, ticketno: bufStr(e.ticketno) })),
+          };
+        });
       })
       .catch(() => {})
       .finally(() => setLogsRefreshing(false));
@@ -445,7 +449,7 @@ export default function ComplaintDetail() {
             <Field label="Nature of Problem" value={c.natureofproblem} />
             <Field label="Complaint Type"   value={c.typeofcomplaint} />
             <Field label="TAT"              value={c.tat ? `${c.tat} day${c.tat > 1 ? 's' : ''}` : '—'} />
-            <Field label="Closure Date / SLA" value={fmtDate(c.edc)} />
+            <Field label="EDC" value={fmtDate(c.edc)} />
             {c.vendor_ticketno && <Field label="Vendor Ticket No" value={c.vendor_ticketno} mono />}
             {c.escalationlevel && <Field label="Escalation Level" value={`Level ${c.escalationlevel}`} />}
           </div>
@@ -511,6 +515,9 @@ export default function ComplaintDetail() {
               ...logs.map(l => ({ _type: 'log', ...l })),
               ...dedupedEscs.map(e => ({ _type: 'esc', ...e })),
             ].sort((a, b) => new Date(a.created) - new Date(b.created));
+            const CASE_STATUSES = new Set(['Logged','Open','Escalated','Closed','Resolved','Partially Closed']);
+            // Running status updated inline during map — follow-up rows show the last real case status.
+            let _lastRealStatus = 'Open';
             return (
               <table className="cd-log-table">
                 <thead>
@@ -525,14 +532,18 @@ export default function ComplaintDetail() {
                 <tbody>
                   {timeline.map((row, i) => {
                     if (row._type === 'log') {
-                      const sc = STATUS_COLORS[row.status] || 'blue';
+                      const isRealStatus = CASE_STATUSES.has(row.status);
+                      if (isRealStatus) _lastRealStatus = row.status;
+                      const displayStatus = isRealStatus ? row.status : _lastRealStatus;
+                      const sc = STATUS_COLORS[displayStatus] || 'blue';
                       // Prefer dedicated column, fall back to parsing remarks
                       const src = bufStr(row.fupdonevia) || extractSource(row.remarks);
-                      const ss  = SOURCE_STYLES[src] || null;
+                      const ss  = (src === 'Not Connected' || src === 'Email Sent') ? null : (SOURCE_STYLES[src] || null);
                       const delayMain = bufStr(row.reasonfordelay);
                       const delaySub  = bufStr(row.subreasonfordelay);
                       const logEdc    = bufStr(row.closureinformdate);
-                      const escEdc    = bufStr(row.closuredate);
+                      // Per-log EDC from vendorescalations JOIN; for EDC Followup parse from remarks
+                      const escEdc    = bufStr(row.closuredate) || (src === 'EDC Followup' ? (() => { const m = (bufStr(row.remarks)||'').match(/EDC updated to (\d{4}-\d{2}-\d{2})/); return m ? m[1] : null; })() : null);
                       const closedBy  = bufStr(row.caseclosedby);
                       // Fall back to remarks-extracted delay only if no dedicated column
                       const delayFallback = !delayMain ? extractDelay(row.remarks) : null;
@@ -580,7 +591,7 @@ export default function ComplaintDetail() {
                               </div>
                             )}
                           </td>
-                          <td><span className={`status-tag status-${sc}`}>{row.status || 'Open'}</span></td>
+                          <td><span className={`status-tag status-${sc}`}>{displayStatus || 'Open'}</span></td>
                           <td className="cd-log-by">{byName}</td>
                         </tr>
                       );
@@ -636,7 +647,7 @@ export default function ComplaintDetail() {
                       setEscEmailMode(null); setEscPrevMsg(null);
                       setEscToEmail(''); setEscCc(''); setEscSubject(''); setEscBody('');
                       if (next === 'not-connected') {
-                        const d = new Date(); d.setDate(d.getDate() + 3);
+                        const d = new Date(); d.setDate(d.getDate() + 1);
                         setUpdEdc(d.toISOString().split('T')[0]);
                         setUpdSrc('Call');
                       } else if (next === 'update' || next === 'escalate') {
@@ -720,7 +731,7 @@ export default function ComplaintDetail() {
                       <label className="cd-uf-label">Delay Reason — Main</label>
                       <select className="cd-uf-select" value={updDelayMain} onChange={e => {
                         setUpdDelayMain(e.target.value); setUpdDelaySub('');
-                        if (updAction === 'not-connected') { const d = new Date(); d.setDate(d.getDate() + 3); setUpdEdc(d.toISOString().split('T')[0]); }
+                        if (updAction === 'not-connected') { const d = new Date(); d.setDate(d.getDate() + 1); setUpdEdc(d.toISOString().split('T')[0]); }
                       }}>
                         <option value="">— Select —</option>
                         {Object.keys(DELAY_REASONS).map(k => <option key={k} value={k}>{k}</option>)}
@@ -762,7 +773,7 @@ export default function ComplaintDetail() {
                 {(updAction === 'escalate' || updAction === 'not-connected' || updAction === 'close' || updAction === 'update') && (
                   <div className="cd-uf-field">
                     <label className="cd-uf-label">
-                      {updAction === 'close' && updStatus === 'Closed' ? 'Date of Closure' : updAction === 'not-connected' ? 'New EDC (auto +3d)' : 'New EDC'}
+                      {updAction === 'close' && updStatus === 'Closed' ? 'Date of Closure' : updAction === 'not-connected' ? 'New EDC (auto +1d)' : 'New EDC'}
                       <span style={{ color: '#dc2626' }}> *</span>
                     </label>
                     <input className="cd-uf-input" type="date" value={updEdc} onChange={e => setUpdEdc(e.target.value)} />

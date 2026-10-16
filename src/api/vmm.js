@@ -55,6 +55,7 @@ export const vmm = {
   lookupCaller: (mobile) => get(PHP, 'vmm-sparktg-inbound', { mobile }),
   getFollowUpComplaints: ()         => get(PHP,  'vmm-followup-complaints'),
   getStoreFollowups:    (code)     => get(PHP,  'vmm-store-followups',    { storecode: code }),
+  getStoreEmployees:    (code)     => get(PHP,  'vmm-store-employees',    { storecode: code }),
   bulkNotConnected:     (data)     => post(PHP, 'vmm-bulk-not-connected', data),
   getFollowupUsers:     ()         => get(PHP,  'vmm-followup-users'),
   assignFollowups:      (data)     => post(PHP, 'vmm-assign-followup',   data),
