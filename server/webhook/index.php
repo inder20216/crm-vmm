@@ -451,6 +451,7 @@ try {
         $hoEmail       = e($db, $b['hoEmail']        ?? '');
         $ncMobile      = e($db, $b['mobileCalled']   ?? '');
         $ncTxnId       = e($db, $b['txnId']          ?? '');
+        $ncMethod      = e($db, $b['followupMethod'] ?? 'Call');
         if (!$complaintId) fail('complaintId required');
 
         // Use delay reason from form if provided, else carry forward from last log
@@ -469,10 +470,10 @@ try {
         $prevReal = row($db, "SELECT status FROM {$px}complaintlogs WHERE complaintid=$complaintId AND is_deleted='No' AND status IN ('Logged','Open','Escalated','Closed','Resolved','Partially Closed') ORDER BY id DESC LIMIT 1");
         $ncStatus = $prevReal['status'] ?? 'Open';
 
-        // Log NC action — fupdonevia marks the action, status carries the real case status
+        // Log NC action — fupdonevia = method used (Call), remarks = outcome
         q($db, "INSERT INTO {$px}complaintlogs
             (complaintid,status,currentstatus,fupdonevia,mobileno,txnid,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
-            VALUES ($complaintId,'$ncStatus',1,'Not Connected','$ncMobile','$ncTxnId','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
+            VALUES ($complaintId,'$ncStatus',1,'$ncMethod','$ncMobile','$ncTxnId','$delayMain','$delaySub','$remarks',$uid,NOW(),NOW(),'No')");
         $logid = mysqli_insert_id($db);
 
         // Update EDC if provided — also update logid so history JOIN links to this NC log
@@ -749,23 +750,28 @@ try {
         if (!$bncIds) fail('complaintIds required');
         $bncRem    = e($db, $bnc['remarks']        ?? 'Called - Not Connected');
         $bncUid    = (int)($bnc['uid']             ?? 1);
-        $bncMain   = e($db, $bnc['delayMain']      ?? '');
-        $bncSub    = e($db, $bnc['delaySub']       ?? '');
         $bncEdc    = e($db, $bnc['newClosureDate']  ?? date('Y-m-d', strtotime('+1 day')));
         $bncMobile = e($db, $bnc['mobileCalled']    ?? '');
         $bncTxnId  = e($db, $bnc['txnId']           ?? '');
 
-        // Batch-fetch the last real case status for all complaints being processed
+        // Batch-fetch the last real case status and last delay reason for all complaints
         $bncIdStr = implode(',', $bncIds);
         $bncRsRows = rows($db, "SELECT l.complaintid, l.status FROM {$px}complaintlogs l WHERE l.id IN (SELECT MAX(l2.id) FROM {$px}complaintlogs l2 WHERE l2.complaintid IN ($bncIdStr) AND l2.is_deleted='No' AND l2.status IN ('Logged','Open','Escalated','Closed','Resolved','Partially Closed') GROUP BY l2.complaintid)");
         $bncStatusMap = [];
         foreach ($bncRsRows as $rs) $bncStatusMap[(int)$rs['complaintid']] = $rs['status'];
 
+        // Carry forward each complaint's own delay reason (batch fetch latest log per complaint)
+        $bncDelayRows = rows($db, "SELECT l.complaintid, l.reasonfordelay, l.subreasonfordelay FROM {$px}complaintlogs l WHERE l.id = (SELECT MAX(l2.id) FROM {$px}complaintlogs l2 WHERE l2.complaintid = l.complaintid AND l2.is_deleted='No') AND l.complaintid IN ($bncIdStr)");
+        $bncDelayMap = [];
+        foreach ($bncDelayRows as $dr) $bncDelayMap[(int)$dr['complaintid']] = [$dr['reasonfordelay'], $dr['subreasonfordelay']];
+
         foreach ($bncIds as $bncId) {
             $bncStatus = $bncStatusMap[$bncId] ?? 'Open';
+            [$bncMain, $bncSub] = $bncDelayMap[$bncId] ?? ['', ''];
+            $bncMain = e($db, $bncMain); $bncSub = e($db, $bncSub);
             q($db, "INSERT INTO {$px}complaintlogs
                 (complaintid,status,currentstatus,fupdonevia,mobileno,txnid,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
-                VALUES ($bncId,'$bncStatus',1,'Not Connected','$bncMobile','$bncTxnId','$bncMain','$bncSub','$bncRem',$bncUid,NOW(),NOW(),'No')");
+                VALUES ($bncId,'$bncStatus',1,'Call','$bncMobile','$bncTxnId','$bncMain','$bncSub','$bncRem',$bncUid,NOW(),NOW(),'No')");
             $bncLogId = mysqli_insert_id($db);
             q($db, "UPDATE {$px}vendorescalations SET closuredate='$bncEdc', logid=$bncLogId, updated=NOW() WHERE complaintid=$bncId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
             q($db, "UPDATE {$px}complaints SET closuredate='$bncEdc', updated=NOW() WHERE id=$bncId");

@@ -264,10 +264,7 @@ export default function FollowUp() {
       const d = new Date(); d.setDate(d.getDate() + 1);
       setNewEdc(d.toISOString().split('T')[0]);
       setMethod('Call');
-      // Pre-fill delay reason from the last log that has one, or from complaint card data
-      const lastWithReason = [...logs].reverse().find(l => l.reasonfordelay);
-      setDelayMain(lastWithReason?.reasonfordelay   || selected?.last_delay_main || '');
-      setDelaySub (lastWithReason?.subreasonfordelay || selected?.last_delay_sub  || '');
+      setDelayMain(''); setDelaySub('');
     } else if (val === 'Closed') {
       setNewEdc(new Date().toISOString().split('T')[0]);
       setDelayMain(''); setDelaySub('');
@@ -326,8 +323,6 @@ export default function FollowUp() {
         remarks: remarks || 'Called - Not Connected',
         uid: currentUser?.id || 1,
         newClosureDate: bncEdc,
-        delayMain,
-        delaySub,
         mobileCalled,
         txnId,
       });
