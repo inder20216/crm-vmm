@@ -449,6 +449,8 @@ try {
         $suppressEmail = !empty($b['suppressEmail']);
         $newEdc        = e($db, $b['newClosureDate'] ?? '');
         $hoEmail       = e($db, $b['hoEmail']        ?? '');
+        $toOverride    = e($db, $b['toOverride']     ?? '');
+        $ccEmails      = array_filter(array_map('trim', (array)($b['ccEmails'] ?? [])));
         $ncMobile      = e($db, $b['mobileCalled']   ?? '');
         $ncTxnId       = e($db, $b['txnId']          ?? '');
         $ncMethod      = e($db, $b['followupMethod'] ?? 'Call');
@@ -505,7 +507,7 @@ try {
             curl_close($ch);
 
             if ($tok) {
-                $toAddr = $cdet['storeemail'];
+                $toAddr = $toOverride ?: $cdet['storeemail'];
                 $fmAddr = $cdet['fmemail'] ?? '';
                 $subj   = "Follow-up: {$cdet['complaintno']} — {$cdet['productname']} ({$cdet['storename']})";
                 $html   = "<p>Dear Store Manager,</p>"
@@ -518,6 +520,9 @@ try {
                 $ccList = [];
                 if ($fmAddr) $ccList[] = ['emailAddress'=>['address'=>trim($fmAddr)]];
                 if ($hoEmail) $ccList[] = ['emailAddress'=>['address'=>trim($hoEmail)]];
+                foreach ($ccEmails as $ccAddr) {
+                    if ($ccAddr) $ccList[] = ['emailAddress'=>['address'=>$ccAddr]];
+                }
                 $payload = ['message'=>[
                     'subject'=>$subj,'body'=>['contentType'=>'HTML','content'=>$html],
                     'toRecipients'=>$mkR($toAddr),
@@ -534,7 +539,8 @@ try {
                 $emailSent = ($sendCode < 300);
 
                 // Log email event to case history
-                $ccLog = implode(', ', array_filter([$fmAddr, $hoEmail]));
+                $allCcAddrs = array_filter(array_merge([$fmAddr, $hoEmail], $ccEmails));
+                $ccLog = implode(', ', $allCcAddrs);
                 $emailNote = e($db, $emailSent
                     ? "Not Connected email sent to $toAddr" . ($ccLog ? " (CC: $ccLog)" : '')
                     : "Not Connected email failed to send");
@@ -668,7 +674,7 @@ try {
     case 'vmm-store-employees':
         $seCode = e($db, $GET['storecode'] ?? '');
         if (!$seCode) fail('storecode required');
-        $seRows = rows($db, "SELECT id, code, name, mobileno, alternative, designation
+        $seRows = rows($db, "SELECT id, code, name, mobileno, alternative, designation, status
             FROM {$px}employees
             WHERE is_deleted='No' AND mobileno != '' AND mobileno != '0'
             AND LOWER(email) LIKE LOWER(CONCAT('$seCode.%'))

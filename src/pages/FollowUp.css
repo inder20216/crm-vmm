@@ -126,6 +126,11 @@
   padding: 5px 8px; border-radius: 6px; background: #f8fafc; border: 1px solid #e2e8f0;
 }
 .fu-cq-row.fu-cq-called { background: #f0fdf4; border-color: #bbf7d0; }
+.fu-cq-row.fu-cq-inactive { opacity: 0.55; background: #f8f8f8; }
+.fu-cq-status-tag { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; flex-shrink: 0; text-transform: uppercase; letter-spacing: .04em; }
+.fu-cq-tag-active { background: #dcfce7; color: #15803d; }
+.fu-cq-tag-inactive { background: #fee2e2; color: #b91c1c; }
+.fu-call-btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 .fu-cq-idx { font-size: 10px; font-weight: 800; color: #94a3b8; width: 14px; text-align: center; flex-shrink: 0; }
 .fu-cq-called .fu-cq-idx { color: #16a34a; }
 .fu-cq-info { flex: 1; min-width: 0; }

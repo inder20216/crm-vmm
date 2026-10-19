@@ -128,6 +128,9 @@ export default function FollowUp() {
   const storeEmpQueueRef    = useRef([]);
   const storeEmpIdxRef      = useRef(0);
   const dialEmpAtIndexRef   = useRef(null);
+  const inactiveNextIdxRef  = useRef(0);
+
+  const [inactiveModal, setInactiveModal] = useState({ show: false, to: '', cc: '', complaint: null });
 
   const syncAutoMode      = (v) => { autoModeRef.current      = v; setAutoMode(v); };
   const syncAutoQueue     = (v) => { autoQueueRef.current     = v; setAutoQueue(v); };
@@ -407,7 +410,13 @@ export default function FollowUp() {
     if (c.store_code) {
       vmm.getStoreEmployees(c.store_code)
         .then(res => {
-          const all = res.employees || [];
+          const all = (res.employees || []).filter(e => String(e.status) === '1');
+          if (!all.length) {
+            // No active contacts — pause and show email modal for agent to confirm/edit
+            inactiveNextIdxRef.current = nextIdx;
+            setInactiveModal({ show: true, to: c.storeemail || '', cc: '', complaint: c });
+            return;
+          }
           const d = (e) => (e.designation || '').toLowerCase();
           const smAsm = all.filter(e => d(e).includes('sm') || d(e).includes('asm'));
           storeEmpQueueRef.current = smAsm.length ? smAsm : all.slice(0, 1);
@@ -467,6 +476,29 @@ export default function FollowUp() {
     // Redial restarts from the first employee
     storeEmpIdxRef.current = 0;
     dialEmpAtIndexRef.current?.(0);
+  };
+
+  const handleInactiveEmailSend = async () => {
+    const { to, cc, complaint } = inactiveModal;
+    setInactiveModal(prev => ({ ...prev, show: false }));
+    const edc = new Date(); edc.setDate(edc.getDate() + 1);
+    try {
+      await vmm.notConnected({
+        complaintId: complaint.id, complaintno: complaint.complaintno,
+        remarks: 'All store contacts inactive — email sent to store',
+        uid: currentUser?.id || 1,
+        newClosureDate: edc.toISOString().split('T')[0],
+        followupMethod: 'Email',
+        toOverride: to,
+        ccEmails: cc.split(',').map(s => s.trim()).filter(Boolean),
+      });
+    } catch {}
+    dialAutoNext(inactiveNextIdxRef.current + 1);
+  };
+
+  const handleInactiveEmailSkip = () => {
+    setInactiveModal(prev => ({ ...prev, show: false }));
+    dialAutoNext(inactiveNextIdxRef.current + 1);
   };
 
   const handleContinueNext = async () => {
@@ -992,6 +1024,44 @@ export default function FollowUp() {
           </div>
         )}
 
+        {/* ── All-Inactive Email Modal ── */}
+        {inactiveModal.show && (
+          <div className="fu-redial-overlay">
+            <div className="fu-redial-modal" style={{ maxWidth: 420 }}>
+              <div className="fu-rm-icon">📧</div>
+              <h3 className="fu-rm-title">All Contacts Inactive</h3>
+              <p className="fu-rm-body" style={{ marginBottom: 12 }}>
+                No active numbers for <strong>{inactiveModal.complaint?.store_code} — {inactiveModal.complaint?.store_name}</strong>.<br/>Send an email to the store?
+              </p>
+              <div style={{ display:'flex', flexDirection:'column', gap:8, textAlign:'left', marginBottom:14 }}>
+                <div>
+                  <label style={{ fontSize:11, fontWeight:700, color:'#64748b', display:'block', marginBottom:3 }}>TO</label>
+                  <input
+                    className="fu-input"
+                    value={inactiveModal.to}
+                    onChange={e => setInactiveModal(prev => ({ ...prev, to: e.target.value }))}
+                    placeholder="Store email"
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize:11, fontWeight:700, color:'#64748b', display:'block', marginBottom:3 }}>CC (comma-separated)</label>
+                  <input
+                    className="fu-input"
+                    value={inactiveModal.cc}
+                    onChange={e => setInactiveModal(prev => ({ ...prev, cc: e.target.value }))}
+                    placeholder="e.g. manager@company.com, hoteam@company.com"
+                  />
+                </div>
+              </div>
+              <div className="fu-rm-btns">
+                <button className="fu-rm-next" onClick={handleInactiveEmailSend} disabled={!inactiveModal.to}>📧 Send & Next</button>
+                <button className="fu-rm-redial" onClick={handleInactiveEmailSkip}>⏭ Skip</button>
+              </div>
+              <button className="fu-rm-stop" onClick={stopAutoDial}>⏹ Stop Auto-Dial</button>
+            </div>
+          </div>
+        )}
+
         {/* ── Right: Action Panel ── */}
         <div className="fu-action-panel">
           {/* Auto-dial banner */}
@@ -1059,23 +1129,26 @@ export default function FollowUp() {
                       ) : (() => {
                         const rows = [];
                         storeEmployees.forEach(emp => {
-                          if (emp.mobileno && emp.mobileno !== '0') rows.push({ name: emp.name, desig: emp.designation, num: emp.mobileno });
-                          if (emp.alternative && emp.alternative !== '0') rows.push({ name: emp.name, desig: `${emp.designation} (Alt)`, num: emp.alternative });
+                          const active = String(emp.status) === '1';
+                          if (emp.mobileno && emp.mobileno !== '0') rows.push({ name: emp.name, desig: emp.designation, num: emp.mobileno, active });
+                          if (emp.alternative && emp.alternative !== '0') rows.push({ name: emp.name, desig: `${emp.designation} (Alt)`, num: emp.alternative, active });
                         });
                         return rows.filter(r => r.num).map((r, i) => {
                           const clean = r.num.replace(/\D/g, '');
                           const called = calledNums.has(clean);
                           return (
-                            <div key={i} className={`fu-cq-row${called ? ' fu-cq-called' : ''}`}>
+                            <div key={i} className={`fu-cq-row${called ? ' fu-cq-called' : ''}${!r.active ? ' fu-cq-inactive' : ''}`}>
                               <span className="fu-cq-idx">{i + 1}</span>
                               <div className="fu-cq-info">
-                                <span className="fu-cq-label">{r.desig} — {r.name}</span>
+                                <span className="fu-cq-label">{r.desig ? `${r.desig} — ` : ''}{r.name}</span>
                                 <span className="fu-cq-num">{r.num}</span>
                               </div>
+                              <span className={`fu-cq-status-tag ${r.active ? 'fu-cq-tag-active' : 'fu-cq-tag-inactive'}`}>{r.active ? 'Active' : 'Inactive'}</span>
                               <button
                                 className={`fu-call-btn${called ? ' fu-call-btn-done' : ''}`}
                                 onClick={() => handleCallStore(r.num)}
-                                title={called ? `Called — dial again` : `Call ${r.num}`}
+                                disabled={!r.active}
+                                title={!r.active ? 'Inactive — will not be called' : called ? `Called — dial again` : `Call ${r.num}`}
                               >
                                 {called ? '✓ Retry' : '📞 Call'}
                               </button>
