@@ -171,13 +171,14 @@ export default function FollowUp() {
     vmm.getFollowupUsers().then(res => { if (res.success) setUsers(res.users || []); }).catch(() => {});
   }, [isAdmin]);
 
-  // Load assigned complaints when "Assigned to Me" tab is selected
+  // Load assigned complaints: for agents on every tab, for admins only on "Assigned to Me"
   useEffect(() => {
-    if (filter !== 'mine' || !currentUser?.id) return;
+    if (!currentUser?.id) return;
+    if (isAdmin && filter !== 'mine') return;
     setAssignedLoading(true);
     vmm.getMyFollowups(currentUser.id)
       .then(res => {
-        if (res.success) setAssignedComplaints(res.complaints.map(c => ({
+        if (res.success && res.complaints.length > 0) setAssignedComplaints(res.complaints.map(c => ({
           ...c,
           complaintno:     bufStr(c.complaintno),
           current_status:  bufStr(c.status || c.current_status),
@@ -342,6 +343,15 @@ export default function FollowUp() {
       });
       if (res?.success) {
         showToast(`NC logged for ${res.logged} complaint(s)${res.emailSent ? ' · email sent to store' : ''}`, 'ok');
+        // Queue one SharePoint row per complaint for Power Automate
+        storeComplaints.forEach(c => {
+          vmm.queueEmail({
+            complaint_no: c.complaintno,
+            cc_emails:    [selected?.fm_email, selected?.storeemail].filter(Boolean).join(';'),
+            email_body:   `Complaint ${c.complaintno} — ${selected?.store_code} ${bufStr(selected?.store_name)}\nAction: Not Connected\nEDC: ${bncEdc}`,
+            trigger_type: 'NC',
+          }).catch(() => {});
+        });
         const idSet = new Set(ids);
         const bncDaysOverdue = Math.round((new Date().setHours(0,0,0,0) - new Date(bncEdc).setHours(0,0,0,0)) / 86400000);
         setComplaints(prev => prev.map(c => idSet.has(c.id) ? { ...c, current_status: 'Not Connected', nc_count: (c.nc_count || 0) + 1, closuredate: bncEdc, days_overdue: bncDaysOverdue } : c));
@@ -462,6 +472,12 @@ export default function FollowUp() {
       setComplaints(prev         => prev.map(x => x.id === c.id ? { ...x, ...upd } : x));
       setAssignedComplaints(prev => prev.map(x => x.id === c.id ? { ...x, ...upd } : x));
       setSelected(prev           => prev?.id === c.id ? { ...prev, ...upd } : prev);
+      vmm.queueEmail({
+        complaint_no: c.complaintno,
+        cc_emails:    [c.fm_email, c.storeemail].filter(Boolean).join(';'),
+        email_body:   `Complaint ${c.complaintno} — ${c.store_code} ${bufStr(c.store_name)}\nAction: Not Connected (Auto Dial)\nEDC: ${bncEdc}`,
+        trigger_type: 'NC',
+      }).catch(() => {});
     } catch { /* silent */ }
     syncAutoCallState('idle');
     dialAutoNext(autoIndexRef.current + 1);
@@ -580,11 +596,12 @@ export default function FollowUp() {
       if (res?.success !== false) {
         const name = users.find(u => String(u.id) === String(assignUserId))?.name || 'user';
         showToast(`${res.assigned} complaint(s) assigned to ${name}`, 'ok');
+        // Update assigned_uid in local state so drilldown reflects new agent immediately
+        const newUid = parseInt(assignUserId);
+        setComplaints(prev => prev.map(c => selectedIds.has(c.id) ? { ...c, assigned_uid: newUid } : c));
         setSelectedIds(new Set());
         setAssignMode(false);
         setAssignUserId('');
-        // Refresh mine list if open
-        if (filter === 'mine') setAssignedComplaints([]);
       } else {
         showToast('Assignment failed', 'err');
       }
@@ -628,9 +645,11 @@ export default function FollowUp() {
     return Object.values(map).sort((a, b) => b.count - a.count);
   })();
 
-  const sourceList = filter === 'mine' ? assignedComplaints
+  // Agents only ever see their assigned complaints; admins see everything
+  const agentBase  = isAdmin ? complaints : assignedComplaints;
+  const sourceList = (filter === 'mine') ? assignedComplaints
     : (filter === 'assigned' && selectedAgent) ? complaints.filter(c => String(c.assigned_uid) === String(selectedAgent.id))
-    : complaints;
+    : agentBase;
 
   const displayed = sourceList
     .filter(c => {
@@ -734,6 +753,18 @@ export default function FollowUp() {
 
       if (res?.success !== false && !res?.error) {
         showToast(`${selected.complaintno} updated — ${action}`, 'ok');
+
+        // Queue email notification → SharePoint → Power Automate
+        if (['Not Connected', 'Escalated', 'Partially Closed', 'Closed'].includes(action)) {
+          const ccParts = [selected.fm_email, selected.storeemail].filter(Boolean);
+          vmm.queueEmail({
+            complaint_no: selected.complaintno,
+            cc_emails:    ccParts.join(';'),
+            email_body:   `Complaint ${selected.complaintno} — ${selected.store_code} ${bufStr(selected.store_name)}\nAction: ${action}\nRemarks: ${remarks || '—'}\nEDC: ${newEdc || selected.closuredate || '—'}`,
+            trigger_type: action === 'Not Connected' ? 'NC' : action === 'Escalated' ? 'Escalation' : 'Connected',
+          }).catch(() => {});
+        }
+
         if (autoModeRef.current) {
           syncAutoCallState('idle');
           setRedialCtx('done');
@@ -771,28 +802,24 @@ export default function FollowUp() {
           } else {
             setSelected(null);
           }
+        } else if (action === 'Note') {
+          // Note: keep complaint in list, just reload logs
+          setSelected(prev => prev ? { ...prev } : null);
+          setLogsLoading(true);
+          vmm.getComplaintDetail(doneId)
+            .then(r => { if (r.success) setLogs((r.logs || []).map(l => ({ ...l, status: bufStr(l.status), remarks: bufStr(l.remarks) }))); })
+            .catch(() => {})
+            .finally(() => setLogsLoading(false));
         } else {
-          const ncAdd = action === 'Not Connected' ? 1 : 0;
-          const edcChanged = (action === 'Escalated' || action === 'Partially Closed' || action === 'Not Connected') && newEdc;
-          const edcUpdate = edcChanged ? {
-            closuredate:  newEdc,
-            days_overdue: Math.round((new Date().setHours(0,0,0,0) - new Date(newEdc).setHours(0,0,0,0)) / 86400000),
-          } : {};
-          const delayUpdate = (action === 'Not Connected' || action === 'Escalated' || action === 'Partially Closed') && delayMain
-            ? { last_delay_main: delayMain, last_delay_sub: delaySub }
-            : {};
-          setComplaints(prev => prev.map(c => c.id !== doneId ? c : { ...c, current_status: action, nc_count: (c.nc_count || 0) + ncAdd, ...edcUpdate, ...delayUpdate }));
-          // Keep the detail card in sync with new status/EDC/delay
-          setSelected(prev => prev ? { ...prev, current_status: action, ...(edcChanged ? edcUpdate : {}), ...delayUpdate } : null);
+          // NC / Escalated / Partially Closed — remove from list immediately
+          // Complaint reappears tomorrow on auto-refresh when EDC becomes due
+          setComplaints(prev       => prev.filter(c => c.id !== doneId));
+          setAssignedComplaints(prev => prev.filter(c => c.id !== doneId));
+          setStoreComplaints(prev  => prev.filter(c => c.id !== doneId));
           if (nextInStore) {
             selectComplaint({ ...nextInStore, store_code: selected.store_code, storeemail: selected.storeemail, fm_email: selected.fm_email, fm_name: selected.fm_name }, true);
           } else {
-            resetForm(selected);
-            setLogsLoading(true);
-            vmm.getComplaintDetail(doneId)
-              .then(r => { if (r.success) setLogs((r.logs || []).map(l => ({ ...l, status: bufStr(l.status), remarks: bufStr(l.remarks) }))); })
-              .catch(() => {})
-              .finally(() => setLogsLoading(false));
+            setSelected(null);
           }
         }
       } else {
