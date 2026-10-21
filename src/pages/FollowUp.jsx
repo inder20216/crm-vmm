@@ -206,7 +206,7 @@ export default function FollowUp() {
       .finally(() => setAssignedLoading(false));
   }, [filter, currentUser?.id]);
 
-  useEffect(() => {
+  const fetchComplaints = useCallback(() => {
     vmm.getFollowUpComplaints()
       .then(res => {
         if (res.success) setComplaints(res.complaints.map(c => ({
@@ -233,6 +233,7 @@ export default function FollowUp() {
           closuredate:       bufStr(c.edc       || c.closuredate),
           days_overdue:      parseInt(c.days_overdue) || 0,
           nc_count:          parseInt(c.nc_count)     || 0,
+          assigned_uid:      c.assigned_uid ?? null,
           managername:       bufStr(c.managername),
           managermobileno:   bufStr(c.managermobileno),
           last_remark:      bufStr(c.last_remark),
@@ -243,6 +244,12 @@ export default function FollowUp() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    fetchComplaints();
+    const iv = setInterval(fetchComplaints, 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [fetchComplaints]);
 
   const showToast = (msg, type = 'ok') => {
     setToast({ msg, type });
@@ -572,20 +579,22 @@ export default function FollowUp() {
     return () => { delete window.__vmmOnCallStarted; };
   }, []);
 
-  const overdue = complaints.filter(c => c.days_overdue > 0);
-  const today   = complaints.filter(c => {
+  const overdue     = complaints.filter(c => c.days_overdue > 0);
+  const today       = complaints.filter(c => {
     if (!c.closuredate) return false;
     const t = new Date().toISOString().split('T')[0];
     return String(c.closuredate).startsWith(t);
   });
+  const dueTotal = complaints.filter(c => (c.days_overdue ?? 0) >= 0);
 
   const sourceList = filter === 'mine' ? assignedComplaints : complaints;
 
   const displayed = sourceList
     .filter(c => {
-      if (filter === 'overdue') return c.days_overdue > 0;
-      if (filter === 'today')   return today.some(t => t.id === c.id);
-      if (filter === 'nc')      return c.nc_count > 0;
+      if (filter !== 'mine' && (c.days_overdue ?? 0) < 0) return false;
+      if (filter === 'overdue')    return c.days_overdue > 0;
+      if (filter === 'today')      return today.some(t => t.id === c.id);
+      if (filter === 'unassigned') return !c.assigned_uid;
       return true; // 'all' and 'mine'
     })
     .filter(c => {
@@ -772,7 +781,7 @@ export default function FollowUp() {
             })()}
           </div>
           <div className="fu-hstat fu-hstat-amber"><span>{today.length}</span>Due Today</div>
-          <div className="fu-hstat fu-hstat-blue"><span>{complaints.length}</span>Total Open</div>
+          <div className="fu-hstat fu-hstat-blue"><span>{dueTotal.length}</span>Total Open</div>
         </div>
       </div>
 
@@ -782,7 +791,7 @@ export default function FollowUp() {
         <div className="fu-list-panel">
           <div className="fu-list-toolbar">
             <div className="fu-filter-tabs">
-              {[['all','All'], ['overdue','Overdue'], ['today','Due Today'], ['nc','NC'], ['mine','Assigned to Me']].map(([k,l]) => (
+              {[['all','All'], ['overdue','Overdue'], ['today','Due Today'], ['unassigned','Unassigned'], ['mine','Assigned to Me']].map(([k,l]) => (
                 <button key={k} className={`fu-ftab${filter===k?' active':''}`} onClick={() => { setFilter(k); setAssignMode(false); setSelectedIds(new Set()); }}>{l}</button>
               ))}
             </div>

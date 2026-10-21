@@ -635,6 +635,14 @@ try {
 
     // ── Follow-up complaints list ──────────────────────────────────────────────
     case 'vmm-followup-complaints':
+        $db->query("CREATE TABLE IF NOT EXISTS {$px}followup_assignments (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            complaint_id INT NOT NULL,
+            assigned_to  INT NOT NULL,
+            assigned_by  INT NOT NULL,
+            assigned_at  DATETIME DEFAULT NOW(),
+            UNIQUE KEY uq_cmp (complaint_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
             GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) as edc,
             s.storecode, s.storename, s.storeemail, s.fmname, s.fmemail, s.empname, s.empmobileno, s.emptalternativeno,
@@ -643,11 +651,13 @@ try {
             l.subreasonfordelay as last_delay_sub, l.created as last_updated,
             esc.ticketno, esc.escalationlevel,
             DATEDIFF(CURDATE(), GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01'))) as days_overdue,
-            (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
+            (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count,
+            fa.assigned_to as assigned_uid
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
             JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
             LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            LEFT JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id
             WHERE c.is_deleted='No' AND l.status NOT IN ('Closed') AND c.productname != 'Pest Control'
             ORDER BY c.id DESC");
         ok(['complaints' => $r]);
