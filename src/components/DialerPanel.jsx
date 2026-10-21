@@ -21,8 +21,9 @@ export default function DialerPanel() {
   const { currentUser } = useAuth();
   const navigate        = useNavigate();
   const iframeRef       = useRef(null);
-  const hasAutoSso      = useRef(false);
-  const pendingOutbound = useRef(false);
+  const hasAutoSso        = useRef(false);
+  const pendingOutbound   = useRef(false);
+  const lastCallDirection = useRef(null);
 
   const [open,       setOpen]       = useState(false);
   const [ready,      setReady]      = useState(false);
@@ -40,6 +41,8 @@ export default function DialerPanel() {
       const msg = ev.data;
       if (!msg || typeof msg !== 'object' || !msg.event) return;
       const { event, data } = msg;
+      // DEBUG — remove after confirming event names
+      console.log('[VMM-DEBUG] SparkTG PostMessage:', event, JSON.stringify(data));
 
       switch (event) {
         case 'ready_for_events':
@@ -57,6 +60,7 @@ export default function DialerPanel() {
         case 'show_dialer': {
           const isOutbound = pendingOutbound.current;
           pendingOutbound.current = false;
+          lastCallDirection.current = isOutbound ? 'outbound' : 'inbound';
           const phone = normalizePhone(data?.caller?.phone || '');
           const callId = data?.callId || null;
           setCallState({ phone, callId, direction: isOutbound ? 'outbound' : 'inbound', ended: false });
@@ -75,7 +79,16 @@ export default function DialerPanel() {
 
         case 'hide_dialer':
           setCallState(prev => prev ? { ...prev, ended: true } : null);
-          window.__vmmOnCallEnded?.();
+          if (lastCallDirection.current === 'outbound') window.__vmmOnCallEnded?.();
+          lastCallDirection.current = null;
+          break;
+
+        // SparkTG explicit failure events — fire immediately, no duration guessing
+        case 'CallFailed':
+        case 'call_failed':
+        case 'no_answer':
+        case 'missed':
+          if (lastCallDirection.current === 'outbound') window.__vmmOnCallFailed?.();
           break;
 
         default: break;

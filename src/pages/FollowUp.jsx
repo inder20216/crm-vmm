@@ -130,7 +130,9 @@ export default function FollowUp() {
   const storeEmpIdxRef      = useRef(0);
   const dialEmpAtIndexRef   = useRef(null);
   const inactiveNextIdxRef  = useRef(0);
-  const callFormStartRef    = useRef(null); // timestamp when 'form' state begins
+  const callFormStartRef      = useRef(null);
+  const dialTimeoutRef        = useRef(null);
+  const callFailedHandledRef  = useRef(false);
 
   const [inactiveModal, setInactiveModal] = useState({ show: false, to: '', cc: '', complaint: null });
 
@@ -410,6 +412,22 @@ export default function FollowUp() {
     setDialingEmp({ name: emp.name, designation: emp.designation, num: emp.mobileno });
     syncAutoCallState('dialing');
     window.__vmmDial?.(phone);
+    // Fallback: if hide_dialer never fires (SIP 480/stuck), force NC advance after 45s
+    // Safe for real calls: hide_dialer fires and clears this before it triggers
+    if (dialTimeoutRef.current) clearTimeout(dialTimeoutRef.current);
+    dialTimeoutRef.current = setTimeout(() => {
+      if (!autoModeRef.current) return;
+      const cs = autoCallStateRef.current;
+      if (cs !== 'dialing' && cs !== 'form') return;
+      dialTimeoutRef.current = null;
+      // Directly apply NC logic — don't go through __vmmOnCallEnded (avoids 20s threshold confusion)
+      const nextEmpIdx = storeEmpIdxRef.current + 1;
+      if (nextEmpIdx < storeEmpQueueRef.current.length) {
+        dialEmpAtIndexRef.current?.(nextEmpIdx);
+      } else {
+        syncAutoCallState('auto-nc');
+      }
+    }, 45000);
   }, []);
 
   // Keep stable ref so __vmmOnCallEnded (registered once) can always call the latest version
@@ -538,41 +556,46 @@ export default function FollowUp() {
     }
   };
 
-  // Register call-ended callback once (uses refs — no stale closures)
+  // Helper: advance to next employee (NC path) — used by both explicit failure and fallback
+  const advanceAfterFailure = useCallback(() => {
+    if (dialTimeoutRef.current) { clearTimeout(dialTimeoutRef.current); dialTimeoutRef.current = null; }
+    if (!autoModeRef.current) return;
+    const nextEmpIdx = storeEmpIdxRef.current + 1;
+    if (nextEmpIdx < storeEmpQueueRef.current.length) {
+      dialEmpAtIndexRef.current?.(nextEmpIdx);
+    } else {
+      syncAutoCallState('auto-nc');
+    }
+  }, []);
+
+  // Register call event callbacks once (use refs — no stale closures)
   useEffect(() => {
+    // SparkTG explicit failure: CallFailed / no_answer / missed → advance immediately
+    window.__vmmOnCallFailed = () => {
+      if (!autoModeRef.current) return;
+      callFailedHandledRef.current = true;
+      advanceAfterFailure();
+    };
+
+    // hide_dialer fired: if __vmmOnCallFailed already handled it, skip
+    // Otherwise: 'dialing' = never connected → NC; 'form' = was connected → disconnected popup
     window.__vmmOnCallEnded = () => {
+      if (dialTimeoutRef.current) { clearTimeout(dialTimeoutRef.current); dialTimeoutRef.current = null; }
+      if (callFailedHandledRef.current) { callFailedHandledRef.current = false; return; }
       if (!autoModeRef.current) return;
       const cs = autoCallStateRef.current;
       if (cs === 'dialing') {
-        // Try the next SM/ASM employee before logging NC
-        const nextEmpIdx = storeEmpIdxRef.current + 1;
-        if (nextEmpIdx < storeEmpQueueRef.current.length) {
-          dialEmpAtIndexRef.current?.(nextEmpIdx);
-        } else {
-          // All employees tried — auto-log NC
-          syncAutoCallState('auto-nc');
-        }
+        advanceAfterFailure();
       } else if (cs === 'form') {
-        // If show_dialer fired but call ended in < 20s it was a failed dial (busy/unavailable)
-        // treat as NC automatically; only show popup if the call was a real conversation
-        const formDuration = callFormStartRef.current ? (Date.now() - callFormStartRef.current) : 99999;
-        if (formDuration < 20000) {
-          // Failed dial (busy/unavailable) — try next number in same store first
-          const nextEmpIdx = storeEmpIdxRef.current + 1;
-          if (nextEmpIdx < storeEmpQueueRef.current.length) {
-            dialEmpAtIndexRef.current?.(nextEmpIdx);
-          } else {
-            syncAutoCallState('auto-nc');
-          }
-        } else {
-          syncAutoCallState('disconnected');
-          setRedialCtx('disconnected');
-          setShowRedialModal(true);
-        }
+        // hide_dialer fired after show_dialer — real call that ended
+        syncAutoCallState('disconnected');
+        setRedialCtx('disconnected');
+        setShowRedialModal(true);
       }
     };
-    return () => { delete window.__vmmOnCallEnded; };
-  }, []);
+
+    return () => { delete window.__vmmOnCallFailed; delete window.__vmmOnCallEnded; };
+  }, [advanceAfterFailure]);
 
   // React to auto-dial state transitions
   useEffect(() => {
@@ -645,8 +668,8 @@ export default function FollowUp() {
     return Object.values(map).sort((a, b) => b.count - a.count);
   })();
 
-  // Agents only ever see their assigned complaints; admins see everything
-  const agentBase  = isAdmin ? complaints : assignedComplaints;
+  // Agents see assigned complaints when assignments exist; fall back to all if none yet
+  const agentBase  = isAdmin ? complaints : (assignedComplaints.length > 0 ? assignedComplaints : complaints);
   const sourceList = (filter === 'mine') ? assignedComplaints
     : (filter === 'assigned' && selectedAgent) ? complaints.filter(c => String(c.assigned_uid) === String(selectedAgent.id))
     : agentBase;
