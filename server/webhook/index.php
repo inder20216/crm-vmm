@@ -645,7 +645,7 @@ try {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
             GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) as edc,
-            s.storecode, s.storename, s.storeemail, s.fmname, s.fmemail, s.empname, s.empmobileno, s.emptalternativeno,
+            s.storecode, s.storename, s.storeemail, s.storeaddress, s.storecity, s.fmname, s.fmemail, s.empname, s.empmobileno, s.emptalternativeno,
             s.managername, s.managermobileno, s.asmname, s.asmmobileno, s.fmmobileno as fm_mobile,
             l.status, l.remarks as last_remark, l.reasonfordelay as last_delay_main,
             l.subreasonfordelay as last_delay_sub, l.created as last_updated,

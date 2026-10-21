@@ -130,6 +130,7 @@ export default function FollowUp() {
   const storeEmpIdxRef      = useRef(0);
   const dialEmpAtIndexRef   = useRef(null);
   const inactiveNextIdxRef  = useRef(0);
+  const callFormStartRef    = useRef(null); // timestamp when 'form' state begins
 
   const [inactiveModal, setInactiveModal] = useState({ show: false, to: '', cc: '', complaint: null });
 
@@ -214,9 +215,11 @@ export default function FollowUp() {
           ...c,
           complaintno:      bufStr(c.complaintno),
           current_status:   bufStr(c.current_status),
-          store_code:       bufStr(c.storecode  || c.store_code),
-          store_name:       bufStr(c.storename  || c.store_name),
+          store_code:       bufStr(c.storecode    || c.store_code),
+          store_name:       bufStr(c.storename    || c.store_name),
           storeemail:       bufStr(c.storeemail),
+          store_address:    bufStr(c.storeaddress || c.store_address),
+          store_city:       bufStr(c.storecity    || c.store_city),
           city:             bufStr(c.city),
           productname:      bufStr(c.productname),
           producttype:      bufStr(c.producttype),
@@ -393,6 +396,7 @@ export default function FollowUp() {
     const phone = (emp.mobileno || '').replace(/\D/g, '');
     if (!phone) { syncAutoCallState('auto-nc'); return; }
     dialedPhoneRef.current = phone;
+    callFormStartRef.current = null;
     setDialingEmp({ name: emp.name, designation: emp.designation, num: emp.mobileno });
     syncAutoCallState('dialing');
     window.__vmmDial?.(phone);
@@ -533,9 +537,22 @@ export default function FollowUp() {
           syncAutoCallState('auto-nc');
         }
       } else if (cs === 'form') {
-        syncAutoCallState('disconnected');
-        setRedialCtx('disconnected');
-        setShowRedialModal(true);
+        // If show_dialer fired but call ended in < 20s it was a failed dial (busy/unavailable)
+        // treat as NC automatically; only show popup if the call was a real conversation
+        const formDuration = callFormStartRef.current ? (Date.now() - callFormStartRef.current) : 99999;
+        if (formDuration < 20000) {
+          // Failed dial (busy/unavailable) — try next number in same store first
+          const nextEmpIdx = storeEmpIdxRef.current + 1;
+          if (nextEmpIdx < storeEmpQueueRef.current.length) {
+            dialEmpAtIndexRef.current?.(nextEmpIdx);
+          } else {
+            syncAutoCallState('auto-nc');
+          }
+        } else {
+          syncAutoCallState('disconnected');
+          setRedialCtx('disconnected');
+          setShowRedialModal(true);
+        }
       }
     };
     return () => { delete window.__vmmOnCallEnded; };
@@ -581,6 +598,7 @@ export default function FollowUp() {
       if (callId) { setTxnId(String(callId)); txnIdRef.current = String(callId); }
       if (phone)  setMobileCalled(phone.replace(/\D/g, ''));
       if (autoModeRef.current && autoCallStateRef.current === 'dialing') {
+        callFormStartRef.current = Date.now();
         syncAutoCallState('form');
       }
     };
@@ -1185,7 +1203,10 @@ export default function FollowUp() {
                   )}
                 </div>
                 <div className="fu-cc-grid">
-                  <div className="fu-cc-field"><span>Store</span><strong>{selected.store_code} — {bufStr(selected.store_name)}, {selected.city}</strong></div>
+                  <div className="fu-cc-field"><span>Store</span><strong>{selected.store_code} — {bufStr(selected.store_name)}</strong></div>
+                  {(selected.store_address || selected.store_city) && (
+                    <div className="fu-cc-field fu-cc-field-full"><span>Address</span><strong>{[selected.store_address, selected.store_city].filter(Boolean).join(', ')}</strong></div>
+                  )}
                   <div className="fu-cc-field"><span>Product</span><strong>{bufStr(selected.productname)} ({selected.producttype})</strong></div>
                   <div className="fu-cc-field"><span>Vendor</span><strong>{selected.vendorname || '—'}</strong></div>
                   <div className="fu-cc-field"><span>Location</span><strong>{selected.productlocation || '—'}</strong></div>
