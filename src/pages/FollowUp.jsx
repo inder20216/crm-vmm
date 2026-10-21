@@ -100,6 +100,7 @@ export default function FollowUp() {
   const [assignUserId,      setAssignUserId]      = useState('');
   const [assignedComplaints, setAssignedComplaints] = useState([]);
   const [assignedLoading,   setAssignedLoading]   = useState(false);
+  const [selectedAgent,     setSelectedAgent]     = useState(null);
   const [qsMode,       setQsMode]       = useState('after');
   const [qsDate1,      setQsDate1]      = useState('');
   const [qsDate2,      setQsDate2]      = useState('');
@@ -587,15 +588,33 @@ export default function FollowUp() {
   });
   const dueTotal = complaints.filter(c => (c.days_overdue ?? 0) >= 0);
 
-  const sourceList = filter === 'mine' ? assignedComplaints : complaints;
+  const agentSummary = (() => {
+    if (filter !== 'assigned') return [];
+    const map = {};
+    complaints.forEach(c => {
+      if (!c.assigned_uid) return;
+      const uid = String(c.assigned_uid);
+      if (!map[uid]) {
+        const user = users.find(u => String(u.id) === uid);
+        map[uid] = { id: uid, name: user?.name || `Agent #${uid}`, count: 0 };
+      }
+      map[uid].count++;
+    });
+    return Object.values(map).sort((a, b) => b.count - a.count);
+  })();
+
+  const sourceList = filter === 'mine' ? assignedComplaints
+    : (filter === 'assigned' && selectedAgent) ? complaints.filter(c => String(c.assigned_uid) === String(selectedAgent.id))
+    : complaints;
 
   const displayed = sourceList
     .filter(c => {
+      if (filter === 'assigned' && !selectedAgent) return false;
       if (filter !== 'mine' && (c.days_overdue ?? 0) < 0) return false;
       if (filter === 'overdue')    return c.days_overdue > 0;
       if (filter === 'today')      return today.some(t => t.id === c.id);
       if (filter === 'unassigned') return !c.assigned_uid;
-      return true; // 'all' and 'mine'
+      return true; // 'all', 'mine', 'assigned' (with selectedAgent)
     })
     .filter(c => {
       if (!search.trim()) return true;
@@ -791,11 +810,14 @@ export default function FollowUp() {
         <div className="fu-list-panel">
           <div className="fu-list-toolbar">
             <div className="fu-filter-tabs">
-              {[['all','All'], ['overdue','Overdue'], ['today','Due Today'], ['unassigned','Unassigned'], ['mine','Assigned to Me']].map(([k,l]) => (
-                <button key={k} className={`fu-ftab${filter===k?' active':''}`} onClick={() => { setFilter(k); setAssignMode(false); setSelectedIds(new Set()); }}>{l}</button>
+              {(isAdmin
+                ? [['all','All'], ['overdue','Overdue'], ['today','Due Today'], ['unassigned','Unassigned'], ['assigned','All Assigned']]
+                : [['all','All'], ['overdue','Overdue'], ['today','Due Today'], ['mine','Assigned to Me']]
+              ).map(([k,l]) => (
+                <button key={k} className={`fu-ftab${filter===k?' active':''}`} onClick={() => { setFilter(k); setAssignMode(false); setSelectedIds(new Set()); setSelectedAgent(null); }}>{l}</button>
               ))}
             </div>
-            {isAdmin && filter !== 'mine' && (
+            {isAdmin && filter !== 'assigned' && (
               <button
                 className={`fu-assign-toggle${assignMode ? ' active' : ''}`}
                 onClick={() => { setAssignMode(a => !a); setSelectedIds(new Set()); setAssignUserId(''); }}
@@ -895,10 +917,34 @@ export default function FollowUp() {
             </button>
           )}
 
-          {(loading && filter !== 'mine') || (assignedLoading && filter === 'mine') ? (
+          {filter === 'assigned' && selectedAgent && (
+            <div className="fu-agent-back-bar">
+              <button className="fu-agent-back-btn" onClick={() => setSelectedAgent(null)}>← All Assigned</button>
+              <span className="fu-agent-back-name">{selectedAgent.name}</span>
+              <span className="fu-agent-back-count">{displayed.length} complaint{displayed.length !== 1 ? 's' : ''}</span>
+            </div>
+          )}
+
+          {filter === 'assigned' && !selectedAgent ? (
+            agentSummary.length === 0
+              ? <div className="fu-list-empty">No complaints assigned yet.</div>
+              : <div className="fu-agent-cards">
+                  {agentSummary.map(a => (
+                    <div key={a.id} className="fu-agent-card" onClick={() => setSelectedAgent(a)}>
+                      <span className="fu-agent-card-name">{a.name}</span>
+                      <span className="fu-agent-card-count">{a.count}</span>
+                      <span className="fu-agent-card-label">complaint{a.count !== 1 ? 's' : ''}</span>
+                    </div>
+                  ))}
+                </div>
+          ) : (loading && filter !== 'mine') || (assignedLoading && filter === 'mine') ? (
             <div className="fu-list-empty">Loading…</div>
           ) : displayed.length === 0 ? (
-            <div className="fu-list-empty">{filter === 'mine' ? 'No complaints assigned to you.' : 'No complaints found.'}</div>
+            <div className="fu-list-empty">
+              {filter === 'mine' ? 'No complaints assigned to you.'
+                : filter === 'assigned' ? 'No complaints for this agent.'
+                : 'No complaints found.'}
+            </div>
           ) : compactView ? (() => {
             // Build store groups
             const storeMap = new Map();
