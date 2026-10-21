@@ -60,6 +60,7 @@ export const vmm = {
   getFollowupUsers:     ()         => get(PHP,  'vmm-followup-users'),
   assignFollowups:      (data)     => post(PHP, 'vmm-assign-followup',   data),
   unassignFollowups:    (data)     => post(PHP, 'vmm-unassign-followup', data),
+  queueEmail:           (data)     => post(PHP, 'vmm-queue-email',       data),
   getMyFollowups:       (userId)   => get(PHP,  'vmm-my-followups',      { user_id: userId }),
   updateComplaint:  (data)      => post(PHP, 'vmm-update-complaint',   data),
   escalateComplaint:(data)      => post(PHP, 'vmm-escalate-complaint', data),

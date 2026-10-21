@@ -734,6 +734,48 @@ try {
         }
         ok(['assigned' => $aCount]);
 
+    // ── Queue email via SharePoint → Power Automate ───────────────────────────
+    case 'vmm-queue-email':
+        if ($METHOD !== 'POST') fail('POST required');
+        $qNo   = trim($body['complaint_no'] ?? '');
+        $qCC   = trim($body['cc_emails']    ?? '');
+        $qBody = trim($body['email_body']   ?? '');
+        $qType = trim($body['trigger_type'] ?? 'NC'); // NC | Connected | Escalation
+        if (!$qNo) fail('complaint_no required');
+
+        // Get Graph token (same app reg — needs Sites.ReadWrite.All granted)
+        $qCh = curl_init("https://login.microsoftonline.com/" . GRAPH_TENANT_ID . "/oauth2/v2.0/token");
+        curl_setopt_array($qCh, [CURLOPT_RETURNTRANSFER=>true, CURLOPT_POST=>true,
+            CURLOPT_POSTFIELDS=>http_build_query([
+                'grant_type'=>'client_credentials','client_id'=>GRAPH_CLIENT_ID,
+                'client_secret'=>GRAPH_CLIENT_SECRET,'scope'=>'https://graph.microsoft.com/.default',
+            ])]);
+        $qTok = json_decode(curl_exec($qCh), true)['access_token'] ?? null;
+        curl_close($qCh);
+        if (!$qTok) fail('Could not authenticate');
+
+        // Write row to SharePoint list
+        $spEndpoint = 'https://graph.microsoft.com/v1.0/sites/openmindservices.sharepoint.com:/sites/VMMCRMSupport:/lists/Complaint Management/items';
+        $spPayload  = json_encode(['fields' => [
+            'Title'       => $qNo,
+            'CCEmails'    => $qCC,
+            'EmailBody'   => $qBody,
+            'EscalatedAt' => date('c'),
+            'TriggerType' => $qType,
+        ]]);
+        $spCh = curl_init($spEndpoint);
+        curl_setopt_array($spCh, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $spPayload,
+            CURLOPT_HTTPHEADER     => ['Authorization: Bearer '.$qTok, 'Content-Type: application/json'],
+        ]);
+        $spRes  = json_decode(curl_exec($spCh), true);
+        $spCode = curl_getinfo($spCh, CURLINFO_HTTP_CODE);
+        curl_close($spCh);
+        if ($spCode < 200 || $spCode >= 300) fail('Failed to queue email');
+        ok(['queued' => true, 'item_id' => $spRes['id'] ?? null]);
+
     // ── Unassign follow-up complaints ─────────────────────────────────────────
     case 'vmm-unassign-followup':
         if ($METHOD !== 'POST') fail('POST required');
