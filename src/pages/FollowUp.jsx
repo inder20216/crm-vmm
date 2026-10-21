@@ -547,6 +547,14 @@ export default function FollowUp() {
     if (autoCallState === 'auto-nc') doAutoNC();
   }, [autoCallState, doAutoNC]);
 
+  const handleUnassign = async (complaintId) => {
+    try {
+      await vmm.unassignFollowups({ complaint_ids: [complaintId] });
+      setComplaints(prev => prev.map(c => c.id === complaintId ? { ...c, assigned_uid: null } : c));
+      showToast('Complaint unassigned.');
+    } catch { showToast('Failed to unassign.', 'err'); }
+  };
+
   const handleAssign = async () => {
     if (!assignUserId || !selectedIds.size || submitting) return;
     setSubmitting(true);
@@ -1044,6 +1052,13 @@ export default function FollowUp() {
                   <div className="fu-row-edc">EDC: {fmtDate(c.closuredate)}</div>
                   {c.last_delay_main && (
                     <div className="fu-row-delay">⏳ {c.last_delay_main}{c.last_delay_sub ? ` — ${c.last_delay_sub}` : ''}</div>
+                  )}
+                  {filter === 'assigned' && selectedAgent && (
+                    <button
+                      className="fu-unassign-btn"
+                      onClick={e => { e.stopPropagation(); handleUnassign(c.id); }}
+                      title="Remove assignment"
+                    >✕ Unassign</button>
                   )}
                 </div>
               ))}

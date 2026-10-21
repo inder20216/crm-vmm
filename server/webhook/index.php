@@ -734,6 +734,18 @@ try {
         }
         ok(['assigned' => $aCount]);
 
+    // ── Unassign follow-up complaints ─────────────────────────────────────────
+    case 'vmm-unassign-followup':
+        if ($METHOD !== 'POST') fail('POST required');
+        $uIds = array_filter(array_map('intval', (array)($body['complaint_ids'] ?? [])));
+        if (empty($uIds)) fail('complaint_ids required');
+        $uIdStr = implode(',', $uIds);
+        $tExists2 = row($db, "SELECT COUNT(*) as n FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='{$px}followup_assignments'");
+        if ($tExists2['n'] ?? 0) {
+            $db->query("DELETE FROM {$px}followup_assignments WHERE complaint_id IN ($uIdStr)");
+        }
+        ok(['unassigned' => count($uIds)]);
+
     // ── My assigned follow-ups ─────────────────────────────────────────────────
     case 'vmm-my-followups':
         $mfUid = (int)($GET['user_id'] ?? 0);
