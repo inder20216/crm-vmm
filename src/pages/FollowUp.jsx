@@ -460,9 +460,8 @@ export default function FollowUp() {
       setSelected(prev           => prev?.id === c.id ? { ...prev, ...upd } : prev);
     } catch { /* silent */ }
     syncAutoCallState('idle');
-    setRedialCtx('nc');
-    setShowRedialModal(true);
-  }, []);
+    dialAutoNext(autoIndexRef.current + 1);
+  }, [dialAutoNext]);
 
   const startAutoDial = () => {
     const queue = assignedComplaints
@@ -618,7 +617,7 @@ export default function FollowUp() {
   const displayed = sourceList
     .filter(c => {
       if (filter === 'assigned' && !selectedAgent) return false;
-      if (filter !== 'mine' && (c.days_overdue ?? 0) < 0) return false;
+      if (filter !== 'mine' && filter !== 'assigned' && (c.days_overdue ?? 0) < 0) return false;
       if (filter === 'overdue')    return c.days_overdue > 0;
       if (filter === 'today')      return today.some(t => t.id === c.id);
       if (filter === 'unassigned') return !c.assigned_uid;
