@@ -647,15 +647,15 @@ export default function FollowUp() {
 
   // Only show complaints where EDC is today or past — applied in the frontend so
   // future-EDC cases never appear in any list or KPI count, even with stale server data.
-  const todayStr    = new Date().toISOString().split('T')[0];
-  const isFutureEdc = (c) => c.closuredate && String(c.closuredate).slice(0, 10) > todayStr;
+  const edcTodayStr = new Date().toISOString().split('T')[0];
+  const isFutureEdc = (c) => c.closuredate && String(c.closuredate).slice(0, 10) > edcTodayStr;
   const activeCmps  = complaints.filter(c => !isFutureEdc(c));
   const activeAssigned = assignedComplaints.filter(c => !isFutureEdc(c));
 
   const overdue     = activeCmps.filter(c => c.days_overdue > 0);
   const today       = activeCmps.filter(c => {
     if (!c.closuredate) return false;
-    return String(c.closuredate).startsWith(todayStr);
+    return String(c.closuredate).startsWith(edcTodayStr);
   });
   const dueTotal = activeCmps;
 
