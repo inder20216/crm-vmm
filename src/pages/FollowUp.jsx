@@ -254,7 +254,7 @@ export default function FollowUp() {
 
   useEffect(() => {
     fetchComplaints();
-    const iv = setInterval(fetchComplaints, 5 * 60 * 1000);
+    const iv = setInterval(fetchComplaints, 60 * 1000);
     return () => clearInterval(iv);
   }, [fetchComplaints]);
 
@@ -645,18 +645,24 @@ export default function FollowUp() {
     return () => { delete window.__vmmOnCallStarted; };
   }, []);
 
-  const overdue     = complaints.filter(c => c.days_overdue > 0);
-  const today       = complaints.filter(c => {
+  // Only show complaints where EDC is today or past — applied in the frontend so
+  // future-EDC cases never appear in any list or KPI count, even with stale server data.
+  const todayStr    = new Date().toISOString().split('T')[0];
+  const isFutureEdc = (c) => c.closuredate && String(c.closuredate).slice(0, 10) > todayStr;
+  const activeCmps  = complaints.filter(c => !isFutureEdc(c));
+  const activeAssigned = assignedComplaints.filter(c => !isFutureEdc(c));
+
+  const overdue     = activeCmps.filter(c => c.days_overdue > 0);
+  const today       = activeCmps.filter(c => {
     if (!c.closuredate) return false;
-    const t = new Date().toISOString().split('T')[0];
-    return String(c.closuredate).startsWith(t);
+    return String(c.closuredate).startsWith(todayStr);
   });
-  const dueTotal = complaints.filter(c => (c.days_overdue ?? 0) >= 0);
+  const dueTotal = activeCmps;
 
   const agentSummary = (() => {
     if (filter !== 'assigned') return [];
     const map = {};
-    complaints.forEach(c => {
+    activeCmps.forEach(c => {
       if (!c.assigned_uid) return;
       const uid = String(c.assigned_uid);
       if (!map[uid]) {
@@ -669,15 +675,14 @@ export default function FollowUp() {
   })();
 
   // Agents see assigned complaints when assignments exist; fall back to all if none yet
-  const agentBase  = isAdmin ? complaints : (assignedComplaints.length > 0 ? assignedComplaints : complaints);
-  const sourceList = (filter === 'mine') ? assignedComplaints
-    : (filter === 'assigned' && selectedAgent) ? complaints.filter(c => String(c.assigned_uid) === String(selectedAgent.id))
+  const agentBase  = isAdmin ? activeCmps : (activeAssigned.length > 0 ? activeAssigned : activeCmps);
+  const sourceList = (filter === 'mine') ? activeAssigned
+    : (filter === 'assigned' && selectedAgent) ? activeCmps.filter(c => String(c.assigned_uid) === String(selectedAgent.id))
     : agentBase;
 
   const displayed = sourceList
     .filter(c => {
       if (filter === 'assigned' && !selectedAgent) return false;
-      if (filter !== 'mine' && filter !== 'assigned' && (c.days_overdue ?? 0) < 0) return false;
       if (filter === 'overdue')    return c.days_overdue > 0;
       if (filter === 'today')      return today.some(t => t.id === c.id);
       if (filter === 'unassigned') return !c.assigned_uid;
@@ -806,6 +811,9 @@ export default function FollowUp() {
         );
 
         if (action === 'Closed' || action === 'Resolved') {
+          setComplaints(prev        => prev.filter(c => c.id !== doneId));
+          setAssignedComplaints(prev => prev.filter(c => c.id !== doneId));
+          setStoreComplaints(prev   => prev.filter(c => c.id !== doneId));
           vmm.sendClosureEmail({
             storeCode:     selected.store_code   || '',
             storeName:     bufStr(selected.store_name) || '',
@@ -819,7 +827,6 @@ export default function FollowUp() {
             closedBy,
             remarks,
           }).catch(() => {});
-          setComplaints(prev => prev.filter(c => c.id !== doneId));
           if (nextInStore) {
             selectComplaint({ ...nextInStore, store_code: selected.store_code, storeemail: selected.storeemail, fm_email: selected.fm_email, fm_name: selected.fm_name }, true);
           } else {
