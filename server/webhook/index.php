@@ -756,10 +756,10 @@ try {
         if (!$qTok) fail('Could not authenticate');
 
         // Write row to SharePoint list
-        $spEndpoint = 'https://graph.microsoft.com/v1.0/sites/openmindservices.sharepoint.com:/sites/VMMCRMSupport:/lists/Complaint Management/items';
+        $spEndpoint = 'https://graph.microsoft.com/v1.0/sites/openmindservices.sharepoint.com:/sites/VMMCRMSupport:/lists/Complaint%20Management/items';
         $spPayload  = json_encode(['fields' => [
             'Title'       => $qNo,
-            'CCEmails'    => $qCC,
+            'CCEmail'     => $qCC,
             'EmailBody'   => $qBody,
             'EscalatedAt' => date('c'),
             'TriggerType' => $qType,
