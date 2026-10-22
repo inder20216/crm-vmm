@@ -472,6 +472,9 @@ export default function FollowUp() {
   const doAutoNC = useCallback(async () => {
     const c = autoQueueRef.current[autoIndexRef.current];
     if (!c) return;
+    // Show processing popup immediately so the agent sees what's happening
+    setRedialCtx('processing');
+    setShowRedialModal(true);
     const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
     const bncEdc = tomorrow.toISOString().split('T')[0];
     try {
@@ -498,8 +501,9 @@ export default function FollowUp() {
       }).catch(() => {});
     } catch { /* silent */ }
     syncAutoCallState('idle');
-    dialAutoNext(autoIndexRef.current + 1);
-  }, [dialAutoNext]);
+    // Transition popup to done state — agent chooses Redial or Next
+    setRedialCtx('nc');
+  }, []);
 
   const startAutoDial = () => {
     const queue = assignedComplaints
@@ -577,8 +581,8 @@ export default function FollowUp() {
       advanceAfterFailure();
     };
 
-    // hide_dialer fired: if __vmmOnCallFailed already handled it, skip
-    // Otherwise: 'dialing' = never connected → NC; 'form' = was connected → disconnected popup
+    // hide_dialer fired: if __vmmOnCallFailed already handled it, skip.
+    // If call lasted < 10 s (SIP 480 / busy / no-answer) → advance; else real call ended → popup.
     window.__vmmOnCallEnded = () => {
       if (dialTimeoutRef.current) { clearTimeout(dialTimeoutRef.current); dialTimeoutRef.current = null; }
       if (callFailedHandledRef.current) { callFailedHandledRef.current = false; return; }
@@ -587,10 +591,16 @@ export default function FollowUp() {
       if (cs === 'dialing') {
         advanceAfterFailure();
       } else if (cs === 'form') {
-        // hide_dialer fired after show_dialer — real call that ended
-        syncAutoCallState('disconnected');
-        setRedialCtx('disconnected');
-        setShowRedialModal(true);
+        const elapsed = callFormStartRef.current ? (Date.now() - callFormStartRef.current) / 1000 : 999;
+        if (elapsed < 10) {
+          // Very short — failed dial (SIP 480, busy, no answer) — treat as NC and advance
+          advanceAfterFailure();
+        } else {
+          // Real conversation that ended — show disconnected/redial popup
+          syncAutoCallState('disconnected');
+          setRedialCtx('disconnected');
+          setShowRedialModal(true);
+        }
       }
     };
 
@@ -1145,25 +1155,33 @@ export default function FollowUp() {
           <div className="fu-redial-overlay">
             <div className="fu-redial-modal">
               <div className="fu-rm-icon">
-                {redialCtx === 'done' ? '✅' : redialCtx === 'nc' ? '📵' : '⚠️'}
+                {redialCtx === 'processing' ? '⏳'
+                  : redialCtx === 'done'    ? '✅'
+                  : redialCtx === 'nc'      ? '📵' : '⚠️'}
               </div>
               <h3 className="fu-rm-title">
-                {redialCtx === 'done'         ? 'Submitted!'
+                {redialCtx === 'processing'   ? 'Not Connected'
+                  : redialCtx === 'done'      ? 'Submitted!'
                   : redialCtx === 'nc'        ? 'Not Connected — Logged'
                   : 'Call Ended'}
               </h3>
               <p className="fu-rm-body">
-                {redialCtx === 'done'         ? 'Follow-up logged. What next?'
-                  : redialCtx === 'nc'        ? 'NC logged automatically. What next?'
+                {redialCtx === 'processing'   ? 'Updating case & sending email…'
+                  : redialCtx === 'done'      ? 'Follow-up logged. What next?'
+                  : redialCtx === 'nc'        ? 'NC logged & email queued. What next?'
                   : 'Call ended before submission. Continue will log this as NC.'}
               </p>
+              {redialCtx !== 'processing' && (
               <div className="fu-rm-btns">
                 <button className="fu-rm-redial" onClick={handleRedial}>📞 Redial</button>
                 <button className="fu-rm-next"   onClick={handleContinueNext}>
                   {redialCtx === 'disconnected' ? '📵 NC & Next' : '→ Next'}
                 </button>
               </div>
+              )}
+              {redialCtx !== 'processing' && (
               <button className="fu-rm-stop" onClick={stopAutoDial}>⏹ Stop Auto-Dial</button>
+              )}
             </div>
           </div>
         )}
