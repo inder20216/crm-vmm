@@ -409,7 +409,7 @@ export default function FollowUp() {
     if (!phone) { syncAutoCallState('auto-nc'); return; }
     dialedPhoneRef.current = phone;
     callFormStartRef.current = null;
-    setDialingEmp({ name: emp.name, designation: emp.designation, num: emp.mobileno });
+    setDialingEmp({ name: emp.name, designation: emp.designation, num: emp.mobileno, isAlt: emp.isAlt || false });
     syncAutoCallState('dialing');
     window.__vmmDial?.(phone);
     // Fallback: if hide_dialer never fires (SIP 480/stuck), force NC advance after 45s
@@ -457,9 +457,16 @@ export default function FollowUp() {
             setInactiveModal({ show: true, to: c.storeemail || '', cc: '', complaint: c });
             return;
           }
-          const d = (e) => (e.designation || '').toLowerCase();
-          const smAsm = all.filter(e => d(e).includes('sm') || d(e).includes('asm'));
-          storeEmpQueueRef.current = smAsm.length ? smAsm : all.slice(0, 1);
+          // Build flat dial queue: all employees in SM→ASM→others order (from SQL),
+          // primary number first then alternate number for each employee.
+          const phoneQueue = [];
+          all.forEach(e => {
+            const pri = (e.mobileno    || '').replace(/\D/g, '');
+            const alt = (e.alternative || '').replace(/\D/g, '');
+            if (pri) phoneQueue.push({ name: e.name, designation: e.designation, mobileno: pri });
+            if (alt && alt !== pri) phoneQueue.push({ name: e.name, designation: e.designation, mobileno: alt, isAlt: true });
+          });
+          storeEmpQueueRef.current = phoneQueue;
           storeEmpIdxRef.current = 0;
           dialEmpAtIndexRef.current?.(0);
         })
