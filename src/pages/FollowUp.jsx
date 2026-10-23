@@ -527,11 +527,19 @@ export default function FollowUp() {
   const handleRedial = () => {
     setShowRedialModal(false);
     syncIsRedial(true);
-    const c = autoQueueRef.current[autoIndexRef.current];
-    if (!c) return;
-    // Redial restarts from the first employee
     storeEmpIdxRef.current = 0;
     dialEmpAtIndexRef.current?.(0);
+  };
+
+  const handleTryAlternate = () => {
+    setShowRedialModal(false);
+    const nextIdx = storeEmpIdxRef.current + 1;
+    if (nextIdx < storeEmpQueueRef.current.length) {
+      dialEmpAtIndexRef.current?.(nextIdx);
+    } else {
+      // No more numbers — go to NC flow
+      syncAutoCallState('auto-nc');
+    }
   };
 
   const handleInactiveEmailSend = async () => {
@@ -1181,7 +1189,10 @@ export default function FollowUp() {
               {redialCtx !== 'processing' && (
               <div className="fu-rm-btns">
                 <button className="fu-rm-redial" onClick={handleRedial}>📞 Redial</button>
-                <button className="fu-rm-next"   onClick={handleContinueNext}>
+                {redialCtx === 'disconnected' && storeEmpQueueRef.current.length > storeEmpIdxRef.current + 1 && (
+                  <button className="fu-rm-redial" onClick={handleTryAlternate}>🔄 Try alternate</button>
+                )}
+                <button className="fu-rm-next" onClick={handleContinueNext}>
                   {redialCtx === 'disconnected' ? '📵 NC & Next' : '→ Next'}
                 </button>
               </div>
