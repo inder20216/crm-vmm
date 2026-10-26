@@ -59,6 +59,7 @@ export const vmm = {
   bulkNotConnected:     (data)     => post(PHP, 'vmm-bulk-not-connected', data),
   getFollowupUsers:     ()         => get(PHP,  'vmm-followup-users'),
   assignFollowups:      (data)     => post(PHP, 'vmm-assign-followup',   data),
+  selfAssign:           (data)     => post(PHP, 'vmm-self-assign',        data),
   unassignFollowups:    (data)     => post(PHP, 'vmm-unassign-followup', data),
   queueEmail:           (data)     => post(PHP, 'vmm-queue-email',       data),
   getMyFollowups:       (userId)   => get(PHP,  'vmm-my-followups',      { user_id: userId }),

@@ -15,6 +15,13 @@
 .fu-hstat-blue  { background: #dbeafe; color: #1d4ed8; }
 .fu-hstat-sub   { font-size: 9px; font-weight: 500; opacity: .75; margin-top: 2px; text-transform: none; letter-spacing: 0; }
 
+/* ── Self-assign bar ── */
+.fu-selfassign-bar { display: flex; align-items: center; gap: 12px; padding: 8px 20px; background: #f0f9ff; border-bottom: 1px solid #bae6fd; }
+.fu-selfassign-btn { padding: 8px 20px; border-radius: 8px; border: none; font-size: 13px; font-weight: 700; cursor: pointer; transition: background .15s; background: #0ea5e9; color: #fff; }
+.fu-selfassign-btn:disabled { background: #94a3b8; cursor: not-allowed; }
+.fu-selfassign-btn:not(:disabled):hover { background: #0284c7; }
+.fu-selfassign-hint { font-size: 12px; color: #64748b; }
+
 /* ── Body split ── */
 .fu-body { display: flex; flex: 1; overflow: hidden; }
 

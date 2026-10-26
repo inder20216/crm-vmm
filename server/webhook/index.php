@@ -392,7 +392,10 @@ try {
         q($db, "INSERT INTO {$px}vendorescalations
             (logid,complaintid,escalationlevel,ticketno,closuredate,uid,uuid,created,updated,is_deleted)
             VALUES ($logid,$complaintId,$escLevel,'$vendorTicketNo','$newEdc',$uid,0,NOW(),NOW(),'No')");
-        if ($newEdc) q($db, "UPDATE {$px}complaints SET closuredate='$newEdc', updated=NOW() WHERE id=$complaintId");
+        if ($newEdc) {
+            q($db, "UPDATE {$px}complaints SET closuredate='$newEdc', updated=NOW() WHERE id=$complaintId");
+            q($db, "DELETE FROM {$px}followup_assignments WHERE complaint_id=$complaintId");
+        }
 
         ok(['complaintId' => $complaintId, 'status' => 'Escalated']);
 
@@ -576,6 +579,9 @@ try {
             (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
             VALUES ($complaintId,'Updated',1,'EDC Followup','$delayMain','$delaySub','EDC updated to $newEdc" . ($remarks ? " — $remarks" : "") . "',$uid,NOW(),NOW(),'No')");
 
+        // EDC changed — detach from any assigned agent so TL must reassign
+        q($db, "DELETE FROM {$px}followup_assignments WHERE complaint_id=$complaintId");
+
         ok(['complaintId' => $complaintId, 'newEdc' => $newEdc]);
 
     // ── Send email via app-only Graph API (no user token needed) ─────────────
@@ -735,6 +741,56 @@ try {
         }
         ok(['assigned' => $aCount]);
 
+    // ── Self-assign: agent picks up next 10 stores ────────────────────────────
+    case 'vmm-self-assign':
+        if ($METHOD !== 'POST') fail('POST required');
+        $saUid = (int)($body['user_id'] ?? 0);
+        if (!$saUid) fail('user_id required');
+
+        // Block if agent still has active assigned cases
+        $existing = row($db, "SELECT COUNT(*) as n FROM {$px}followup_assignments fa
+            JOIN {$px}complaints c ON c.id=fa.complaint_id
+            JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+            WHERE fa.assigned_to=$saUid AND c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved')");
+        if (($existing['n'] ?? 0) > 0) fail('complete_existing');
+
+        // Find oldest 10 stores with unassigned due complaints
+        $saStores = rows($db, "SELECT c.storerefid
+            FROM {$px}complaints c
+            JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
+            JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            LEFT JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id
+            WHERE c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
+            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()
+            AND fa.complaint_id IS NULL
+            GROUP BY c.storerefid
+            ORDER BY MIN(GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01'))) ASC
+            LIMIT 10");
+
+        if (empty($saStores)) { ok(['assigned' => 0, 'stores' => 0]); break; }
+
+        $saStoreIds = implode(',', array_map(fn($s) => (int)$s['storerefid'], $saStores));
+
+        // Get all complaint IDs from those stores that are unassigned and due
+        $saCmps = rows($db, "SELECT c.id FROM {$px}complaints c
+            JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            LEFT JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id
+            WHERE c.storerefid IN ($saStoreIds) AND c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
+            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()
+            AND fa.complaint_id IS NULL");
+
+        $saCount = 0;
+        foreach ($saCmps as $saCmp) {
+            $scid = (int)$saCmp['id'];
+            $db->query("INSERT INTO {$px}followup_assignments (complaint_id, assigned_to, assigned_by)
+                VALUES ($scid, $saUid, $saUid)
+                ON DUPLICATE KEY UPDATE assigned_to=$saUid, assigned_by=$saUid, assigned_at=NOW()");
+            $saCount++;
+        }
+        ok(['assigned' => $saCount, 'stores' => count($saStores)]);
+
     // ── Queue email via SharePoint → Power Automate ───────────────────────────
     case 'vmm-queue-email':
         if ($METHOD !== 'POST') fail('POST required');
@@ -810,6 +866,7 @@ try {
             JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id AND fa.assigned_to=$mfUid
             WHERE c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
             AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()
+            AND DATE(fa.assigned_at) >= DATE(GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')))
             ORDER BY GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) ASC");
         ok(['complaints' => $mfRows]);
 

@@ -635,6 +635,32 @@ export default function FollowUp() {
     } catch { showToast('Failed to unassign.', 'err'); }
   };
 
+  const [selfAssigning, setSelfAssigning] = useState(false);
+  const handleSelfAssign = async () => {
+    if (selfAssigning || activeAssigned.length > 0) return;
+    setSelfAssigning(true);
+    try {
+      const res = await vmm.selfAssign({ user_id: currentUser.id });
+      if (res.assigned > 0) {
+        showToast(`${res.assigned} complaint(s) from ${res.stores} store(s) assigned to you`, 'ok');
+        // Refresh assigned complaints
+        vmm.getMyFollowups(currentUser.id).then(r => {
+          if (r.success) setAssignedComplaints(r.complaints || []);
+        }).catch(() => {});
+        setFilter('mine');
+      } else {
+        showToast('No pending unassigned cases available', 'info');
+      }
+    } catch (err) {
+      if (err?.message?.includes('complete_existing')) {
+        showToast('Complete your current assigned cases first', 'err');
+      } else {
+        showToast('Could not assign cases. Try again.', 'err');
+      }
+    }
+    setSelfAssigning(false);
+  };
+
   const handleAssign = async () => {
     if (!assignUserId || !selectedIds.size || submitting) return;
     setSubmitting(true);
@@ -699,8 +725,7 @@ export default function FollowUp() {
     return Object.values(map).sort((a, b) => b.count - a.count);
   })();
 
-  // Agents see assigned complaints when assignments exist; fall back to all if none yet
-  const agentBase  = isAdmin ? activeCmps : (activeAssigned.length > 0 ? activeAssigned : activeCmps);
+  const agentBase  = isAdmin ? activeCmps : activeAssigned;
   const sourceList = (filter === 'mine') ? activeAssigned
     : (filter === 'assigned' && selectedAgent) ? activeCmps.filter(c => String(c.assigned_uid) === String(selectedAgent.id))
     : agentBase;
@@ -910,6 +935,23 @@ export default function FollowUp() {
           <div className="fu-hstat fu-hstat-blue"><span>{dueTotal.length}</span>Total Open</div>
         </div>
       </div>
+
+      {/* ── Self-assign button (agents only) ── */}
+      {!isAdmin && (
+        <div className="fu-selfassign-bar">
+          <button
+            className="fu-selfassign-btn"
+            onClick={handleSelfAssign}
+            disabled={selfAssigning || activeAssigned.length > 0}
+            title={activeAssigned.length > 0 ? 'Complete your current cases before picking new ones' : 'Auto-assign next 10 stores to yourself'}
+          >
+            {selfAssigning ? '⏳ Assigning…' : activeAssigned.length > 0 ? `📋 ${activeAssigned.length} cases in progress` : '⚡ Pick My Cases'}
+          </button>
+          {activeAssigned.length > 0 && (
+            <span className="fu-selfassign-hint">Complete all assigned cases to unlock</span>
+          )}
+        </div>
+      )}
 
       <div className="fu-body">
 
