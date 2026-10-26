@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:server": "vite build --mode production-server --outDir dist-server",
     "lint": "eslint .",
     "preview": "vite preview",
     "deploy": "npm run build && npx gh-pages -d dist"
