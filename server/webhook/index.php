@@ -755,7 +755,7 @@ try {
             JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
             LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
             WHERE fa.assigned_to=$saUid AND c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved')
-            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()");
+            AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()");
         if (($existing['n'] ?? 0) > 0) fail('complete_existing');
 
         // Find oldest 10 stores with unassigned due complaints
