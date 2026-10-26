@@ -650,13 +650,13 @@ try {
             UNIQUE KEY uq_cmp (complaint_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
-            GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) as edc,
+            COALESCE(esc.closuredate, c.closuredate) as edc,
             s.storecode, s.storename, s.storeemail, s.storeaddress, s.storecity, s.fmname, s.fmemail, s.empname, s.empmobileno, s.emptalternativeno,
             s.managername, s.managermobileno, s.asmname, s.asmmobileno, s.fmmobileno as fm_mobile,
             l.status, l.remarks as last_remark, l.reasonfordelay as last_delay_main,
             l.subreasonfordelay as last_delay_sub, l.created as last_updated,
             esc.ticketno, esc.escalationlevel,
-            DATEDIFF(CURDATE(), GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01'))) as days_overdue,
+            DATEDIFF(CURDATE(), COALESCE(esc.closuredate, c.closuredate)) as days_overdue,
             (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count,
             fa.assigned_to as assigned_uid
             FROM {$px}complaints c
@@ -665,8 +665,8 @@ try {
             LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
             LEFT JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id
             WHERE c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
-            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()
-            ORDER BY GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) ASC");
+            AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()
+            ORDER BY COALESCE(esc.closuredate, c.closuredate) ASC");
         ok(['complaints' => $r]);
 
     // ── Store-level pending followups (same store, all open) ──────────────────
@@ -860,8 +860,8 @@ try {
             s.managername, s.managermobileno, s.asmname, s.asmmobileno, s.fmmobileno as fm_mobile,
             l.status, l.remarks as last_remark, l.reasonfordelay as last_delay_main,
             l.subreasonfordelay as last_delay_sub, l.created as last_updated,
-            GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) as edc, esc.ticketno, esc.escalationlevel,
-            DATEDIFF(CURDATE(), GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01'))) as days_overdue,
+            COALESCE(esc.closuredate, c.closuredate) as edc, esc.ticketno, esc.escalationlevel,
+            DATEDIFF(CURDATE(), COALESCE(esc.closuredate, c.closuredate)) as days_overdue,
             (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
@@ -869,9 +869,9 @@ try {
             LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
             JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id AND fa.assigned_to=$mfUid
             WHERE c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
-            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()
-            AND DATE(fa.assigned_at) >= DATE(GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')))
-            ORDER BY GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) ASC");
+            AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()
+            AND DATE(fa.assigned_at) >= DATE(COALESCE(esc.closuredate, c.closuredate))
+            ORDER BY COALESCE(esc.closuredate, c.closuredate) ASC");
         ok(['complaints' => $mfRows]);
 
     // ── Bulk Not Connected (all pending complaints at a store in one action) ───
