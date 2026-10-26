@@ -747,11 +747,15 @@ try {
         $saUid = (int)($body['user_id'] ?? 0);
         if (!$saUid) fail('user_id required');
 
-        // Block if agent still has active assigned cases
+        // Block if agent still has active assigned cases that are actually due —
+        // must match vmm-my-followups' EDC filter, or this blocks on complaints
+        // the agent can't even see yet in "Assigned to Me".
         $existing = row($db, "SELECT COUNT(*) as n FROM {$px}followup_assignments fa
             JOIN {$px}complaints c ON c.id=fa.complaint_id
             JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
-            WHERE fa.assigned_to=$saUid AND c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved')");
+            LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            WHERE fa.assigned_to=$saUid AND c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved')
+            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()");
         if (($existing['n'] ?? 0) > 0) fail('complete_existing');
 
         // Find oldest 10 stores with unassigned due complaints
