@@ -2066,7 +2066,7 @@ export default function EmailComplaints() {
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                         <div style={{ fontWeight: 700, color: '#15803d' }}>✓ Complaint Found</div>
                         <a
-                          href={`${window.location.origin}/crm-vmm/complaints/${foundComplaint.complaint.complaintno}`}
+                          href={`${window.location.origin}${import.meta.env.BASE_URL}complaints/${foundComplaint.complaint.complaintno}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           style={{ fontSize: 11, color: '#2563eb', textDecoration: 'none', fontWeight: 600, padding: '2px 8px', background: '#dbeafe', borderRadius: 4 }}
