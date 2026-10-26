@@ -1148,7 +1148,7 @@ export default function FollowUp() {
                       </div>
                       <div className="fu-sgr-meta">
                         {g.overdue > 0 && <span className="fu-badge fu-badge-red">{g.overdue} overdue</span>}
-                        <span className="fu-badge fu-badge-blue">{g.complaints.length} pending</span>
+                        {(g.complaints.length - g.overdue) > 0 && <span className="fu-badge fu-badge-blue">{g.complaints.length - g.overdue} pending</span>}
                       </div>
                       {g.fm_name && <div className="fu-sgr-fm">FM: {g.fm_name}</div>}
                     </div>
