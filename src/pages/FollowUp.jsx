@@ -725,10 +725,9 @@ export default function FollowUp() {
     return Object.values(map).sort((a, b) => b.count - a.count);
   })();
 
-  const agentBase  = isAdmin ? activeCmps : activeAssigned;
   const sourceList = (filter === 'mine') ? activeAssigned
     : (filter === 'assigned' && selectedAgent) ? activeCmps.filter(c => String(c.assigned_uid) === String(selectedAgent.id))
-    : agentBase;
+    : activeCmps;
 
   const displayed = sourceList
     .filter(c => {
