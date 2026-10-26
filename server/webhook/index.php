@@ -6,7 +6,7 @@
  */
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-$allowed = ['https://inder20216.github.io', 'http://localhost:5173', 'http://localhost:5174'];
+$allowed = ['https://inder20216.github.io', 'https://crmvmm.openmindservices.in', 'http://localhost:5173', 'http://localhost:5174'];
 $origin  = $_SERVER['HTTP_ORIGIN'] ?? '';
 if (in_array($origin, $allowed)) {
     header("Access-Control-Allow-Origin: $origin");
