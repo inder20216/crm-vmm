@@ -9,11 +9,17 @@ const BASE = import.meta.env.VITE_API_BASE || '/webhook';
 // Cloud n8n — non-email workflows only
 const CLOUD = import.meta.env.VITE_CLOUD_API_BASE || '/cloud-webhook';
 
+async function throwWithServerError(r, path) {
+  let serverMsg = '';
+  try { serverMsg = (await r.json())?.error || ''; } catch { /* body wasn't JSON */ }
+  throw new Error(serverMsg || `${path} failed: ${r.status}`);
+}
+
 async function get(base, path, params = {}) {
   const url = new URL(`${base}/${path}`, window.location.origin);
   Object.entries(params).forEach(([k, v]) => { if (v !== '' && v != null) url.searchParams.set(k, v); });
   const r = await fetch(url.toString());
-  if (!r.ok) throw new Error(`${path} failed: ${r.status}`);
+  if (!r.ok) await throwWithServerError(r, path);
   return r.json();
 }
 
@@ -23,7 +29,7 @@ async function post(base, path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`${path} failed: ${r.status}`);
+  if (!r.ok) await throwWithServerError(r, path);
   return r.json();
 }
 
