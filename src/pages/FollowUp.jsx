@@ -1105,6 +1105,12 @@ export default function FollowUp() {
               const edc = c.closuredate || c.edc || null;
               if (edc && (!g.minEdc || edc < g.minEdc)) g.minEdc = edc;
             }
+            // Badge counts reflect ALL active complaints at the store (matches drill-down)
+            for (const [key, g] of storeMap) {
+              const all = activeCmps.filter(c => (c.store_code || '—') === key);
+              g.totalCount   = all.length;
+              g.totalOverdue = all.filter(c => (c.days_overdue ?? 0) > 0).length;
+            }
             const groups = [...storeMap.values()].sort((a, b) => {
               const da = new Date(a.minEdc || '9999-12-31');
               const db = new Date(b.minEdc || '9999-12-31');
@@ -1147,8 +1153,8 @@ export default function FollowUp() {
                         <span className="fu-sgr-name">{g.store_name}</span>
                       </div>
                       <div className="fu-sgr-meta">
-                        {g.overdue > 0 && <span className="fu-badge fu-badge-red">{g.overdue} overdue</span>}
-                        {(g.complaints.length - g.overdue) > 0 && <span className="fu-badge fu-badge-blue">{g.complaints.length - g.overdue} pending</span>}
+                        {g.totalOverdue > 0 && <span className="fu-badge fu-badge-red">{g.totalOverdue} overdue</span>}
+                        {(g.totalCount - g.totalOverdue) > 0 && <span className="fu-badge fu-badge-blue">{g.totalCount - g.totalOverdue} pending</span>}
                       </div>
                       {g.fm_name && <div className="fu-sgr-fm">FM: {g.fm_name}</div>}
                     </div>
