@@ -440,6 +440,7 @@ try {
             }
             q($db, "UPDATE {$px}complaints SET closuredate='$newEdc', updated=NOW() WHERE id=$complaintId");
         }
+        q($db, "DELETE FROM {$px}followup_assignments WHERE complaint_id=$complaintId");
         ok(['complaintId' => $complaintId, 'closureStatus' => $closureStatus]);
 
     // ── Not connected ─────────────────────────────────────────────────────────
@@ -675,16 +676,16 @@ try {
         if (!$sfCode) fail('storecode required');
         $sfRows = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname,
             l.status as current_status,
-            GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) as edc,
-            DATEDIFF(CURDATE(), GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01'))) as days_overdue,
+            COALESCE(esc.closuredate, c.closuredate) as edc,
+            DATEDIFF(CURDATE(), COALESCE(esc.closuredate, c.closuredate)) as days_overdue,
             (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
-            JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
-            LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
-            WHERE s.storecode='$sfCode' AND c.is_deleted='No' AND l.status NOT IN ('Closed') AND c.productname != 'Pest Control'
-            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()
-            ORDER BY GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) ASC");
+            JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            WHERE s.storecode='$sfCode' AND c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
+            AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()
+            ORDER BY COALESCE(esc.closuredate, c.closuredate) ASC");
         ok(['complaints' => $sfRows]);
 
     // ── Store employees (call queue) ──────────────────────────────────────────
@@ -769,7 +770,8 @@ try {
             AND c.storerefid NOT IN (
                 SELECT DISTINCT c2.storerefid FROM {$px}complaints c2
                 JOIN {$px}followup_assignments fa2 ON fa2.complaint_id=c2.id
-                WHERE c2.is_deleted='No'
+                JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l2 ON l2.complaintid=c2.id
+                WHERE c2.is_deleted='No' AND l2.status NOT IN ('Closed','Resolved')
             )
             GROUP BY c.storerefid
             ORDER BY MIN(COALESCE(esc.closuredate, c.closuredate)) ASC
