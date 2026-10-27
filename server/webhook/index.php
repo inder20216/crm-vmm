@@ -758,18 +758,21 @@ try {
             AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()");
         if (($existing['n'] ?? 0) > 0) fail('complete_existing');
 
-        // Find oldest 10 stores with unassigned due complaints
+        // Find oldest 10 stores with NO complaints assigned to any agent
         $saStores = rows($db, "SELECT c.storerefid
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
             JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
             LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
-            LEFT JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id
             WHERE c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
-            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()
-            AND fa.complaint_id IS NULL
+            AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()
+            AND c.storerefid NOT IN (
+                SELECT DISTINCT c2.storerefid FROM {$px}complaints c2
+                JOIN {$px}followup_assignments fa2 ON fa2.complaint_id=c2.id
+                WHERE c2.is_deleted='No'
+            )
             GROUP BY c.storerefid
-            ORDER BY MIN(GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01'))) ASC
+            ORDER BY MIN(COALESCE(esc.closuredate, c.closuredate)) ASC
             LIMIT 10");
 
         if (empty($saStores)) { ok(['assigned' => 0, 'stores' => 0]); break; }
@@ -782,7 +785,7 @@ try {
             LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
             LEFT JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id
             WHERE c.storerefid IN ($saStoreIds) AND c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
-            AND GREATEST(IFNULL(c.closuredate,'1970-01-01'),IFNULL(esc.closuredate,'1970-01-01')) <= CURDATE()
+            AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()
             AND fa.complaint_id IS NULL");
 
         $saCount = 0;

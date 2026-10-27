@@ -944,7 +944,7 @@ export default function FollowUp() {
             disabled={selfAssigning || activeAssigned.length > 0}
             title={activeAssigned.length > 0 ? 'Complete your current cases before picking new ones' : 'Auto-assign next 10 stores to yourself'}
           >
-            {selfAssigning ? '⏳ Assigning…' : activeAssigned.length > 0 ? `📋 ${activeAssigned.length} cases in progress` : '⚡ Pick My Cases'}
+            {selfAssigning ? '⏳ Assigning…' : activeAssigned.length > 0 ? `📋 ${new Set(activeAssigned.map(c => c.store_code)).size} store(s) in progress` : '⚡ Pick My Cases'}
           </button>
           {activeAssigned.length > 0 && (
             <span className="fu-selfassign-hint">Complete all assigned cases to unlock</span>
