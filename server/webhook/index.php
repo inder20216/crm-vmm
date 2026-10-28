@@ -1197,6 +1197,91 @@ try {
         $text = $body['text'] ?? '';
         ok(['polished' => $text]);
 
+    // ── Complaint audit (third-party read-only) ───────────────────────────────
+    case 'vmm-complaint-audit':
+        // API key check — set AUDIT_KEY in dbconfig.php to restrict access
+        if (defined('AUDIT_KEY') && constant('AUDIT_KEY') !== '') {
+            $reqKey = $GET['key'] ?? $body['key'] ?? '';
+            if ($reqKey !== constant('AUDIT_KEY')) {
+                http_response_code(401);
+                echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+                exit;
+            }
+        }
+
+        $auNo  = e($db, $GET['no']     ?? $body['no']     ?? '');
+        $auMob = e($db, $GET['mobile'] ?? $body['mobile'] ?? '');
+        if (!$auNo && !$auMob) fail('Provide no (complaint number) or mobile (contact number)');
+
+        // Find complaint IDs
+        if ($auNo) {
+            $auCmps = rows($db, "SELECT c.id FROM {$px}complaints c WHERE c.is_deleted='No' AND (c.complaintno='$auNo') LIMIT 1");
+        } else {
+            // Search by any mobile found in logs for this contact
+            $auCmps = rows($db, "SELECT DISTINCT l.complaintid as id FROM {$px}complaintlogs l
+                JOIN {$px}complaints c ON c.id=l.complaintid AND c.is_deleted='No'
+                WHERE l.is_deleted='No' AND l.mobileno='$auMob' ORDER BY l.complaintid DESC LIMIT 50");
+        }
+
+        if (empty($auCmps)) fail('No complaints found', 404);
+
+        $auResult = [];
+        foreach ($auCmps as $auRow) {
+            $cid = (int)$auRow['id'];
+
+            // Complaint header
+            $auC = row($db, "SELECT
+                c.id, c.complaintno, c.created as logged_at,
+                c.productname as product, c.natureproblem as nature, c.complainttype as type,
+                c.vendorname as vendor, c.location,
+                c.closuredate as original_edc,
+                COALESCE(esc_cur.closuredate, c.closuredate) as current_edc,
+                s.storecode, s.storename, s.storeemail as store_email,
+                s.fmname as fm_name, s.fmmobileno as fm_mobile, s.fmemail as fm_email, s.fmcity as fm_city,
+                s.empname as sm_name, s.empmobileno as sm_mobile,
+                s.managername as asm_name, s.managermobileno as asm_mobile,
+                s.asmname as rm_name, s.asmmobileno as rm_mobile,
+                s.storeaddress as store_address, s.storecity as store_city, s.statename as state,
+                l_cur.status as current_status
+                FROM {$px}complaints c
+                JOIN {$px}complaintstores s ON s.id=c.storerefid
+                LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc_cur ON esc_cur.complaintid=c.id
+                LEFT JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l_cur ON l_cur.complaintid=c.id
+                WHERE c.id=$cid LIMIT 1");
+
+            if (!$auC) continue;
+
+            // All log entries
+            $auLogs = rows($db, "SELECT
+                l.created as timestamp, l.status, l.fupdonevia as followup_via,
+                l.subject, l.mobileno as mobile_called, l.txnid as txn_id,
+                l.reasonfordelay as delay_reason, l.subreasonfordelay as delay_sub_reason,
+                l.caseclosedby as closed_by_name, l.closureinformdate as closure_inform_date,
+                l.remarks, u.name as updated_by
+                FROM {$px}complaintlogs l
+                LEFT JOIN {$px}users u ON u.id=l.uid
+                WHERE l.is_deleted='No' AND l.complaintid=$cid
+                ORDER BY l.id ASC");
+
+            // All escalations
+            $auEscs = rows($db, "SELECT
+                e.created as timestamp, e.escalationlevel as level,
+                e.ticketno as ticket_no, e.closuredate as edc_set,
+                u.name as updated_by
+                FROM {$px}vendorescalations e
+                LEFT JOIN {$px}users u ON u.id=e.uid
+                WHERE e.is_deleted='No' AND e.complaintid=$cid
+                ORDER BY e.id ASC");
+
+            $auResult[] = [
+                'complaint'   => $auC,
+                'logs'        => $auLogs,
+                'escalations' => $auEscs,
+            ];
+        }
+
+        ok(['count' => count($auResult), 'complaints' => $auResult]);
+
     default:
         fail("Unknown action: $action", 404);
     }
