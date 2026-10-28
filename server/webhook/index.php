@@ -473,7 +473,7 @@ try {
         }
 
         // Inherit the last real case status so the status column stays consistent
-        $prevReal = row($db, "SELECT status FROM {$px}complaintlogs WHERE complaintid=$complaintId AND is_deleted='No' AND status IN ('Logged','Open','Escalated','Closed','Resolved','Partially Closed') ORDER BY id DESC LIMIT 1");
+        $prevReal = row($db, "SELECT status FROM {$px}complaintlogs WHERE complaintid=$complaintId AND is_deleted='No' AND status IN ('Logged','Open','Escalated','Closed','Resolved','Partially Closed','Reopened') ORDER BY id DESC LIMIT 1");
         $ncStatus = $prevReal['status'] ?? 'Open';
 
         // Log NC action — fupdonevia = method used (Call), remarks = outcome
@@ -893,7 +893,7 @@ try {
 
         // Batch-fetch the last real case status and last delay reason for all complaints
         $bncIdStr = implode(',', $bncIds);
-        $bncRsRows = rows($db, "SELECT l.complaintid, l.status FROM {$px}complaintlogs l WHERE l.id IN (SELECT MAX(l2.id) FROM {$px}complaintlogs l2 WHERE l2.complaintid IN ($bncIdStr) AND l2.is_deleted='No' AND l2.status IN ('Logged','Open','Escalated','Closed','Resolved','Partially Closed') GROUP BY l2.complaintid)");
+        $bncRsRows = rows($db, "SELECT l.complaintid, l.status FROM {$px}complaintlogs l WHERE l.id IN (SELECT MAX(l2.id) FROM {$px}complaintlogs l2 WHERE l2.complaintid IN ($bncIdStr) AND l2.is_deleted='No' AND l2.status IN ('Logged','Open','Escalated','Closed','Resolved','Partially Closed','Reopened') GROUP BY l2.complaintid)");
         $bncStatusMap = [];
         foreach ($bncRsRows as $rs) $bncStatusMap[(int)$rs['complaintid']] = $rs['status'];
 
