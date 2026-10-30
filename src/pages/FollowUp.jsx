@@ -265,8 +265,8 @@ export default function FollowUp() {
 
   const resetForm = (c) => {
     setMethod('Call');
-    setTxnId(''); txnIdRef.current = '';
-    setMobileCalled('');
+    // txnId and mobileCalled persist across complaints in the same call session;
+    // they're refreshed by __vmmOnCallStarted when the next call connects.
     setVendorTicket('');
     setAction('');
     setDelayMain(''); setDelaySub(''); setNewEdc('');
