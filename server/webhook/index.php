@@ -320,7 +320,7 @@ try {
             s.empname, s.empmobileno, l.status, l.remarks, l.created as log_created
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid
-            JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+            JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
             WHERE c.is_deleted='No' AND c.complaintno='$no' LIMIT 1");
         if (!$r) fail('Complaint not found', 404);
         ok(['complaint' => $r]);
@@ -332,7 +332,9 @@ try {
         $complaintId = (int)($b['complaintId'] ?? 0);
         if (!$complaintId) fail('complaintId required');
 
-        $status         = e($db, $b['status']          ?? 'Updated');
+        // Always use the actual last status from DB — a plain update must never change complaint status
+        $lastRealLog = row($db, "SELECT status FROM {$px}complaintlogs WHERE complaintid=$complaintId AND is_deleted='No' AND status IN ('Logged','Open','Escalated','Closed','Resolved','Partially Closed') ORDER BY id DESC LIMIT 1");
+        $status = $lastRealLog['status'] ?? 'Logged';
         $followupMethod = e($db, $b['followupMethod']   ?? 'Call');
         $txnId          = e($db, $b['txnId']            ?? '');
         $mobileCalled   = e($db, $b['mobileCalled']     ?? '');
@@ -394,8 +396,8 @@ try {
             VALUES ($logid,$complaintId,$escLevel,'$vendorTicketNo','$newEdc',$uid,0,NOW(),NOW(),'No')");
         if ($newEdc) {
             q($db, "UPDATE {$px}complaints SET closuredate='$newEdc', updated=NOW() WHERE id=$complaintId");
-            q($db, "DELETE FROM {$px}followup_assignments WHERE complaint_id=$complaintId");
         }
+        q($db, "DELETE FROM {$px}followup_assignments WHERE complaint_id=$complaintId");
 
         ok(['complaintId' => $complaintId, 'status' => 'Escalated']);
 
@@ -554,6 +556,7 @@ try {
             }
         }
 
+        q($db, "DELETE FROM {$px}followup_assignments WHERE complaint_id=$complaintId");
         ok(['success' => true, 'emailSent' => $emailSent]);
 
     // ── Update EDC ────────────────────────────────────────────────────────────
@@ -580,7 +583,6 @@ try {
             (complaintid,status,currentstatus,fupdonevia,reasonfordelay,subreasonfordelay,remarks,uid,created,updated,is_deleted)
             VALUES ($complaintId,'Updated',1,'EDC Followup','$delayMain','$delaySub','EDC updated to $newEdc" . ($remarks ? " — $remarks" : "") . "',$uid,NOW(),NOW(),'No')");
 
-        // EDC changed — detach from any assigned agent so TL must reassign
         q($db, "DELETE FROM {$px}followup_assignments WHERE complaint_id=$complaintId");
 
         ok(['complaintId' => $complaintId, 'newEdc' => $newEdc]);
@@ -658,13 +660,14 @@ try {
             l.subreasonfordelay as last_delay_sub, l.created as last_updated,
             esc.ticketno, esc.escalationlevel,
             DATEDIFF(CURDATE(), COALESCE(esc.closuredate, c.closuredate)) as days_overdue,
-            (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count,
+            COALESCE(nc_agg.nc_count, 0) as nc_count,
             fa.assigned_to as assigned_uid
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
-            JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
-            LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}vendorescalations WHERE is_deleted='No') _e WHERE _e.rn=1) esc ON esc.complaintid=c.id
             LEFT JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id
+            LEFT JOIN (SELECT complaintid, COUNT(*) as nc_count FROM {$px}complaintlogs WHERE fupdonevia='Not Connected' AND is_deleted='No' GROUP BY complaintid) nc_agg ON nc_agg.complaintid=c.id
             WHERE c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
             AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()
             ORDER BY COALESCE(esc.closuredate, c.closuredate) ASC");
@@ -676,13 +679,17 @@ try {
         if (!$sfCode) fail('storecode required');
         $sfRows = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname,
             l.status as current_status,
+            l.remarks as last_remark,
+            l.reasonfordelay as last_delay_main,
+            l.subreasonfordelay as last_delay_sub,
             COALESCE(esc.closuredate, c.closuredate) as edc,
             DATEDIFF(CURDATE(), COALESCE(esc.closuredate, c.closuredate)) as days_overdue,
-            (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
+            COALESCE(nc_agg.nc_count, 0) as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
-            JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
-            LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}vendorescalations WHERE is_deleted='No') _e WHERE _e.rn=1) esc ON esc.complaintid=c.id
+            LEFT JOIN (SELECT complaintid, COUNT(*) as nc_count FROM {$px}complaintlogs WHERE fupdonevia='Not Connected' AND is_deleted='No' GROUP BY complaintid) nc_agg ON nc_agg.complaintid=c.id
             WHERE s.storecode='$sfCode' AND c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
             AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()
             ORDER BY COALESCE(esc.closuredate, c.closuredate) ASC");
@@ -753,8 +760,8 @@ try {
         // the agent can't even see yet in "Assigned to Me".
         $existing = row($db, "SELECT COUNT(*) as n FROM {$px}followup_assignments fa
             JOIN {$px}complaints c ON c.id=fa.complaint_id
-            JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
-            LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}vendorescalations WHERE is_deleted='No') _e WHERE _e.rn=1) esc ON esc.complaintid=c.id
             WHERE fa.assigned_to=$saUid AND c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved')
             AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()");
         if (($existing['n'] ?? 0) > 0) fail('complete_existing');
@@ -763,14 +770,14 @@ try {
         $saStores = rows($db, "SELECT c.storerefid
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
-            JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
-            LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}vendorescalations WHERE is_deleted='No') _e WHERE _e.rn=1) esc ON esc.complaintid=c.id
             WHERE c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
             AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()
             AND c.storerefid NOT IN (
                 SELECT DISTINCT c2.storerefid FROM {$px}complaints c2
                 JOIN {$px}followup_assignments fa2 ON fa2.complaint_id=c2.id
-                JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l2 ON l2.complaintid=c2.id
+                JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l2 WHERE _l2.rn=1) l2 ON l2.complaintid=c2.id
                 WHERE c2.is_deleted='No' AND l2.status NOT IN ('Closed','Resolved')
             )
             GROUP BY c.storerefid
@@ -783,8 +790,8 @@ try {
 
         // Get all complaint IDs from those stores that are unassigned and due
         $saCmps = rows($db, "SELECT c.id FROM {$px}complaints c
-            JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
-            LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}vendorescalations WHERE is_deleted='No') _e WHERE _e.rn=1) esc ON esc.complaintid=c.id
             LEFT JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id
             WHERE c.storerefid IN ($saStoreIds) AND c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
             AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()
@@ -867,15 +874,15 @@ try {
             l.subreasonfordelay as last_delay_sub, l.created as last_updated,
             COALESCE(esc.closuredate, c.closuredate) as edc, esc.ticketno, esc.escalationlevel,
             DATEDIFF(CURDATE(), COALESCE(esc.closuredate, c.closuredate)) as days_overdue,
-            (SELECT COUNT(*) FROM {$px}complaintlogs nc WHERE nc.complaintid=c.id AND nc.fupdonevia='Not Connected' AND nc.is_deleted='No') as nc_count
+            COALESCE(nc_agg.nc_count, 0) as nc_count
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
-            JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
-            LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
+            JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}vendorescalations WHERE is_deleted='No') _e WHERE _e.rn=1) esc ON esc.complaintid=c.id
             JOIN {$px}followup_assignments fa ON fa.complaint_id=c.id AND fa.assigned_to=$mfUid
+            LEFT JOIN (SELECT complaintid, COUNT(*) as nc_count FROM {$px}complaintlogs WHERE fupdonevia='Not Connected' AND is_deleted='No' GROUP BY complaintid) nc_agg ON nc_agg.complaintid=c.id
             WHERE c.is_deleted='No' AND l.status NOT IN ('Closed','Resolved') AND c.productname != 'Pest Control'
             AND COALESCE(esc.closuredate, c.closuredate) <= CURDATE()
-            AND DATE(fa.assigned_at) >= DATE(COALESCE(esc.closuredate, c.closuredate))
             ORDER BY COALESCE(esc.closuredate, c.closuredate) ASC");
         ok(['complaints' => $mfRows]);
 
@@ -912,6 +919,7 @@ try {
             $bncLogId = mysqli_insert_id($db);
             q($db, "UPDATE {$px}vendorescalations SET closuredate='$bncEdc', logid=$bncLogId, updated=NOW() WHERE complaintid=$bncId AND is_deleted='No' ORDER BY id DESC LIMIT 1");
             q($db, "UPDATE {$px}complaints SET closuredate='$bncEdc', updated=NOW() WHERE id=$bncId");
+            q($db, "DELETE FROM {$px}followup_assignments WHERE complaint_id=$bncId");
         }
 
         // Fetch store email from first complaint
@@ -987,31 +995,43 @@ try {
 
     // ── Search complaints ─────────────────────────────────────────────────────
     case 'vmm-search-complaints':
-        $q_text   = e($db, $GET['q']       ?? '');
-        $from     = e($db, $GET['from']    ?? '');
-        $to       = e($db, $GET['to']      ?? '');
-        $status   = e($db, $GET['status']  ?? '');
-        $edc      = e($db, $GET['edc']     ?? '');
+        $q_text   = e($db, $GET['q']        ?? '');
+        $from     = e($db, $GET['fromDate'] ?? $GET['from'] ?? '');
+        $to       = e($db, $GET['toDate']   ?? $GET['to']   ?? '');
+        $status   = e($db, $GET['status']   ?? '');
+        $edcFrom  = e($db, $GET['edcFrom']  ?? '');
+        $edcTo    = e($db, $GET['edcTo']    ?? '');
+        $vendor   = e($db, $GET['vendor']   ?? '');
+        $fm       = e($db, $GET['fm']       ?? '');
+        $type     = e($db, $GET['type']     ?? '');
+        $lim      = max(1, min(500, (int)($GET['limit']  ?? 50)));
+        $off      = max(0, (int)($GET['offset'] ?? 0));
         $where = "c.is_deleted='No'";
-        if ($q_text) $where .= " AND (c.complaintno LIKE '%$q_text%' OR s.storecode LIKE '%$q_text%' OR s.storename LIKE '%$q_text%' OR c.productname LIKE '%$q_text%' OR esc.ticketno LIKE '%$q_text%')";
-        if ($from)   $where .= " AND c.created >= '$from 00:00:00'";
-        if ($to)     $where .= " AND c.created <= '$to 23:59:59'";
+        if ($q_text) $where .= " AND (c.complaintno LIKE '%$q_text%' OR s.storecode LIKE '%$q_text%' OR s.storename LIKE '%$q_text%' OR c.productname LIKE '%$q_text%' OR esc.ticketno LIKE '%$q_text%' OR s.fmname LIKE '%$q_text%')";
+        if ($from)    $where .= " AND c.created >= '$from 00:00:00'";
+        if ($to)      $where .= " AND c.created <= '$to 23:59:59'";
+        if ($edcFrom) $where .= " AND c.closuredate >= '$edcFrom'";
+        if ($edcTo)   $where .= " AND c.closuredate <= '$edcTo'";
+        if ($vendor)  $where .= " AND c.vendorname LIKE '%$vendor%'";
+        if ($fm)      $where .= " AND s.fmname LIKE '%$fm%'";
+        if ($type)    $where .= " AND c.typeofcomplaint='$type'";
         $realStatuses = "'Logged','Open','Escalated','Closed','Resolved','Partially Closed'";
         if ($status === 'Pending')  $where .= " AND l.status NOT IN ('Closed','Resolved')";
         elseif ($status === 'Resolved') $where .= " AND l.status IN ('Closed','Resolved')";
         elseif ($status) $where .= " AND l.status='$status'";
-        if ($edc)    $where .= " AND c.closuredate <= '$edc'";
-        $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created,
-            s.storecode, s.storename, s.fmname,
-            l.status, l.remarks,
-            c.closuredate as edc, esc.ticketno,
-            DATEDIFF(NOW(), c.created) as aging
-            FROM {$px}complaints c
+        $baseQ = "FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.is_deleted='No'
-            JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No' AND l2.status IN ($realStatuses))) l ON l.complaintid=c.id
-            LEFT JOIN (SELECT * FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc ON esc.complaintid=c.id
-            WHERE $where ORDER BY c.id DESC LIMIT 500");
-        ok(['complaints' => $r]);
+            JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No' AND status IN ($realStatuses)) _l WHERE _l.rn=1) l ON l.complaintid=c.id
+            LEFT JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}vendorescalations WHERE is_deleted='No') _e WHERE _e.rn=1) esc ON esc.complaintid=c.id
+            WHERE $where";
+        $cnt = row($db, "SELECT COUNT(*) as total $baseQ");
+        $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.typeofcomplaint, c.created,
+            s.storecode, s.storename, s.fmname, s.fmmobileno, s.storecity as city, s.statename as state,
+            l.status as current_status, l.remarks,
+            c.closuredate as edc, esc.ticketno as vendor_ticketno,
+            DATEDIFF(NOW(), c.created) as aging
+            $baseQ ORDER BY c.id DESC LIMIT $lim OFFSET $off");
+        ok(['complaints' => $r, 'total' => (int)($cnt['total'] ?? 0)]);
 
     // ── Complaint detail (full) ────────────────────────────────────────────────
     case 'vmm-complaint-detail':
@@ -1021,7 +1041,7 @@ try {
             s.empname, s.empmobileno, s.managername, s.managermobileno, s.storeaddress, s.storecity, s.fmcity,
             s.asmname, s.asmmobileno, s.statename
             FROM {$px}complaints c JOIN {$px}complaintstores s ON s.id=c.storerefid
-            WHERE c.is_deleted='No' AND (c.complaintno='$no' OR c.id='$no') LIMIT 1");
+            WHERE c.is_deleted='No' AND (c.complaintno='$no' OR c.id='$no') ORDER BY c.id DESC LIMIT 1");
         if (!$c) fail('Not found', 404);
         $logs = rows($db, "SELECT l.*, u.name as agentname, esc.ticketno, esc.escalationlevel, esc.closuredate
             FROM {$px}complaintlogs l
@@ -1037,7 +1057,7 @@ try {
         $r = rows($db, "SELECT c.id, c.complaintno, c.productname, c.vendorname, c.created, l.status
             FROM {$px}complaints c
             JOIN {$px}complaintstores s ON s.id=c.storerefid AND s.storecode='$code' AND s.is_deleted='No'
-            JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+            JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
             WHERE c.is_deleted='No' AND l.status NOT IN ('Closed')
             ORDER BY c.id DESC LIMIT 10");
         ok(['complaints' => $r]);
@@ -1047,9 +1067,9 @@ try {
         $from = e($db, $GET['from'] ?? date('Y-m-01'));
         $to   = e($db, $GET['to']   ?? date('Y-m-d'));
         $logged   = row($db, "SELECT COUNT(*) as cnt FROM {$px}complaints c WHERE c.is_deleted='No' AND DATE(c.created) BETWEEN '$from' AND '$to'");
-        $open     = row($db, "SELECT COUNT(*) as cnt FROM {$px}complaints c JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id WHERE c.is_deleted='No' AND l.status NOT IN ('Closed')");
-        $closed   = row($db, "SELECT COUNT(*) as cnt FROM {$px}complaints c JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id WHERE c.is_deleted='No' AND l.status='Closed' AND DATE(l.created) BETWEEN '$from' AND '$to'");
-        $escalated = row($db, "SELECT COUNT(*) as cnt FROM {$px}complaints c JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id WHERE c.is_deleted='No' AND l.status='Escalated'");
+        $open     = row($db, "SELECT COUNT(*) as cnt FROM {$px}complaints c JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id WHERE c.is_deleted='No' AND l.status NOT IN ('Closed')");
+        $closed   = row($db, "SELECT COUNT(*) as cnt FROM {$px}complaints c JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id WHERE c.is_deleted='No' AND l.status='Closed' AND DATE(l.created) BETWEEN '$from' AND '$to'");
+        $escalated = row($db, "SELECT COUNT(*) as cnt FROM {$px}complaints c JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id WHERE c.is_deleted='No' AND l.status='Escalated'");
         ok([
             'logged'    => (int)$logged['cnt'],
             'open'      => (int)$open['cnt'],
@@ -1085,13 +1105,13 @@ try {
                 $ibOpen = rows($db, "SELECT c.id, c.complaintno, c.productname, l.status as currentStatus
                     FROM {$px}complaints c
                     JOIN {$px}complaintstores s ON s.id=c.storerefid
-                    JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+                    JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
                     WHERE s.storecode='$ibSC' AND c.is_deleted='No' AND l.status NOT IN ('Closed')
                     ORDER BY c.id DESC LIMIT 15");
                 $ibHist = rows($db, "SELECT c.id, c.complaintno, c.productname, l.status as currentStatus, l.created as closedAt
                     FROM {$px}complaints c
                     JOIN {$px}complaintstores s ON s.id=c.storerefid
-                    JOIN (SELECT * FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l ON l.complaintid=c.id
+                    JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
                     WHERE s.storecode='$ibSC' AND c.is_deleted='No' AND l.status IN ('Closed')
                     AND c.created >= DATE_SUB(NOW(), INTERVAL 90 DAY)
                     ORDER BY c.id DESC LIMIT 10");
@@ -1245,8 +1265,8 @@ try {
                 l_cur.status as current_status
                 FROM {$px}complaints c
                 JOIN {$px}complaintstores s ON s.id=c.storerefid
-                LEFT JOIN (SELECT e1.* FROM {$px}vendorescalations e1 WHERE e1.id=(SELECT MAX(id) FROM {$px}vendorescalations e2 WHERE e2.complaintid=e1.complaintid AND e2.is_deleted='No')) esc_cur ON esc_cur.complaintid=c.id
-                LEFT JOIN (SELECT l1.* FROM {$px}complaintlogs l1 WHERE l1.id=(SELECT MAX(id) FROM {$px}complaintlogs l2 WHERE l2.complaintid=l1.complaintid AND l2.is_deleted='No')) l_cur ON l_cur.complaintid=c.id
+                LEFT JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}vendorescalations WHERE is_deleted='No') _ecur WHERE _ecur.rn=1) esc_cur ON esc_cur.complaintid=c.id
+                LEFT JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _lcur WHERE _lcur.rn=1) l_cur ON l_cur.complaintid=c.id
                 WHERE c.id=$cid LIMIT 1");
 
             if (!$auC) continue;

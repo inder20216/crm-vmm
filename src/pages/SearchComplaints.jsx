@@ -27,17 +27,17 @@ function normalise(rows) {
   return rows.map(c => ({
     ...c,
     complaintno:     bufStr(c.complaintno),
-    store_name:      bufStr(c.store_name),
-    store_code:      bufStr(c.store_code),
-    city:            bufStr(c.city),
-    state:           bufStr(c.state),
+    store_name:      bufStr(c.storename      || c.store_name),
+    store_code:      bufStr(c.storecode      || c.store_code),
+    city:            bufStr(c.city           || c.storecity),
+    state:           bufStr(c.state          || c.statename),
     productname:     bufStr(c.productname),
     vendorname:      bufStr(c.vendorname),
     typeofcomplaint: bufStr(c.typeofcomplaint),
-    current_status:  bufStr(c.current_status),
+    current_status:  bufStr(c.current_status || c.status),
     fmname:          bufStr(c.fmname),
     fmmobileno:      bufStr(c.fmmobileno),
-    vendor_ticketno: bufStr(c.vendor_ticketno),
+    vendor_ticketno: bufStr(c.vendor_ticketno || c.ticketno),
   }));
 }
 

@@ -325,6 +325,29 @@ export default function ComplaintDetail() {
             closureDate:   updEdc || '',
             closedBy:      updClosedBy || '',
           });
+          // Send closure email after DB save succeeds
+          if (res?.success !== false && !res?.error) {
+            try {
+              const edcDisplay = updEdc
+                ? new Date(updEdc).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                : '';
+              await vmm.sendClosureEmail({
+                storeCode:     c.storecode,
+                storeName:     c.storename,
+                storeEmail:    c.storeemail,
+                fmEmail:       c.fmemail,
+                fmName:        c.fmname,
+                productName:   c.productname,
+                complaintno:   c.complaintno,
+                closureStatus: effectiveStatus,
+                closureDate:   edcDisplay,
+                closedBy:      updClosedBy || '',
+                remarks:       updRemarks,
+              });
+            } catch {
+              // Email failure is non-fatal — log entry is already saved
+            }
+          }
         }
       } // end else (not-connected branch)
 
@@ -547,7 +570,7 @@ export default function ComplaintDetail() {
                       const closedBy  = bufStr(row.caseclosedby);
                       // Fall back to remarks-extracted delay only if no dedicated column
                       const delayFallback = !delayMain ? extractDelay(row.remarks) : null;
-                      const byName = bufStr(row.agentname) || bufStr(row.updatedby) || (row.uid ? `UID ${row.uid}` : 'CRM');
+                      const byName = bufStr(row.agentname) || bufStr(row.updated_by) || bufStr(row.updatedby) || (row.uid ? `UID ${row.uid}` : 'CRM');
                       return (
                         <tr key={`log-${row.id || i}`}>
                           <td className="cd-log-date">{fmtDateTime(row.created)}</td>
