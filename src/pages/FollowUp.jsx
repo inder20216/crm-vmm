@@ -293,6 +293,10 @@ export default function FollowUp() {
 
   const selectComplaint = (c, keepStorePanel = false) => {
     setSubmitting(false);
+    if (c?.store_code && selected?.store_code && c.store_code !== selected.store_code) {
+      syncPinRemarks(false);
+      setRemarks('');
+    }
     setSelected(c);
     setCalledNums(new Set());
     setStoreEmployees([]);
@@ -337,7 +341,7 @@ export default function FollowUp() {
       const bncEdc = tomorrow.toISOString().split('T')[0];
       const res = await vmm.bulkNotConnected({
         complaintIds: ids,
-        remarks: remarks || 'Called - Not Connected',
+        remarks: 'Called - Not Connected',
         uid: currentUser?.id || 1,
         newClosureDate: bncEdc,
         mobileCalled,
@@ -774,7 +778,7 @@ export default function FollowUp() {
 
   const handleSubmit = async () => {
     if (!selected) return;
-    if ((action === 'Partially Closed' || action === 'Escalated' || action === 'Closed') && !newEdc) {
+    if ((action === 'Partially Closed' || action === 'Escalated' || action === 'Closed' || action === 'Updated') && !newEdc) {
       showToast('Date of closure is required', 'err'); return;
     }
     if (!remarks.trim() && action !== 'Closed' && action !== 'Not Connected') {
@@ -792,7 +796,7 @@ export default function FollowUp() {
         res = await vmm.notConnected({
           complaintId: selected.id,
           complaintno: selected.complaintno,
-          remarks: remarks || 'Called - Not Connected',
+          remarks: 'Called - Not Connected',
           uid,
           txnId,
           mobileCalled,
@@ -801,6 +805,15 @@ export default function FollowUp() {
           hoEmail,
           delayMain,
           delaySub,
+        });
+      } else if (action === 'Updated') {
+        res = await vmm.updateComplaint({
+          complaintId:    selected.id,
+          followupMethod: 'EDC Followup',
+          newClosureDate: newEdc,
+          delayMain, delaySub,
+          remarks,
+          uid,
         });
       } else if (action === 'Note') {
         res = await vmm.logEmailActivity({
@@ -881,6 +894,12 @@ export default function FollowUp() {
           } else {
             setSelected(null);
           }
+        } else if (action === 'Updated') {
+          // Update EDC: keep complaint in list, update closuredate in local state
+          const edcUpdate = { closuredate: newEdc };
+          setComplaints(prev       => prev.map(c => c.id !== doneId ? c : { ...c, ...edcUpdate }));
+          setAssignedComplaints(prev => prev.map(c => c.id !== doneId ? c : { ...c, ...edcUpdate }));
+          setSelected(prev => prev ? { ...prev, ...edcUpdate } : null);
         } else if (action === 'Note') {
           // Note: keep complaint in list, just reload logs
           setSelected(prev => prev ? { ...prev } : null);
@@ -890,8 +909,7 @@ export default function FollowUp() {
             .catch(() => {})
             .finally(() => setLogsLoading(false));
         } else {
-          // NC / Escalated / Partially Closed — remove from list immediately
-          // Complaint reappears tomorrow on auto-refresh when EDC becomes due
+          // NC / Escalated / Partially Closed
           setComplaints(prev       => prev.filter(c => c.id !== doneId));
           setAssignedComplaints(prev => prev.filter(c => c.id !== doneId));
           setStoreComplaints(prev  => prev.filter(c => c.id !== doneId));
@@ -1483,7 +1501,10 @@ export default function FollowUp() {
                         const closeEdc   = bufStr(l.closureinformdate);
                         return (
                           <tr key={l.id || i}>
-                            <td className="fu-log-date">{fmtDateTime(l.created)}</td>
+                            <td className="fu-log-date">
+                              {fmtDateTime(l.created)}
+                              {bufStr(l.updated_by) && <div style={{ marginTop:2, fontSize:10, color:'var(--fu-muted,#6b7280)' }}>{bufStr(l.updated_by)}</div>}
+                            </td>
                             <td className="fu-log-remarks">
                               <div>{bufStr(l.remarks) || '—'}</div>
                               {dMain && (
@@ -1565,6 +1586,7 @@ export default function FollowUp() {
                       ['Partially Closed', 'Partially Closed'],
                       ['Escalated',        `Escalated${logs.filter(l => l.status === 'Escalated').length > 0 ? ` (${logs.filter(l => l.status === 'Escalated').length} sent)` : ''}`],
                       ['Not Connected',    'Not Connected'],
+                      ['Updated',          'Update EDC'],
                       ['Note',             'Add Note Only'],
                     ].map(([val, lbl]) => (
                       <button
