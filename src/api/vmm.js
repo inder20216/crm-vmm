@@ -1,10 +1,13 @@
 import * as graph from '../auth/graphService';
 
-// PHP REST API on vmm.openmindservices.in — all core DB operations
-const PHP = import.meta.env.VITE_PHP_BASE || 'https://vmm.openmindservices.in/webhook';
+// Core CRM data is backed by SQL and exposed by the deployed self-hosted n8n
+// workflows. The old PHP host (VITE_PHP_BASE) is not deployed, so use the live
+// SQL API for all case-logging lookups and reference data.
+const SQL = import.meta.env.VITE_API_BASE || 'https://automation.openmindhelpline.com/webhook';
+const PHP = import.meta.env.VITE_PHP_BASE || SQL;
 
 // Self-hosted n8n — email workflows only
-const BASE = import.meta.env.VITE_API_BASE || '/webhook';
+const BASE = SQL;
 
 // Cloud n8n — non-email workflows only
 const CLOUD = import.meta.env.VITE_CLOUD_API_BASE || '/cloud-webhook';
@@ -28,37 +31,57 @@ async function post(base, path, body) {
 }
 
 export const vmm = {
-  // ── PHP REST API — core DB operations ───────────────
-  lookupStore:       (code)   => get(PHP, 'vmm-sp-store',          { code }),
-  lookupEmployee:         (code)   => get(PHP, 'vmm-sp-employee', { code }),
-  lookupEmployeeByMobile: (mobile) => get(PHP, 'vmm-sp-employee', { mobile }),
-  getProducts:       ()       => get(PHP, 'vmm-sp-products'),
-  getNatures:        ()       => get(PHP, 'vmm-sp-natures'),
-  getDelayReasons:   ()       => get(PHP, 'vmm-sp-delay-reasons'),
-  getSheetMaster:    ()       => get(PHP, 'vmm-master-data'),
-  saveMasterRow:     (sheet, action, row) => post(PHP, 'vmm-master-save', { sheet, action, row }),
-  getVendors:        ()       => get(PHP, 'vmm-sp-vendors'),
-  getAmcVendor:        (storeCode, product) => get(PHP, 'vmm-sp-amc-vendor', { storeCode, product }),
-  getEscalationMatrix: (params = {})        => get(PHP, 'vmm-sp-escalation-matrix', params),
-  logComplaint:        (data)   => post(PHP, 'vmm-log-complaint',           data),
-  getComplaint:        (complaintno) => get(PHP, 'vmm-get-complaint',       { complaintno }),
+  // ── SQL-backed CRM data (live n8n workflows) ────────
+  lookupStore:       (code)   => get(SQL, 'vmm-sp-store',          { code }),
+  lookupEmployee:         (code)   => get(SQL, 'vmm-sp-employee', { code }),
+  lookupEmployeeByMobile: (mobile) => get(SQL, 'vmm-sp-employee', { mobile }),
+  getProducts:       ()       => get(SQL, 'vmm-sp-products'),
+  getNatures:        ()       => get(SQL, 'vmm-sp-natures'),
+  getDelayReasons:   ()       => get(SQL, 'vmm-sp-delay-reasons'),
+  getSheetMaster:    ()       => get(SQL, 'vmm-master-data'),
+  saveMasterRow:     (sheet, action, row) => post(SQL, 'vmm-master-save', { sheet, action, row }),
+  getVendors:        ()       => get(SQL, 'vmm-sp-vendors'),
+  getAmcVendor:        (storeCode, product) => get(SQL, 'vmm-sp-amc-vendor', { storeCode, product }),
+  // The facility portal's live store-AMC workflows return vendor_name directly.
+  // vmm-sp-amc-vendor has no matching SQL rows, so use these for the New Case form.
+  getPortalAmcVendor: (storeCode, product) => {
+    const key = (product || '').trim().toLowerCase();
+    const webhook = ['ac', 'server room ac'].includes(key) ? 'AC-AMC'
+                  : ['lift', 'escalator'].includes(key) ? 'Lift-AMC'
+                  : null;
+    if (!webhook) return Promise.resolve({ found: false, vendor: '' });
+    return post(BASE, webhook, { store_id: storeCode }).then(res => {
+      const raw = String(res?.vendor_name || '').trim();
+      // index (47).html: empty / "Not Applicable" both route to HO Direct.
+      const notApplicable = !raw || raw.toLowerCase() === 'not applicable';
+      return {
+        found: true,
+        notApplicable,
+        vendor: notApplicable ? 'N/A — HO Direct' : raw,
+      };
+    });
+  },
+  getEscalationMatrix: (params = {})        => get(SQL, 'vmm-sp-escalation-matrix', params),
+  logComplaint:        (data)   => post(SQL, 'vmm-log-complaint',           data),
+  getComplaint:        (complaintno) => get(SQL, 'vmm-get-complaint',       { complaintno }),
   sendEscalationEmail:          (data) => graph.sendEscalationEmailDirect(data),
   buildEscalationEmailContent: (data) => graph.buildEscalationEmailContent(data),
   resolveEscalationRecipients: (data) => graph.resolveEscalationRecipients(data),
   sendClosureEmail:    (data)   => graph.sendClosureEmailDirect(data),
-  polishRemarks:       (text)   => post(BASE, 'vmm-ai-polish',           { text }),
-  getRecentComplaints: (code)   => get(PHP,  'vmm-recent-complaints',   { storeCode: code }),
-  searchComplaints:    (params) => get(PHP, 'vmm-search-complaints',    params),
-  dashboardStats:    (params = {}) => get(PHP, 'vmm-dashboard-stats', params),
-  getComplaintDetail:(ref)    => get(PHP, 'vmm-complaint-detail',   { no: ref }),
-  getUserRole:  (email)  => get(PHP, 'vmm-user-role',   { email }),
-  lookupCaller: (mobile) => get(PHP, 'vmm-sparktg-inbound', { mobile }),
-  getFollowUpComplaints: ()     => get(PHP,  'vmm-followup-complaints'),
-  updateComplaint:  (data)      => post(PHP, 'vmm-update-complaint',   data),
-  escalateComplaint:(data)      => post(PHP, 'vmm-escalate-complaint', data),
-  closeComplaint:   (data)      => post(PHP, 'vmm-close-complaint',    data),
-  notConnected:     (data)      => post(PHP, 'vmm-not-connected',      data),
-  updateEdc:        (data)      => post(PHP, 'vmm-update-edc',         data),
+  // vmm-recent-complaints has no live workflow — the SQL search endpoint with
+  // the `store` filter returns the same store complaint list.
+  getRecentComplaints: (code)   => get(SQL,  'vmm-search-complaints',   { store: code }),
+  searchComplaints:    (params) => get(SQL, 'vmm-search-complaints',    params),
+  dashboardStats:    (params = {}) => get(SQL, 'vmm-dashboard-stats', params),
+  getComplaintDetail:(ref)    => get(SQL, 'vmm-complaint-detail',   { no: ref }),
+  getUserRole:  (email)  => get(SQL, 'vmm-user-role',   { email }),
+  lookupCaller: (mobile) => get(SQL, 'vmm-sparktg-inbound', { mobile }),
+  getFollowUpComplaints: ()     => get(SQL,  'vmm-followup-complaints'),
+  updateComplaint:  (data)      => post(SQL, 'vmm-update-complaint',   data),
+  escalateComplaint:(data)      => post(SQL, 'vmm-escalate-complaint', data),
+  closeComplaint:   (data)      => post(SQL, 'vmm-close-complaint',    data),
+  notConnected:     (data)      => post(SQL, 'vmm-not-connected',      data),
+  updateEdc:        (data)      => post(SQL, 'vmm-update-edc',         data),
 
   // ── Email — inbox & thread via n8n; all sending via Graph API ───────────────
   emailClaim:          (data)   => post(BASE, 'vmm-email-claim',         data),
