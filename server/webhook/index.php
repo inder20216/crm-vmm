@@ -363,6 +363,7 @@ try {
                 VALUES ($logid,$complaintId,$escLevel,'$vendorTicketNo','$newEdc',$uid,NOW(),NOW(),'No')");
             q($db, "UPDATE {$px}complaints SET closuredate='$newEdc', updated=NOW() WHERE id=$complaintId");
         }
+        q($db, "DELETE FROM {$px}followup_assignments WHERE complaint_id=$complaintId");
         ok(['complaintId' => $complaintId, 'status' => $status]);
 
     // ── Escalate complaint ────────────────────────────────────────────────────
@@ -737,6 +738,47 @@ try {
             assigned_at  DATETIME DEFAULT NOW(),
             UNIQUE KEY uq_cmp (complaint_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        // Store-level conflict check: prevent assigning a store already owned by a different agent
+        $cmpToUid = [];
+        foreach ($asgns as $a) {
+            $cid = (int)($a['complaint_id'] ?? 0);
+            $uid = (int)($a['user_id'] ?? 0);
+            if ($cid && $uid) $cmpToUid[$cid] = $uid;
+        }
+        if (!empty($cmpToUid)) {
+            $cmpIdStr = implode(',', array_keys($cmpToUid));
+            $storeRefs = rows($db, "SELECT c.id as cid, c.storerefid, cs.storecode
+                FROM {$px}complaints c
+                JOIN {$px}complaintstores cs ON cs.id=c.storerefid
+                WHERE c.id IN ($cmpIdStr)");
+            $storeToTarget = [];
+            $storeCodes = [];
+            foreach ($storeRefs as $r) {
+                $sid = (int)$r['storerefid'];
+                $storeToTarget[$sid] = $cmpToUid[(int)$r['cid']];
+                $storeCodes[$sid] = $r['storecode'];
+            }
+            if (!empty($storeToTarget)) {
+                $storeRefIds = implode(',', array_keys($storeToTarget));
+                $existing = rows($db, "SELECT DISTINCT c2.storerefid, fa.assigned_to, u.name as agent_name
+                    FROM {$px}complaints c2
+                    JOIN {$px}followup_assignments fa ON fa.complaint_id=c2.id
+                    JOIN {$px}users u ON u.id=fa.assigned_to
+                    JOIN (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn
+                          FROM {$px}complaintlogs WHERE is_deleted='No') llog ON llog.complaintid=c2.id AND llog.rn=1
+                    WHERE c2.storerefid IN ($storeRefIds)
+                      AND c2.is_deleted='No' AND llog.status NOT IN ('Closed','Resolved')");
+                $conflicts = [];
+                foreach ($existing as $e) {
+                    $sid = (int)$e['storerefid'];
+                    if (isset($storeToTarget[$sid]) && (int)$e['assigned_to'] !== $storeToTarget[$sid]) {
+                        $code = $storeCodes[$sid] ?? "Store#$sid";
+                        $conflicts[] = "$code (assigned to {$e['agent_name']})";
+                    }
+                }
+                if (!empty($conflicts)) fail('Store already assigned to another agent: ' . implode(', ', $conflicts));
+            }
+        }
         $aCount = 0;
         foreach ($asgns as $a) {
             $cid = (int)($a['complaint_id'] ?? 0);
@@ -786,9 +828,12 @@ try {
 
         if (empty($saStores)) { ok(['assigned' => 0, 'stores' => 0]); break; }
 
+        // Serialise concurrent self-assign requests so two agents cannot grab the same stores
+        row($db, "SELECT GET_LOCK('vmm_self_assign', 10) as l");
+
         $saStoreIds = implode(',', array_map(fn($s) => (int)$s['storerefid'], $saStores));
 
-        // Get all complaint IDs from those stores that are unassigned and due
+        // Get all complaint IDs from those stores that are STILL unassigned (re-check inside lock)
         $saCmps = rows($db, "SELECT c.id FROM {$px}complaints c
             JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}complaintlogs WHERE is_deleted='No') _l WHERE _l.rn=1) l ON l.complaintid=c.id
             LEFT JOIN (SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY complaintid ORDER BY id DESC) rn FROM {$px}vendorescalations WHERE is_deleted='No') _e WHERE _e.rn=1) esc ON esc.complaintid=c.id
@@ -800,11 +845,13 @@ try {
         $saCount = 0;
         foreach ($saCmps as $saCmp) {
             $scid = (int)$saCmp['id'];
-            $db->query("INSERT INTO {$px}followup_assignments (complaint_id, assigned_to, assigned_by)
-                VALUES ($scid, $saUid, $saUid)
-                ON DUPLICATE KEY UPDATE assigned_to=$saUid, assigned_by=$saUid, assigned_at=NOW()");
+            // INSERT IGNORE: if another agent grabbed this complaint between the SELECT and now, skip it
+            $db->query("INSERT IGNORE INTO {$px}followup_assignments (complaint_id, assigned_to, assigned_by)
+                VALUES ($scid, $saUid, $saUid)");
             $saCount++;
         }
+
+        row($db, "SELECT RELEASE_LOCK('vmm_self_assign') as l");
         ok(['assigned' => $saCount, 'stores' => count($saStores)]);
 
     // ── Queue email via SharePoint → Power Automate ───────────────────────────

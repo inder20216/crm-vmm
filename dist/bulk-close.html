@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VMM — Bulk Close Cases</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 40px 16px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
+      width: 100%;
+      max-width: 560px;
+      overflow: hidden;
+    }
+
+    .header {
+      background: #1e1b4b;
+      padding: 22px 28px;
+    }
+    .header-label {
+      color: #a5b4fc;
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .header h1 {
+      color: #fff;
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .body { padding: 28px; }
+
+    /* ── Step ── */
+    .step { margin-bottom: 28px; }
+    .step-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: #6366f1;
+      margin-bottom: 6px;
+    }
+    .step-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1e1b4b;
+      margin-bottom: 4px;
+    }
+    .step-desc {
+      font-size: 13px;
+      color: #64748b;
+      margin-bottom: 14px;
+    }
+
+    /* ── Dropzone ── */
+    .dropzone {
+      border: 2px dashed #cbd5e1;
+      border-radius: 8px;
+      padding: 28px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      margin-bottom: 12px;
+    }
+    .dropzone:hover, .dropzone.over { border-color: #6366f1; background: #f5f3ff; }
+    .dropzone.ready { border-color: #6366f1; background: #f5f3ff; }
+    .dropzone-icon { font-size: 28px; margin-bottom: 8px; }
+    .dropzone-text { font-size: 13px; color: #64748b; }
+    .dropzone-text span { color: #6366f1; font-weight: 500; }
+    .file-name { font-size: 14px; font-weight: 500; color: #1e1b4b; margin-bottom: 2px; }
+    .file-size { font-size: 12px; color: #94a3b8; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 11px 18px;
+      border: none;
+      border-radius: 7px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity .15s, background .15s;
+    }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-upload { background: #6366f1; color: #fff; }
+    .btn-upload:hover:not(:disabled) { background: #4f46e5; }
+    .btn-run { background: #0f172a; color: #fff; margin-top: 10px; }
+    .btn-run:hover:not(:disabled) { background: #1e293b; }
+
+    /* ── Status ── */
+    .status {
+      margin-top: 10px;
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      display: none;
+    }
+    .status.show { display: block; }
+    .status.ok  { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+    .status.err { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #e2e8f0;
+      margin: 0 0 28px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div class="header">
+    <div class="header-label">VMM Facility Management</div>
+    <h1>Bulk Close Cases</h1>
+  </div>
+
+  <div class="body">
+
+    <!-- Step 1 -->
+    <div class="step">
+      <div class="step-label">Step 1</div>
+      <div class="step-title">Upload CSV File</div>
+      <div class="step-desc">Required columns: <strong>Complaint No</strong>, <strong>Email Subject</strong>, <strong>Case Closed By</strong>, <strong>Remarks</strong></div>
+
+      <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+        <input type="file" id="fileInput" accept=".csv" style="display:none" onchange="onFileChange(this)" />
+        <div class="dropzone-icon" id="dzIcon">☁</div>
+        <div id="dzText" class="dropzone-text">Drop a CSV file here or <span>click to browse</span></div>
+      </div>
+
+      <button class="btn btn-upload" id="btnUpload" disabled onclick="doUpload()">Upload CSV</button>
+      <div class="status" id="uploadStatus"></div>
+    </div>
+
+    <hr class="divider" />
+
+    <!-- Step 2 -->
+    <div class="step">
+      <div class="step-label">Step 2</div>
+      <div class="step-title">Run Bulk Close</div>
+      <div class="step-desc">Closes all pending rows, inserts complaint logs in MySQL, and sends closure emails to each store and FM.</div>
+
+      <button class="btn btn-run" id="btnRun" disabled onclick="doRun()">Close All Pending Cases</button>
+      <div class="status" id="runStatus"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const BASE = 'https://automation.openmindhelpline.com/webhook';
+  let selectedFile = null;
+
+  const dropzone   = document.getElementById('dropzone');
+  const dzIcon     = document.getElementById('dzIcon');
+  const dzText     = document.getElementById('dzText');
+  const btnUpload  = document.getElementById('btnUpload');
+  const btnRun     = document.getElementById('btnRun');
+  const upStatus   = document.getElementById('uploadStatus');
+  const runStatus  = document.getElementById('runStatus');
+
+  function onFileChange(input) {
+    const f = input.files[0];
+    if (!f) return;
+    selectedFile = f;
+    dropzone.classList.add('ready');
+    dzIcon.textContent = '📄';
+    dzText.innerHTML = `<div class="file-name">${f.name}</div><div class="file-size">${(f.size/1024).toFixed(1)} KB · Click to change</div>`;
+    btnUpload.disabled = false;
+    setStatus(upStatus, '', '');
+    setStatus(runStatus, '', '');
+    btnRun.disabled = true;
+  }
+
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('over'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('over'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('over');
+    const f = e.dataTransfer.files[0];
+    if (f && f.name.endsWith('.csv')) {
+      document.getElementById('fileInput').files; // noop — set via DataTransfer
+      selectedFile = f;
+      dropzone.classList.add('ready');
+      dzIcon.textContent = '📄';
+      dzText.innerHTML = `<div class="file-name">${f.name}</div><div class="file-size">${(f.size/1024).toFixed(1)} KB · Click to change</div>`;
+      btnUpload.disabled = false;
+      setStatus(upStatus, '', '');
+      setStatus(runStatus, '', '');
+      btnRun.disabled = true;
+    }
+  });
+
+  function setStatus(el, type, msg) {
+    el.className = 'status' + (type ? ' show ' + type : '');
+    el.textContent = msg;
+  }
+
+  async function doUpload() {
+    if (!selectedFile) return;
+    btnUpload.disabled = true;
+    btnUpload.textContent = 'Uploading…';
+    setStatus(upStatus, '', '');
+
+    const formData = new FormData();
+    formData.append('data', selectedFile, selectedFile.name);
+
+    try {
+      const res = await fetch(`${BASE}/vmm-csv-upload`, { method: 'POST', body: formData });
+      if (res.ok) {
+        setStatus(upStatus, 'ok', `✓ ${selectedFile.name} uploaded — rows added to sheet.`);
+        btnRun.disabled = false;
+      } else {
+        setStatus(upStatus, 'err', `✕ Upload failed (${res.status} ${res.statusText})`);
+        btnUpload.disabled = false;
+      }
+    } catch {
+      setStatus(upStatus, 'err', '✕ Connection error. Check your network.');
+      btnUpload.disabled = false;
+    } finally {
+      btnUpload.textContent = 'Upload CSV';
+    }
+  }
+
+  async function doRun() {
+    btnRun.disabled = true;
+    btnRun.textContent = 'Processing…';
+    setStatus(runStatus, '', '');
+
+    try {
+      const res = await fetch(`${BASE}/close-cases`, { method: 'POST' });
+      let body = null;
+      try { body = await res.json(); } catch {}
+
+      if (!res.ok || body?.status === 'error' || body?.success === false) {
+        setStatus(runStatus, 'err', `✕ ${body?.message || 'Process failed. Check n8n logs.'}`);
+        btnRun.disabled = false;
+      } else {
+        const count = body?.count;
+        const msg = count != null
+          ? `✓ ${count} case${count !== 1 ? 's' : ''} closed. Closure emails sent to stores and FMs.`
+          : '✓ All pending cases processed. Closure emails sent.';
+        setStatus(runStatus, 'ok', msg);
+        // reset for next batch
+        selectedFile = null;
+        btnUpload.textContent = 'Upload CSV';
+        btnUpload.disabled = true;
+        dropzone.classList.remove('ready');
+        dzIcon.textContent = '☁';
+        dzText.innerHTML = 'Drop a CSV file here or <span>click to browse</span>';
+        document.getElementById('fileInput').value = '';
+      }
+    } catch {
+      setStatus(runStatus, 'err', '✕ Connection error. Check your network.');
+      btnRun.disabled = false;
+    } finally {
+      btnRun.textContent = 'Close All Pending Cases';
+    }
+  }
+</script>
+
+</body>
+</html>

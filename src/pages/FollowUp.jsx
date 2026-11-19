@@ -1116,10 +1116,11 @@ export default function FollowUp() {
             const storeMap = new Map();
             for (const c of displayed) {
               const key = c.store_code || '—';
-              if (!storeMap.has(key)) storeMap.set(key, { store_code: c.store_code, store_name: bufStr(c.store_name), fm_name: c.fm_name || c.fmname || '', complaints: [], overdue: 0, minEdc: null });
+              if (!storeMap.has(key)) storeMap.set(key, { store_code: c.store_code, store_name: bufStr(c.store_name), fm_name: c.fm_name || c.fmname || '', complaints: [], overdue: 0, minEdc: null, assignedUids: new Set() });
               const g = storeMap.get(key);
               g.complaints.push(c);
               if ((c.days_overdue ?? 0) > 0) g.overdue++;
+              if (c.assigned_uid != null) g.assignedUids.add(c.assigned_uid);
               const edc = c.closuredate || c.edc || null;
               if (edc && (!g.minEdc || edc < g.minEdc)) g.minEdc = edc;
             }
@@ -1139,12 +1140,16 @@ export default function FollowUp() {
                 {groups.map(g => {
                   const allSel = assignMode && g.complaints.length > 0 && g.complaints.every(c => selectedIds.has(c.id));
                   const someSel = assignMode && !allSel && g.complaints.some(c => selectedIds.has(c.id));
+                  const isStoreTaken = assignMode && g.assignedUids.size > 0;
+                  const takenByUid = isStoreTaken ? [...g.assignedUids][0] : null;
+                  const takenByName = takenByUid ? (users.find(u => String(u.id) === String(takenByUid))?.name || 'an agent') : null;
                   return (
                     <div
                       key={g.store_code}
-                      className={`fu-store-group-row${allSel ? ' fu-row-selected' : ''}${someSel ? ' fu-row-partial' : ''}`}
+                      className={`fu-store-group-row${allSel ? ' fu-row-selected' : ''}${someSel ? ' fu-row-partial' : ''}${isStoreTaken ? ' fu-row-taken' : ''}`}
                       onClick={() => {
                         if (assignMode) {
+                          if (isStoreTaken) return;
                           setSelectedIds(prev => {
                             const next = new Set(prev);
                             if (allSel) g.complaints.forEach(c => next.delete(c.id));
@@ -1162,6 +1167,7 @@ export default function FollowUp() {
                           className="fu-row-check"
                           readOnly
                           checked={allSel}
+                          disabled={isStoreTaken}
                           ref={el => { if (el) el.indeterminate = someSel; }}
                           onClick={e => e.stopPropagation()}
                         />
@@ -1171,6 +1177,7 @@ export default function FollowUp() {
                         <span className="fu-sgr-name">{g.store_name}</span>
                       </div>
                       <div className="fu-sgr-meta">
+                        {isStoreTaken && <span className="fu-badge fu-badge-taken">Assigned: {takenByName}</span>}
                         {g.totalOverdue > 0 && <span className="fu-badge fu-badge-red">{g.totalOverdue} overdue</span>}
                         {(g.totalCount - g.totalOverdue) > 0 && <span className="fu-badge fu-badge-blue">{g.totalCount - g.totalOverdue} pending</span>}
                       </div>
@@ -1587,7 +1594,6 @@ export default function FollowUp() {
                       ['Escalated',        `Escalated${logs.filter(l => l.status === 'Escalated').length > 0 ? ` (${logs.filter(l => l.status === 'Escalated').length} sent)` : ''}`],
                       ['Not Connected',    'Not Connected'],
                       ['Updated',          'Update EDC'],
-                      ['Note',             'Add Note Only'],
                     ].map(([val, lbl]) => (
                       <button
                         key={val}
