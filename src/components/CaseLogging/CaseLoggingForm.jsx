@@ -1,9 +1,23 @@
 import { useState, useEffect, useRef } from 'react';
 import { vmm } from '../../api/vmm';
 import { useAuth } from '../../context/AuthContext';
-import { mergeNatures } from '../../data/natures';
 
 const ATTACHMENT_MANDATORY = ['Breakdown', 'Repair'];
+
+// The VMM complaint workflow, shown step by step below Source of Complaint
+// Verify + Employee are combined into one step because they use the same search.
+const COMPLAINT_STEPS = [
+  { name: 'Verify & Employee', sub: 'Employee code, store code or mobile' },
+  { name: 'Category',       sub: 'Select the category' },
+  { name: 'Product',        sub: 'Select specific item' },
+  { name: 'Complaint',      sub: 'Nature of issue' },
+  { name: 'Warranty',       sub: 'AMC/Warranty status' },
+  { name: 'Vendor',         sub: 'Brand or vendor name' },
+  { name: 'Location',       sub: 'Where in the store?' },
+  { name: 'Photos',         sub: 'Upload images' },
+  { name: 'Remarks',        sub: 'Describe the problem' },
+  { name: 'Review',         sub: 'Check & submit' },
+];
 
 // Products whose AMC vendor varies by store — auto-fetched via the AC-AMC / Lift-AMC webhooks
 const AMC_LOOKUP_PRODUCTS = new Set(['ac', 'server room ac', 'lift', 'escalator']);
@@ -32,11 +46,61 @@ const FIRE_PRODUCTS = new Set([
   'hose reel', 'smoke detector',
 ]);
 
+// Warranty brand lists — same product→brand mapping used by the facility portal.
+const WARRANTY_VENDORS = [
+  'Adtech', 'Ahuja', 'Arihant Infocoom', 'Blue Star', 'Carrier', 'Consul Neowatt',
+  'Ece', 'Euronics', 'Fuji Tech', 'Godrej', 'Gunnebo', 'Hitachi', 'Hublit',
+  'Jindal Electric', 'Johnson', 'Kirloskar', 'Kone', 'Krykard Atandra', 'Mitsubishi',
+  'Mitzvah', 'Neptune', 'Omega', 'Otis Elevator', 'Pie Industries', 'Schindler',
+  'Tk Elevator', 'Viewon', 'Western Control And Automation',
+];
+
+const PRODUCT_VENDORS = {
+  'ac':                        ['Blue Star', 'Carrier', 'Hitachi', 'Mitsubishi'],
+  'air curtain':               ['Euronics', 'Mitzvah'],
+  'amplifier':                 ['Ahuja', 'Arihant Infocoom'],
+  'drainage':                  ['Adtech'],
+  'electrical panel':          ['Neptune', 'Western Control And Automation'],
+  'escalator':                 ['Ece', 'Kone'],
+  'fly catcher':               ['Mitzvah'],
+  'genset':                    ['Kirloskar'],
+  'led light':                 ['Hublit', 'Viewon'],
+  'lift':                      ['Ece', 'Fuji Tech', 'Johnson', 'Kone', 'Omega', 'Otis Elevator', 'Schindler', 'Tk Elevator'],
+  'mic':                       ['Ahuja', 'Arihant Infocoom'],
+  'safe lock':                 ['Godrej', 'Gunnebo'],
+  'sensormatic':               ['Adtech'],
+  'server room ac':            ['Blue Star', 'Carrier', 'Hitachi', 'Mitsubishi'],
+  'servo':                     ['Consul Neowatt', 'Krykard Atandra', 'Jindal Electric'],
+  'shampoo dispenser machine': ['Pie Industries'],
+  'track light':               ['Hublit', 'Viewon'],
+};
+
 function norm(s) { return (s || '').trim().toLowerCase(); }
+const getVendorsForProduct = (name) => PRODUCT_VENDORS[norm(name)] || WARRANTY_VENDORS;
 const isAmcLookupProduct = (name) => AMC_LOOKUP_PRODUCTS.has(norm(name));
 const isHoDirectProduct  = (name) => HO_DIRECT_PRODUCTS.has(norm(name));
 const isFireProductName  = (name) => FIRE_PRODUCTS.has(norm(name));
 const isGensetProduct    = (name) => norm(name) === 'genset';
+
+// Portal rule: temperature nature applies only to AC/Server Room AC.
+const TEMP_PRODUCTS = new Set(['ac', 'server room ac']);
+const showsTemperatureOption = (name) => TEMP_PRODUCTS.has(norm(name));
+const isTemperatureNature = (name) => norm(name).includes('temperature');
+
+// Portal routing after the Complaint step — these products skip the normal
+// Warranty/Vendor path (same as confirmComplaintType() in index (47).html).
+function getAutoWarranty(name) {
+  if (getFixedVendor(name))   return 'N/A — Fixed Vendor';
+  if (isHoDirectProduct(name)) return 'N/A — HO Direct';
+  if (isGensetProduct(name))   return 'N/A — Genset';
+  if (isFireProductName(name)) return 'N/A — Local Vendor';
+  return '';
+}
+const isAutoRoutedProduct = (name) => !!getAutoWarranty(name);
+const isVendorOwnedProduct = (name) => isAutoRoutedProduct(name) || isAmcLookupProduct(name);
+const AUTO_WARRANTY_VALUES = new Set([
+  'N/A — Fixed Vendor', 'N/A — HO Direct', 'N/A — Genset', 'N/A — Local Vendor',
+]);
 
 function bufStr(v) {
   if (v == null) return '';
@@ -46,25 +110,32 @@ function bufStr(v) {
   return String(v);
 }
 
+// The PHP API uses snake_case column names while older helpers used camelCase.
+// Accept either so every detail fills regardless of the response shape.
+function pick(obj, ...keys) {
+  for (const k of keys) {
+    const v = bufStr(obj?.[k]);
+    if (v) return v;
+  }
+  return '';
+}
+
 function ProductSearch({ products, value, vendorName, onChange, error, disabled }) {
   const [query,    setQuery]    = useState(value || '');
   const [open,     setOpen]     = useState(false);
   const [focused,  setFocused]  = useState(false);
   const wrapRef = useRef(null);
 
+  // Portal product search matches product names only. SQL has one row per
+  // vendor, so collapse to one entry per product name as the HTML list does.
   const matched = query.trim().length > 0
-    ? products.filter(p =>
-        p.name.toLowerCase().includes(query.toLowerCase()) ||
-        (p.vendor || '').toLowerCase().includes(query.toLowerCase())
-      )
+    ? products.filter(p => p.name.toLowerCase().includes(query.toLowerCase()))
     : products;
 
-  // AC/Lift/etc have one sheet row per vendor — their vendor now comes from the
-  // store-specific AMC lookup, not product selection, so collapse them to one entry
   const seen = new Set();
   const filtered = [];
   for (const p of matched) {
-    const key = isAmcLookupProduct(p.name) ? `amc:${p.name.toLowerCase()}` : `${p.name.toLowerCase()}|${(p.vendor || '').toLowerCase()}`;
+    const key = norm(p.name);
     if (seen.has(key)) continue;
     seen.add(key);
     filtered.push(p);
@@ -105,7 +176,7 @@ function ProductSearch({ products, value, vendorName, onChange, error, disabled 
           {filtered.slice(0, 30).map((p, i) => (
             <div key={i} className="product-option" onMouseDown={() => select(p)}>
               <span className="product-option-name">{p.name}</span>
-              <span className="product-option-vendor">{isAmcLookupProduct(p.name) ? 'AMC vendor by store' : (p.vendor || '—')}</span>
+              <span className="product-option-vendor">{isAmcLookupProduct(p.name) ? 'AMC vendor by store' : (p.category || '—')}</span>
             </div>
           ))}
         </div>
@@ -119,6 +190,21 @@ function ProductSearch({ products, value, vendorName, onChange, error, disabled 
   );
 }
 
+function WorkflowStep({ n, title, sub, wide, children }) {
+  return (
+    <div className={`wf-field ${wide ? 'wf-wide' : ''}`}>
+      <div className="wf-label">
+        <span className="wf-num">{n}</span>
+        <span className="wf-label-text">
+          <span className="wf-title">{title}</span>
+          <span className="wf-sub">{sub}</span>
+        </span>
+      </div>
+      <div className="wf-control">{children}</div>
+    </div>
+  );
+}
+
 function addDays(date, days) {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
@@ -128,6 +214,8 @@ function addDays(date, days) {
 function formatDate(date) {
   return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
+
+const emptyWf = { category: '', warranty: '', vendorQuery: '', vendorFreeText: '', noneBrand: '' };
 
 const emptyForm = {
   storeCode: '', storeName: '', storeEmail: '', smEmail: '', fmEmail: '', hoEmail: '', vendorEmail: '', contractType: '', city: '', region: '', state: '', zone: '',
@@ -155,169 +243,303 @@ export default function CaseLoggingForm() {
   const [unitLocations,    setUnitLocations]    = useState([]);
   const [unitNatures,      setUnitNatures]      = useState([]);
   const [results,          setResults]          = useState([]);
-  const [polishing,        setPolishing]        = useState(false);
   const [recentComplaints, setRecentComplaints] = useState([]);
   const [loadingRecent,    setLoadingRecent]    = useState(false);
+  const [autoFillNote,     setAutoFillNote]     = useState('');
   const [warrantyQty,      setWarrantyQty]      = useState(0);
   const [warrantyVendor,   setWarrantyVendor]   = useState('');
   const [showConfirm,      setShowConfirm]      = useState(false);
-  const [amcStatus,        setAmcStatus]        = useState('idle'); // idle|loading|found|not-found|error
+  const [amcStatus,        setAmcStatus]        = useState('idle'); // idle|loading|found|not-applicable|error
   const [gensetChoice,     setGensetChoice]     = useState('');
   const [resolvedTo,       setResolvedTo]       = useState([]);
   const [resolvedCc,       setResolvedCc]       = useState([]);
   const [extraTo,          setExtraTo]          = useState('');
   const [extraCc,          setExtraCc]          = useState('');
   const amcLookupKeyRef = useRef('');
+  const amcRequestIdRef = useRef(0);
 
   const [products, setProducts]   = useState([]);
   const [natures, setNatures]     = useState([]);
   const [loadingRef, setLoadingRef] = useState(true);
-  const storeTimer   = useRef(null);
-  const employeeTimer = useRef(null);
+  const [refError, setRefError]   = useState('');
+  const lookupTimer = useRef(null);
+
+  // One smart search accepts employee code, store code or mobile number
+  const [lookupQuery, setLookupQuery]     = useState('');
+  const [lookupMsg, setLookupMsg]         = useState('');
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [wf, setWf] = useState(emptyWf);
+
+  // Mirrors used by async lookups so they can see the latest warranty/product
+  // selection even if the user changes it while a network request is in flight.
+  const formRef = useRef(form);
+  formRef.current = form;
+  const wfRef = useRef(wf);
+  wfRef.current = wf;
+  const isPortalAmcActive = (product = formRef.current.productName) =>
+    wfRef.current.warranty === 'Under AMC' && isAmcLookupProduct(product);
 
   const today = new Date();
   const edc   = form.tatDays ? addDays(today, Number(form.tatDays)) : null;
 
+  // Dropdowns are driven entirely by the live SQL reference data.
   useEffect(() => {
     Promise.all([vmm.getProducts(), vmm.getNatures()])
       .then(([pRes, nRes]) => {
         setProducts(pRes.products || []);
-        setNatures(mergeNatures(nRes.natures));
+        setNatures(nRes.natures || []);
+        if (!pRes.products?.length || !nRes.natures?.length)
+          setRefError('SQL reference data returned no rows — please check the API.');
       })
-      .catch(() => setNatures(mergeNatures([])))
+      .catch(() => setRefError('Unable to load dropdown data from the SQL API. Please try again.'))
       .finally(() => setLoadingRef(false));
   }, []);
 
-  // Auto-fetch store-specific AMC vendor for AC/Lift/Escalator once both product + store are known
+  // Clear any pending debounced lookups when the form unmounts
+  useEffect(() => () => {
+    clearTimeout(lookupTimer.current);
+  }, []);
+
+  // Options for the interactive workflow controls, derived from the loaded reference lists
+  const categoryOptions = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
+  const sqlVendorOptions = [...new Set(products.map(p => p.vendor).filter(Boolean))].sort();
+
+  // Portal-derived view state for the Complaint → Vendor steps.
+  const visibleNatures   = natures.filter(n =>
+    !isTemperatureNature(n.nature) || showsTemperatureOption(form.productName)
+  );
+  const autoWarranty     = getAutoWarranty(form.productName);
+  const isFixedVendor    = !!getFixedVendor(form.productName);
+  const isHoDirect       = isHoDirectProduct(form.productName);
+  const isGenset         = isGensetProduct(form.productName);
+  const isFireProduct    = isFireProductName(form.productName);
+  const isAutoRouted     = !!autoWarranty;
+  const isAmcWebhookMode = wf.warranty === 'Under AMC' && isAmcLookupProduct(form.productName) && !isAutoRouted;
+  const isAmcManualMode  = wf.warranty === 'Under AMC' && !isAutoRouted && !isAmcWebhookMode;
+  const isBrandMode      = wf.warranty === 'Under Warranty' && !isAutoRouted;
+  const isPlainVendorMode = !!wf.warranty && !isAutoRouted && !isAmcWebhookMode && !isAmcManualMode && !isBrandMode;
+
+  // "Under Warranty" uses the portal's product→brand map; AMC is filled from the
+  // store webhook, and other statuses keep the full live SQL vendor list.
+  const brandOptions    = getVendorsForProduct(form.productName);
+  const vendorOptions   = sqlVendorOptions;
+  const filteredVendors = vendorOptions.filter(v => v.toLowerCase().includes(wf.vendorQuery.toLowerCase()));
+
+  // One fill routine for all three search boxes — picks camelCase or snake_case
+  // field names so every detail populates whatever the API returns.
+  const applyDetails = (employee, store) => {
+    setForm(f => ({
+      ...f,
+      employeeCode:  pick(employee, 'code', 'empcode', 'employeeCode') || f.employeeCode,
+      employeeName:  pick(employee, 'name', 'empname', 'employeeName') || f.employeeName,
+      contactNumber: pick(employee, 'mobile', 'mobileno', 'empmobileno', 'contactNumber') || f.contactNumber,
+      designation:   pick(employee, 'designation', 'empdesignation') || f.designation,
+      storeCode:     pick(store, 'code', 'storecode') || pick(employee, 'storeCode', 'storecode') || f.storeCode,
+      storeName:     pick(store, 'name', 'storename') || pick(employee, 'storeName', 'storename') || f.storeName,
+      storeEmail:    pick(store, 'email', 'storeemail') || f.storeEmail,
+      city:          pick(store, 'city', 'fmcity') || f.city,
+      region:        pick(store, 'region', 'regionname') || f.region,
+      state:         pick(store, 'state', 'statename') || f.state,
+      zone:          pick(store, 'zone') || f.zone,
+      fmName:        pick(store, 'fmName', 'fmname') || f.fmName,
+      fmEmail:       pick(store, 'fmEmail', 'fmemail') || f.fmEmail,
+      fmMobile:      pick(store, 'fmMobile', 'fmmobileno') || f.fmMobile,
+      managerName:   pick(store, 'managerName', 'managername') || f.managerName,
+      managerMobile: pick(store, 'managerMobile', 'managermobileno') || f.managerMobile,
+      asmName:       pick(store, 'asmName', 'asmname') || f.asmName,
+      asmMobile:     pick(store, 'asmMobile', 'asmmobileno') || f.asmMobile,
+    }));
+  };
+
+  // Fetch the complete store record for a store code discovered via employee/phone.
+  const enrichStore = async (storeCode) => {
+    if (!storeCode) return;
+    try {
+      const sr = await vmm.lookupStore(storeCode);
+      if (sr?.store) applyDetails(null, sr.store);
+    } catch { /* store enrichment is best-effort */ }
+  };
+
+  // Each helper returns true when a record was found so the smart search can
+  // try the remaining identifier types when the first guess misses.
+  const tryEmployee = async (code) => {
+    const res = await vmm.lookupEmployee(code);
+    const e = res?.employee;
+    if (!e) return false;
+    applyDetails(e, null);
+    let storeCode = pick(e, 'storeCode', 'storecode');
+    if (storeCode) await enrichStore(storeCode);
+    const finalStore = storeCode || form.storeCode;
+    if (finalStore) fetchRecentComplaints(finalStore);
+    setLookupMsg(`✓ ${pick(e, 'name')} · ${pick(e, 'code')} · ${storeCode || ''} — details filled`);
+    return true;
+  };
+
+  const tryStore = async (code) => {
+    const res = await vmm.lookupStore(code);
+    const s = res?.store;
+    if (!s) return false;
+    applyDetails(null, s);
+    setForm(f => ({ ...f, smEmail: pick(s, 'smEmail', 'email', 'storeemail') || f.smEmail }));
+    const storeCode = pick(s, 'code', 'storecode') || code;
+    fetchRecentComplaints(storeCode);
+    setLookupMsg(`✓ ${pick(s, 'name', 'storename')} · ${storeCode} — details filled`);
+    return true;
+  };
+
+  const tryPhone = async (mobile) => {
+    let employee = null, store = null;
+    try {
+      const r = await vmm.lookupCaller(mobile);
+      employee = r?.employee || null;
+      store = r?.store || null;
+    } catch { /* fall back to the employee-by-mobile lookup */ }
+    if (!employee) {
+      const r = await vmm.lookupEmployeeByMobile(mobile);
+      employee = r?.employee || null;
+    }
+    if (!employee && !store) return false;
+
+    const employeeStore = pick(employee, 'storeCode', 'storecode');
+    applyDetails(employee, employeeStore ? null : store);
+    const storeCode = employeeStore || pick(store, 'code', 'storecode') || pick(store, 'storeCode');
+    if (storeCode) { await enrichStore(storeCode); fetchRecentComplaints(storeCode); }
+    setLookupMsg(`✓ ${mobile} · ${pick(employee, 'name') || storeCode} — details filled`);
+    return true;
+  };
+
+  // One input handles all three identifiers — detect by shape, then fall back
+  // to the other lookup types if the first guess does not match.
+  const runSmartLookup = async (raw) => {
+    const q = String(raw || '').trim();
+    if (!q) { setLookupMsg('Enter an employee code, store code or 10-digit mobile.'); return; }
+    setLookupLoading(true);
+    setLookupMsg('');
+    setMemberErr('');
+    setStoreErr('');
+    setAutoFillNote('');
+
+    const digits = q.replace(/\D/g, '');
+    const candidates = /^\d{10}$/.test(q) ? ['phone', 'employee', 'store']
+                     : /^\d+$/.test(q)    ? ['employee', 'phone', 'store']
+                     :                      ['store', 'employee', 'phone'];
+    let matched = false;
+    for (const kind of candidates) {
+      try {
+        const ok = kind === 'employee' ? await tryEmployee(q)
+                 : kind === 'phone'    ? await tryPhone(digits)
+                 :                       await tryStore(q);
+        if (ok) { matched = true; break; }
+      } catch { /* try the next identifier type */ }
+    }
+    if (!matched) setLookupMsg('No matching employee, store or mobile found. Please check the value.');
+    setLookupLoading(false);
+  };
+
+  // Auto-fetch the store's AMC vendor only when the warranty is "Under AMC"
+  // (Under Warranty uses the brand map instead). The guard is cleared whenever
+  // AMC is left so switching Warranty → AMC always performs a fresh lookup.
   useEffect(() => {
     const product   = form.productName;
     const storeCode = form.storeCode;
-    if (!product || !storeCode || !isAmcLookupProduct(product)) {
+    if (!product || !storeCode || wf.warranty !== 'Under AMC' || !isAmcLookupProduct(product)) {
+      amcLookupKeyRef.current = '';
+      amcRequestIdRef.current += 1;
       setAmcStatus('idle');
       return;
     }
     const key = `${storeCode}|${norm(product)}`;
     if (amcLookupKeyRef.current === key) return;
     amcLookupKeyRef.current = key;
+    const requestId = ++amcRequestIdRef.current;
     setAmcStatus('loading');
-    vmm.getAmcVendor(storeCode, product)
+    vmm.getPortalAmcVendor(storeCode, product)
       .then(res => {
+        if (requestId !== amcRequestIdRef.current || !isPortalAmcActive(product)) return;
         if (res.found && res.vendor) {
           setForm(f => ({ ...f, vendorName: res.vendor }));
-          setAmcStatus('found');
+          setAmcStatus(res.notApplicable ? 'not-applicable' : 'found');
         } else {
-          setAmcStatus('not-found');
+          setForm(f => ({ ...f, vendorName: '' }));
+          setAmcStatus('error');
         }
       })
-      .catch(() => setAmcStatus('error'));
-  }, [form.productName, form.storeCode]);
+      .catch(() => {
+        if (requestId !== amcRequestIdRef.current || !isPortalAmcActive(product)) return;
+        setForm(f => ({ ...f, vendorName: '' }));
+        setAmcStatus('error');
+      });
+  }, [form.productName, form.storeCode, wf.warranty]);
 
   const fetchRecentComplaints = async (storeCode) => {
     setLoadingRecent(true);
     setRecentComplaints([]);
+    setAutoFillNote('');
     try {
       const res = await vmm.getRecentComplaints(storeCode);
-      setRecentComplaints((res.complaints || []).map(c => ({
+      const list = res.complaints || [];
+      setRecentComplaints(list.map(c => ({
         ...c,
         complaintno:     bufStr(c.complaintno),
         empname:         bufStr(c.empname),
-        empcode:         bufStr(c.empcode),
+        empcode:         bufStr(c.empcode || c.empCode),
         productname:     bufStr(c.productname),
         natureofproblem: bufStr(c.natureofproblem),
         typeofcomplaint: bufStr(c.typeofcomplaint),
-        status:          bufStr(c.status),
+        status:          bufStr(c.status || c.current_status),
       })));
+
+      // Auto-fill empty fields from the store's latest SQL complaint.
+      // The search row carries employee/TAT data; the detail row carries location/remarks.
+      if (list.length) {
+        try {
+          const latest    = list[0];
+          const latestNo  = bufStr(latest.complaintno);
+          const detailRes = await vmm.getComplaint(latestNo);
+          const c         = detailRes?.complaint || {};
+          const productName = bufStr(c.productname || latest.productname);
+          const natureName  = bufStr(c.natureofproblem || latest.natureofproblem);
+          const natureMeta  = natures.find(n => norm(n.nature) === norm(natureName));
+          const productMeta = products.find(p => norm(p.name) === norm(productName));
+          // AMC, genset, fire and HO-direct products own the vendor field —
+          // never seed it from the previous complaint, or a slow response can
+          // overwrite the portal-routed value.
+          const vendorOwned = isVendorOwnedProduct(productName) || isVendorOwnedProduct(formRef.current.productName);
+          const rawTat      = parseInt(String(bufStr(latest.tat || c.tat) || ''), 10);
+          const fallbackTat = Number.isFinite(rawTat) ? rawTat : '';
+
+          // SQL complaint rows carry the employee mobile but not the code —
+          // resolve the registered employee so every employee field fills too.
+          let complaintEmployee = null;
+          const complaintMobile = bufStr(latest.empmobileno);
+          if (!form.employeeCode && complaintMobile) {
+            try {
+              const er = await vmm.lookupEmployeeByMobile(complaintMobile);
+              complaintEmployee = er?.employee || null;
+            } catch { /* employee resolution is best-effort */ }
+          }
+
+          setForm(f => ({
+            ...f,
+            employeeCode:      f.employeeCode      || bufStr(complaintEmployee?.code || latest.empcode) || '',
+            employeeName:      f.employeeName      || bufStr(complaintEmployee?.name || latest.empname) || '',
+            contactNumber:     f.contactNumber     || bufStr(complaintMobile) || '',
+            designation:       f.designation       || pick(complaintEmployee, 'designation') || '',
+            productName:        f.productName        || productName || '',
+            productShortName:   f.productShortName   || bufStr(c.productmodel) || '',
+            productType:        f.productType        || productMeta?.category || bufStr(latest.producttype) || '',
+            vendorName:         vendorOwned ? f.vendorName : (f.vendorName || bufStr(c.vendorname || latest.vendorname) || ''),
+            natureOfComplaint:  f.natureOfComplaint  || natureName || '',
+            complaintType:      f.complaintType      || natureMeta?.type || bufStr(c.typeofcomplaint || latest.typeofcomplaint) || '',
+            tatDays:            f.tatDays !== '' && f.tatDays != null ? f.tatDays : (natureMeta?.tatDays ?? fallbackTat),
+            productLocation:    f.productLocation    || bufStr(c.productlocation) || '',
+            remarks:            f.remarks            || bufStr(c.remarks || c.description) || '',
+          }));
+          setAutoFillNote(`Form auto-filled from last SQL complaint ${latestNo} — please review before submitting.`);
+        } catch { /* auto-fill is best-effort */ }
+      }
     } catch { setRecentComplaints([]); }
     finally { setLoadingRecent(false); }
-  };
-
-  const lookupStore = async (codeOverride) => {
-    const code = (codeOverride || form.storeCode || '').trim();
-    if (!code) return;
-    try {
-      const res = await vmm.lookupStore(code);
-      if (res.found && res.store) {
-        const s = res.store;
-        setForm(f => ({
-          ...f,
-          storeCode:     s.code,
-          storeName:     s.name,
-          storeEmail:    s.email          || '',
-          smEmail:       s.smEmail        || s.email || '',
-          fmEmail:       s.fmEmail        || '',
-          city:          s.city           || '',
-          region:        s.region         || '',
-          state:         s.state          || '',
-          zone:          s.zone           || '',
-          fmName:        s.fmName         || '',
-          managerName:   s.managerName    || '',
-          managerMobile: s.managerMobile  || '',
-          asmName:       s.asmName        || '',
-          asmMobile:     s.asmMobile      || '',
-        }));
-        setStoreErr('');
-        fetchRecentComplaints(s.code);
-      } else {
-        setForm(f => ({ ...f, storeName: '' }));
-        setStoreErr('Store code not found. Please verify and try again.');
-        setRecentComplaints([]);
-      }
-    } catch {
-      setStoreErr('Unable to reach server. Please try again.');
-    }
-  };
-
-  const lookupEmployee = async () => {
-    if (!form.employeeCode.trim()) return;
-    try {
-      const res = await vmm.lookupEmployee(form.employeeCode.trim());
-      if (res.found && res.employee) {
-        const e = res.employee;
-        // Fill employee fields + store fields available from the employee record
-        setForm(f => ({
-          ...f,
-          employeeCode:  e.code,
-          employeeName:  e.name,
-          contactNumber: e.mobile      || '',
-          designation:   e.designation || '',
-          // Store fields from employee record
-          storeCode:     e.storeCode   || f.storeCode,
-          storeName:     e.storeName   || f.storeName,
-          city:          e.city        || f.city,
-          region:        e.region      || f.region,
-          state:         e.state       || f.state,
-          zone:          e.zone        || f.zone,
-          managerName:   e.managerName || f.managerName,
-          asmName:       e.asmName     || f.asmName,
-          fmName:        e.fmName      || f.fmName,
-        }));
-        setStoreErr('');
-        setMemberErr('');
-        // If store code came from employee, fetch full store record + recent complaints
-        const resolvedStoreCode = e.storeCode || form.storeCode;
-        if (e.storeCode) {
-          try {
-            const sRes = await vmm.lookupStore(e.storeCode);
-            if (sRes.found && sRes.store) {
-              const s = sRes.store;
-              setForm(f => ({
-                ...f,
-                fmEmail:       s.fmEmail       || f.fmEmail,
-                fmMobile:      s.fmMobile      || f.fmMobile,
-                managerMobile: s.managerMobile || f.managerMobile,
-                asmMobile:     s.asmMobile     || f.asmMobile,
-              }));
-            }
-          } catch {}
-        }
-        if (resolvedStoreCode) fetchRecentComplaints(resolvedStoreCode);
-      } else {
-        setForm(f => ({ ...f, employeeName: '', contactNumber: '' }));
-        setMemberErr('Employee not found in registered member list. Cases can only be logged for registered members.');
-      }
-    } catch {
-      setMemberErr('Unable to reach server. Please try again.');
-    }
   };
 
   const handleNatureChange = (e) => {
@@ -330,16 +552,6 @@ export default function CaseLoggingForm() {
     }));
   };
 
-  const polishRemarks = async () => {
-    if (!form.remarks.trim()) return;
-    setPolishing(true);
-    try {
-      const res = await vmm.polishRemarks(form.remarks);
-      if (res.success && res.polishedText) setForm(f => ({ ...f, remarks: res.polishedText }));
-    } catch {}
-    finally { setPolishing(false); }
-  };
-
   const validate = () => {
     const e = {};
     if (!form.storeCode || !form.storeName)                  e.storeCode      = 'Valid store code is required';
@@ -347,12 +559,15 @@ export default function CaseLoggingForm() {
     if (!form.contactNumber || !/^\d{10}$/.test(form.contactNumber)) e.contactNumber = 'Valid 10-digit contact number required';
     if (!form.productName)                                   e.productName    = 'Select a product';
     if (!form.natureOfComplaint)                             e.natureOfComplaint = 'Select nature of complaint';
+    if (!autoWarranty && !wf.warranty)                        e.warranty       = 'Select warranty / AMC status';
+    if ((isBrandMode || isGenset || isAmcManualMode || isPlainVendorMode) && !form.vendorName)
+      e.vendor = isBrandMode ? 'Select a brand (or choose None of the above)'
+               : isAmcManualMode ? 'Select or enter the AMC vendor'
+               : 'Enter the vendor name';
+    if (isAmcWebhookMode && amcStatus !== 'found' && amcStatus !== 'not-applicable' && !form.vendorName)
+      e.vendor = 'Enter the AMC vendor manually (store lookup unavailable)';
     if (!form.productLocation.trim())                        e.productLocation = 'Product location is required';
     if (!form.remarks.trim())                                e.remarks         = 'Complaint description is required';
-    if (!form.source)                                        e.source          = 'Select source of complaint';
-    if (form.source === 'E-mail' && !form.emailSubject.trim()) e.emailSubject  = 'Email subject is required for E-mail complaints';
-    if (form.source === 'Call'   && !form.callTxnId.trim())   e.callTxnId     = 'Call transaction ID is required for Call complaints';
-    else if (form.source === 'Call' && !/^[A-Za-z0-9\-_]{4,40}$/.test(form.callTxnId.trim())) e.callTxnId = 'Transaction ID must be 4–40 alphanumeric characters (no spaces)';
     if (ATTACHMENT_MANDATORY.includes(form.complaintType) && form.attachments.length === 0 && !noImage)
       e.attachments = `At least 1 attachment is mandatory for ${form.complaintType} complaints (or check "No image available")`;
     return e;
@@ -409,9 +624,10 @@ export default function CaseLoggingForm() {
       productType:       form.productType,
       natureOfComplaint: form.natureOfComplaint,
       complaintType:     form.complaintType,
+      warrantyStatus:    wf.warranty,
       tatDays:           form.tatDays,
       productLocation:   form.productLocation,
-      remarks:           form.remarks,
+      remarks:           wf.noneBrand ? `Brand info: ${wf.noneBrand}. ${form.remarks}` : form.remarks,
       source:            form.source,
       emailSubject:      form.emailSubject,
       callTxnId:         form.callTxnId,
@@ -501,8 +717,16 @@ export default function CaseLoggingForm() {
     setWarrantyVendor('');
     setUnitLocations([]);
     setUnitNatures([]);
-    setPolishing(false);
     setRecentComplaints([]);
+    setWf(emptyWf);
+    wfRef.current = emptyWf;
+    amcLookupKeyRef.current = '';
+    amcRequestIdRef.current += 1;
+    setAmcStatus('idle');
+    setGensetChoice('');
+    setLookupQuery('');
+    setLookupMsg('');
+    setAutoFillNote('');
     setExtraTo('');
     setExtraCc('');
     setResolvedTo([]);
@@ -599,8 +823,8 @@ export default function CaseLoggingForm() {
                 { label: 'Store',           val: `${form.storeCode} — ${form.storeName}` },
                 { label: 'Employee',        val: `${form.employeeCode} — ${form.employeeName}` },
                 { label: 'Contact',         val: form.contactNumber },
-                { label: 'Source',          val: form.source + (form.callTxnId ? ` · TXN: ${form.callTxnId}` : form.emailSubject ? ` · ${form.emailSubject}` : '') },
                 { label: 'Product',         val: form.productName },
+                { label: 'Warranty',        val: wf.warranty },
                 { label: 'Vendor',          val: form.vendorName },
                 { label: 'Nature',          val: form.natureOfComplaint },
                 { label: 'Type / TAT',      val: `${form.complaintType} · ${form.tatDays}d` },
@@ -690,72 +914,51 @@ export default function CaseLoggingForm() {
           </div>
           <div className="search-bar-row">
 
-            {/* Employee Code — PRIMARY */}
-            <div className="search-block">
+            {/* One smart search box for all three identifiers */}
+            <div className="search-block search-block-single">
               <label className="search-label">
-                Employee Code
-                <span className="search-badge recommended">Recommended</span>
-                {form.employeeName && <span className="search-badge filled">✓ Filled</span>}
-                {!form.employeeName && (errors.employeeCode || memberErr) && <span className="search-badge missing">Required</span>}
+                Employee Code / Store Code / Phone No
+                <span className="search-badge recommended">Smart search</span>
+                {(form.employeeName || form.storeName) && <span className="search-badge filled">✓ Filled</span>}
+                {!form.employeeName && !form.storeName && (errors.employeeCode || errors.storeCode) && (
+                  <span className="search-badge missing">Required</span>
+                )}
               </label>
               <div className="search-input-wrap">
                 <input
                   type="text"
-                  className={`search-input ${memberErr || errors.employeeCode ? 'err' : form.employeeName ? 'filled' : ''}`}
-                  placeholder="e.g. 6066822…"
-                  value={form.employeeCode}
+                  className={`search-input ${lookupMsg && !lookupMsg.startsWith('✓') ? 'err' : (form.employeeName || form.storeName) ? 'filled' : ''}`}
+                  placeholder="Enter employee code, store code or 10-digit mobile"
+                  value={lookupQuery}
                   onChange={e => {
                     const val = e.target.value;
-                    setForm(f => ({ ...f, employeeCode: val, employeeName: '', contactNumber: '' }));
-                    setMemberErr('');
-                    clearTimeout(employeeTimer.current);
-                    if (val.trim().length >= 4) employeeTimer.current = setTimeout(lookupEmployee, 600);
+                    setLookupQuery(val);
+                    setLookupMsg('');
+                    setForm(f => ({ ...f, employeeName: '', storeName: '', contactNumber: '' }));
+                    clearTimeout(lookupTimer.current);
+                    if (val.trim().length >= 4) lookupTimer.current = setTimeout(() => runSmartLookup(val), 600);
                   }}
-                  onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), lookupEmployee())}
+                  onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), runSmartLookup(lookupQuery))}
                 />
-                <button type="button" className="search-btn" onClick={lookupEmployee}>Search</button>
+                <button type="button" className="search-btn" onClick={() => runSmartLookup(lookupQuery)} disabled={lookupLoading}>
+                  {lookupLoading ? 'Searching…' : 'Search'}
+                </button>
               </div>
-              {(memberErr || errors.employeeCode) && <p className="search-err">{memberErr || errors.employeeCode}</p>}
-              <p className="search-hint">Fills store + employee details in one step</p>
-            </div>
-
-            <div className="search-sep" />
-
-            {/* Store Code — SECONDARY */}
-            <div className="search-block">
-              <label className="search-label">
-                Store Code
-                <span className="search-badge secondary">If employee code unavailable</span>
-                {form.storeName && !form.employeeName && <span className="search-badge filled">✓ Store filled</span>}
-                {!form.storeName && (errors.storeCode || storeErr) && <span className="search-badge missing">Required</span>}
-              </label>
-              <div className="search-input-wrap">
-                <input
-                  type="text"
-                  className={`search-input ${storeErr || errors.storeCode ? 'err' : form.storeName ? 'filled' : ''}`}
-                  placeholder="e.g. SA06, HP10…"
-                  value={form.storeCode}
-                  onChange={e => {
-                    const val = e.target.value;
-                    setForm(f => ({ ...f, storeCode: val, storeName: '' }));
-                    setStoreErr('');
-                    clearTimeout(storeTimer.current);
-                    if (val.trim().length >= 3) storeTimer.current = setTimeout(() => lookupStore(val.trim()), 600);
-                  }}
-                  onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), lookupStore())}
-                />
-                <button type="button" className="search-btn" onClick={lookupStore}>Search</button>
-              </div>
-              {(storeErr || errors.storeCode) && <p className="search-err">{storeErr || errors.storeCode}</p>}
-              <p className="search-hint">Fills store details only — employee code still required</p>
+              {lookupMsg && (
+                <p className="search-err" style={{ color: lookupMsg.startsWith('✓') ? '#15803d' : '#b91c1c' }}>{lookupMsg}</p>
+              )}
+              {(errors.employeeCode || errors.storeCode || memberErr || storeErr) && (
+                <p className="search-err">{errors.employeeCode || errors.storeCode || memberErr || storeErr}</p>
+              )}
+              <p className="search-hint">One search fills employee, store and complaint details automatically</p>
             </div>
 
           </div>
 
-          {/* Inline warning when store filled but employee still missing */}
+          {/* Inline warning when store filled but complainant still missing */}
           {form.storeName && !form.employeeName && (
             <div className="search-warning">
-              ⚠ Store found. Please also search by Employee Code to fill complainant details.
+              ⚠ Store found — search again with the employee code or mobile to fill complainant details.
             </div>
           )}
         </div>
@@ -847,233 +1050,411 @@ export default function CaseLoggingForm() {
           </div>
         )}
 
-        {/* Recent Complaints panel — shown after store/employee is identified */}
-        {(loadingRecent || recentComplaints.length > 0) && (
-          <div className="recent-complaints-card">
-            <div className="rc-header">
-              <span className="rc-title">Recent Complaints — {form.storeCode}</span>
-              {loadingRecent && <span className="rc-loading">Fetching…</span>}
-              {!loadingRecent && <span className="rc-count">{recentComplaints.length} found</span>}
-            </div>
-            {!loadingRecent && recentComplaints.length === 0 && (
-              <div className="rc-empty">No complaints logged for this store yet.</div>
-            )}
-            {!loadingRecent && recentComplaints.length > 0 && (
-              <div className="rc-table-wrap">
-                <table className="rc-table">
-                  <thead>
-                    <tr>
-                      <th>Complaint No</th>
-                      <th>Employee</th>
-                      <th>Product</th>
-                      <th>Nature</th>
-                      <th>Type</th>
-                      <th>Status</th>
-                      <th>Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentComplaints.map((c, i) => (
-                      <tr key={i}>
-                        <td><span className="rc-badge">{c.complaintno || `#${c.complaintid}`}</span></td>
-                        <td>
-                          <div className="rc-emp">{c.empname || '—'}</div>
-                          <div className="rc-sub">{c.empcode}</div>
-                        </td>
-                        <td>{c.productname || '—'}</td>
-                        <td>{c.natureofproblem || '—'}</td>
-                        <td>{c.typeofcomplaint || '—'}</td>
-                        <td><span className={`rc-status ${(c.status || '').toLowerCase()}`}>{c.status || 'Logged'}</span></td>
-                        <td>{c.created ? new Date(c.created).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+        {/* Complaint workflow — clean, aligned form layout */}
+        <div className="card workflow-card">
+          <div className="wf-header">
+            <h3 className="card-title">Complaint Workflow</h3>
+            <span className="wf-count">10 steps</span>
           </div>
-        )}
-
-        {/* Source of Complaint */}
-        <div className="card">
-          <h3 className="card-title">
-            Source of Complaint <span className="req">*</span>
-          </h3>
-          <div className="source-options">
-            {['E-mail', 'Call'].map(src => (
-              <label key={src} className={`source-option ${form.source === src ? 'active' : ''}`}>
-                <input
-                  type="radio"
-                  name="source"
-                  value={src}
-                  checked={form.source === src}
-                  onChange={() => setForm(f => ({ ...f, source: src, emailSubject: '', callTxnId: '' }))}
-                />
-                <span className="source-icon">
-                  {src === 'E-mail' ? '✉' : src === 'Call' ? '📞' : '⚡'}
-                </span>
-                <span className="source-label">{src}</span>
-              </label>
-            ))}
-          </div>
-          {errors.source && <p className="err-msg">{errors.source}</p>}
-
-          {form.source === 'E-mail' && (
-            <div className="field" style={{ marginTop: 14 }}>
-              <label>Email Subject <span className="req">*</span></label>
-              <input
-                type="text"
-                placeholder="e.g. AC not working at Ground Floor — VIZAINAGARAM"
-                value={form.emailSubject}
-                onChange={e => setForm(f => ({ ...f, emailSubject: e.target.value }))}
-                className={errors.emailSubject ? 'err' : ''}
-              />
-              {errors.emailSubject && <p className="err-msg">{errors.emailSubject}</p>}
-            </div>
+          {loadingRef && <p className="hint">Loading product and nature lists from SQL…</p>}
+          {!loadingRef && refError && (
+            <div className="wf-notice warn">⚠ {refError}</div>
           )}
-
-          {form.source === 'Call' && (
-            <div className="field" style={{ marginTop: 14 }}>
-              <label>Call Transaction ID <span className="req">*</span></label>
-              <input
-                type="text"
-                placeholder="e.g. TXN202505210001"
-                value={form.callTxnId}
-                onChange={e => setForm(f => ({ ...f, callTxnId: e.target.value }))}
-                className={errors.callTxnId ? 'err' : ''}
-              />
-              {errors.callTxnId && <p className="err-msg">{errors.callTxnId}</p>}
-            </div>
+          {autoFillNote && (
+            <div className="wf-notice ok">✓ {autoFillNote}</div>
           )}
-        </div>
-
-        {/* Complaint Details */}
-        <div className="card">
-          <h3 className="card-title">Complaint Details</h3>
-          {loadingRef && <p className="hint">Loading product and nature lists…</p>}
-          <div className="field-row">
-            <div className="field">
-              <label>Product Name <span className="req">*</span></label>
-              <ProductSearch
-                products={products}
-                value={form.productName}
-                vendorName={form.vendorName}
-                onChange={p => {
-                  const hoDirect    = isHoDirectProduct(p.name);
-                  const fixedVendor = getFixedVendor(p.name);
-                  const amcLookup   = isAmcLookupProduct(p.name);
-                  amcLookupKeyRef.current = '';
-                  setGensetChoice('');
-                  setAmcStatus('idle');
-                  setForm(f => ({
-                    ...f,
-                    productName:      p.name,
-                    productShortName: p.shortName || '',
-                    // AMC-lookup products (AC/Lift/etc) start blank — only the store-specific
-                    // webhook result should fill them, not the generic product-sheet vendor
-                    vendorName:  fixedVendor || ((hoDirect || amcLookup) ? '' : (p.vendor || '')),
-                    productType: p.category || '',
-                  }));
-                }}
-                error={!!errors.productName}
-                disabled={loadingRef}
-              />
-              {errors.productName && <p className="err-msg">{errors.productName}</p>}
-            </div>
-            <div className="field">
-              {isGensetProduct(form.productName) ? (
-                <>
-                  <label>Genset Brand</label>
-                  <div className="qty-row">
-                    <button
-                      type="button"
-                      className={`qty-btn ${gensetChoice === 'Kirloskar' ? 'active' : ''}`}
-                      onClick={() => { setGensetChoice('Kirloskar'); setForm(f => ({ ...f, vendorName: 'Kirloskar' })); }}
-                    >Kirloskar</button>
-                    <button
-                      type="button"
-                      className={`qty-btn ${gensetChoice === 'Other' ? 'active' : ''}`}
-                      onClick={() => { setGensetChoice('Other'); setForm(f => ({ ...f, vendorName: '' })); }}
-                    >Other Brand (HO Direct)</button>
-                  </div>
-                </>
-              ) : isHoDirectProduct(form.productName) ? (
-                <>
-                  <label>Vendor</label>
-                  <p className="hint">📋 Routed to Facility Manager / HO Team — no vendor selection needed for this product.</p>
-                </>
-              ) : (
-                <>
-                  <label>
-                    Vendor Name
-                    {isFireProductName(form.productName) && <span style={{ color: '#64748b', fontWeight: 400 }}> (optional — check sticker on unit)</span>}
-                    {amcStatus === 'loading'    && <span style={{ color: '#2563eb', fontWeight: 400 }}> · fetching store's AMC vendor…</span>}
-                    {amcStatus === 'found'      && <span style={{ color: '#16a34a', fontWeight: 400 }}> · auto-filled from store's AMC record</span>}
-                    {amcStatus === 'not-found'  && <span style={{ color: '#d97706', fontWeight: 400 }}> · no AMC vendor on record — enter manually</span>}
-                    {amcStatus === 'error'      && <span style={{ color: '#dc2626', fontWeight: 400 }}> · could not fetch AMC vendor — enter manually</span>}
-                    {amcStatus === 'idle' && isAmcLookupProduct(form.productName) && !form.storeCode && (
-                      <span style={{ color: '#94a3b8', fontWeight: 400 }}> · select a store to fetch this store's AMC vendor</span>
+          <div className="wf-grid">
+            {COMPLAINT_STEPS.map((step, i) => (
+              <WorkflowStep key={step.name} n={i + 1} title={step.name} sub={step.sub} wide={i === 0 || i === 9}>
+                {i === 0 && (
+                  <>
+                    <div className="wf-inline">
+                      <input
+                        type="text"
+                        className="wf-input"
+                        placeholder="Employee code, store code or mobile"
+                        value={lookupQuery}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setLookupQuery(val);
+                          setLookupMsg('');
+                          clearTimeout(lookupTimer.current);
+                          if (val.trim().length >= 4) lookupTimer.current = setTimeout(() => runSmartLookup(val), 600);
+                        }}
+                        onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), runSmartLookup(lookupQuery))}
+                      />
+                      <button type="button" className="wf-btn" onClick={() => runSmartLookup(lookupQuery)} disabled={lookupLoading}>
+                        {lookupLoading ? 'Searching…' : 'Verify'}
+                      </button>
+                    </div>
+                    {lookupMsg && (
+                      <p className={`wf-msg ${lookupMsg.startsWith('✓') ? 'ok' : 'bad'}`}>{lookupMsg}</p>
                     )}
-                  </label>
-                  <input
-                    type="text"
-                    value={form.vendorName}
-                    placeholder={
-                      isFireProductName(form.productName) ? 'e.g. local vendor name, or leave blank'
-                      : isAmcLookupProduct(form.productName) ? 'Select a store to auto-fill — or enter manually'
-                      : 'Auto-filled on product select — editable'
-                    }
-                    onChange={e => setForm(f => ({ ...f, vendorName: e.target.value }))}
-                  />
-                </>
-              )}
-            </div>
-          </div>
-          <div className="field-row">
-            <div className="field">
-              <label>Nature of Complaint <span className="req">*</span></label>
-              <select value={form.natureOfComplaint} onChange={handleNatureChange} className={errors.natureOfComplaint ? 'err' : ''} disabled={loadingRef}>
-                <option value="">— Select Nature of Complaint —</option>
-                {natures.map(n => (
-                  <option key={n.nature} value={n.nature}>{n.nature}</option>
-                ))}
-              </select>
-              {errors.natureOfComplaint && <p className="err-msg">{errors.natureOfComplaint}</p>}
-            </div>
-            <div className="field">
-              <label>Product Location in Store <span className="req">*</span></label>
-              <input
-                type="text"
-                placeholder="e.g. Ground Floor, Near Entrance"
-                value={form.productLocation}
-                onChange={e => setForm(f => ({ ...f, productLocation: e.target.value }))}
-                className={errors.productLocation ? 'err' : ''}
-              />
-              {errors.productLocation && <p className="err-msg">{errors.productLocation}</p>}
-            </div>
-          </div>
-          <div className="field remarks-field-wrap">
-            <div className="remarks-label-row">
-              <label className="remarks-main-label">Complaint Description <span className="req">*</span></label>
-              <button
-                type="button"
-                className={`btn-ai-polish ${polishing ? 'loading' : ''}`}
-                onClick={polishRemarks}
-                disabled={polishing || !form.remarks.trim()}
-                title="Let AI rewrite this professionally"
-              >
-                {polishing ? '✦ Polishing…' : '✦ AI Polish'}
-              </button>
-            </div>
-            <textarea
-              rows={8}
-              placeholder="Describe the issue in detail — what is the problem, where is it located, since when. You can write in English or Hinglish, the AI will clean it up."
-              value={form.remarks}
-              onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))}
-              className={`remarks-textarea ${errors.remarks ? 'err' : ''}`}
-            />
-            {errors.remarks && <p className="err-msg">{errors.remarks}</p>}
-            <p className="hint">Click "AI Polish" to professionally rewrite the text.</p>
+                    {form.employeeName ? (
+                      <div className="wf-verified">
+                        <span className="wf-verified-dot" />
+                        <strong>{form.employeeName}</strong>
+                        <span>{form.employeeCode}</span>
+                        <span>{form.storeName || form.storeCode}</span>
+                      </div>
+                    ) : (
+                      <p className="wf-help">Your name, employee code and store details will appear here after verification.</p>
+                    )}
+                    <div className="wf-subfield">
+                      <label>Contact number</label>
+                      <input
+                        type="tel"
+                        className={`wf-input ${errors.contactNumber ? 'err' : ''}`}
+                        value={form.contactNumber}
+                        onChange={e => setForm(f => ({ ...f, contactNumber: e.target.value.replace(/\D/g, '').slice(0, 10) }))}
+                        placeholder="10-digit mobile"
+                      />
+                      {errors.contactNumber && <p className="err-msg">{errors.contactNumber}</p>}
+                    </div>
+                  </>
+                )}
+                {i === 1 && (
+                  <select className="wf-input" value={wf.category} onChange={e => setWf(w => ({ ...w, category: e.target.value }))}>
+                    <option value="">— Select category —</option>
+                    {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                )}
+                {i === 2 && (
+                  <>
+                    <ProductSearch
+                      products={products}
+                      value={form.productName}
+                      vendorName={form.vendorName}
+                      error={!!errors.productName}
+                      onChange={p => {
+                        const fixedVendor = getFixedVendor(p.name);
+                        const hoDirect    = isHoDirectProduct(p.name);
+                        const amcLookup   = isAmcLookupProduct(p.name);
+                        const autoWarranty = getAutoWarranty(p.name);
+                        // Keep a manually chosen warranty (e.g. Under AMC) when
+                        // changing between ordinary products. Only auto-routed
+                        // products replace it, and leaving one clears it.
+                        const previousWarranty = wfRef.current.warranty;
+                        const warranty = autoWarranty ||
+                          (AUTO_WARRANTY_VALUES.has(previousWarranty) ? '' : previousWarranty);
+
+                        // HTML product selection sets the category from the
+                        // chosen product and auto-routes special products.
+                        let vendorName = p.vendor || '';
+                        if (fixedVendor)      vendorName = fixedVendor;
+                        else if (hoDirect)    vendorName = 'N/A — HO Direct';
+                        else if (amcLookup || isGensetProduct(p.name) || isFireProductName(p.name)) vendorName = '';
+
+                        const nextWf = {
+                          ...wfRef.current,
+                          category: p.category || '',
+                          warranty,
+                          vendorQuery: '',
+                          vendorFreeText: '',
+                          noneBrand: '',
+                        };
+                        amcLookupKeyRef.current = '';
+                        amcRequestIdRef.current += 1;
+                        formRef.current = { ...formRef.current, productName: p.name, vendorName };
+                        wfRef.current = nextWf;
+                        setWf(nextWf);
+                        setGensetChoice('');
+                        setAmcStatus('idle');
+                        setForm(f => {
+                          const next = {
+                            ...f,
+                            productName: p.name,
+                            productShortName: p.shortName || '',
+                            vendorName,
+                            productType: p.category || '',
+                          };
+                          // Portal rule: temperature nature is AC-only.
+                          if (!showsTemperatureOption(p.name) && isTemperatureNature(f.natureOfComplaint)) {
+                            next.natureOfComplaint = '';
+                            next.complaintType = '';
+                            next.tatDays = '';
+                          }
+                          return next;
+                        });
+                      }}
+                      disabled={loadingRef}
+                    />
+                    {errors.productName && <p className="err-msg">{errors.productName}</p>}
+                  </>
+                )}
+                {i === 3 && (
+                  <>
+                    <select className={`wf-input ${errors.natureOfComplaint ? 'err' : ''}`} value={form.natureOfComplaint} onChange={handleNatureChange}>
+                      <option value="">— Select Nature of Complaint —</option>
+                      {visibleNatures.map(n => <option key={n.nature} value={n.nature}>{n.nature}</option>)}
+                    </select>
+                    {!showsTemperatureOption(form.productName) && (
+                      <p className="wf-help">Temperature complaints are shown only for AC / Server Room AC (portal rule).</p>
+                    )}
+                    {errors.natureOfComplaint && <p className="err-msg">{errors.natureOfComplaint}</p>}
+                  </>
+                )}
+                {i === 4 && (
+                  isAutoRouted ? (
+                    <p className={`wf-msg ${isFixedVendor || isHoDirect ? 'ok' : ''}`}>
+                      {isFixedVendor && `Portal rule — vendor ${getFixedVendor(form.productName)} auto-assigned; warranty step skipped.`}
+                      {isHoDirect && 'Portal rule — routed to Facility Manager / HO Team; warranty and vendor steps skipped.'}
+                      {isGenset && 'Portal rule — genset skips warranty; choose the brand in the Vendor step.'}
+                      {isFireProduct && 'Portal rule — fire products skip warranty; vendor from sticker is optional.'}
+                    </p>
+                  ) : (
+                    <>
+                      <select className={`wf-input ${errors.warranty ? 'err' : ''}`} value={wf.warranty || ''} onChange={e => {
+                        const warranty = e.target.value;
+                        const nextWf = {
+                          ...wfRef.current,
+                          warranty,
+                          vendorQuery: '',
+                          vendorFreeText: '',
+                          noneBrand: '',
+                        };
+                        setWf(nextWf);
+                        wfRef.current = nextWf;
+                        // Re-enter AMC cleanly on every switch, and clear any vendor
+                        // carried over from the previous warranty state.
+                        if (isAmcLookupProduct(form.productName) || PRODUCT_VENDORS[norm(form.productName)]) {
+                          amcLookupKeyRef.current = '';
+                          setForm(f => ({ ...f, vendorName: '' }));
+                        }
+                      }}>
+                        <option value="">— Select warranty / AMC status —</option>
+                        {['Under Warranty', 'Under AMC', 'Not Applicable'].map(x => <option key={x} value={x}>{x}</option>)}
+                      </select>
+                      {wf.warranty === 'Not Applicable' && (
+                        <p className="wf-help">Not sure? Portal guidance says select Not Applicable — the team verifies during inspection.</p>
+                      )}
+                      {errors.warranty && <p className="err-msg">{errors.warranty}</p>}
+                    </>
+                  )
+                )}
+                {i === 5 && (
+                  <div className="wf-stack">
+                    {isFixedVendor && (
+                      <p className="wf-msg ok">
+                        Portal rule — {getFixedVendor(form.productName)} auto-assigned as the vendor.
+                      </p>
+                    )}
+                    {isHoDirect && (
+                      <p className="wf-msg ok">Portal rule — no vendor required; routed to HO / Facility Manager.</p>
+                    )}
+                    {isGenset && (
+                      <>
+                        <p className="wf-help">Portal rule — choose Kirloskar, or send other brands to HO.</p>
+                        <div className="wf-inline">
+                          <button
+                            type="button"
+                            className={`wf-btn ${gensetChoice === 'Kirloskar' ? 'active' : ''}`}
+                            onClick={() => { setGensetChoice('Kirloskar'); setForm(f => ({ ...f, vendorName: 'Kirloskar' })); }}
+                          >
+                            Kirloskar
+                          </button>
+                          <button
+                            type="button"
+                            className={`wf-btn ${gensetChoice === 'other' ? 'active' : ''}`}
+                            onClick={() => { setGensetChoice('other'); setForm(f => ({ ...f, vendorName: '' })); }}
+                          >
+                            Other brand (HO)
+                          </button>
+                        </div>
+                        {errors.vendor && <p className="err-msg">{errors.vendor}</p>}
+                      </>
+                    )}
+                    {isFireProduct && (
+                      <>
+                        <p className="wf-help">Portal rule — enter the vendor from the unit sticker. This is optional.</p>
+                        <input
+                          className="wf-input"
+                          type="text"
+                          placeholder="Sticker vendor (optional)"
+                          value={wf.vendorFreeText}
+                          onChange={e => {
+                            const v = e.target.value;
+                            setWf(w => ({ ...w, vendorFreeText: v }));
+                            setForm(f => ({ ...f, vendorName: v.trim() }));
+                          }}
+                        />
+                      </>
+                    )}
+                    {isAmcWebhookMode && (
+                      <>
+                        <p className={`wf-msg ${
+                          amcStatus === 'found' || amcStatus === 'not-applicable' ? 'ok' :
+                          amcStatus === 'error' ? 'bad' : ''
+                        }`}>
+                          {amcStatus === 'idle'            && 'Search a store to auto-fill the AMC vendor, or enter it below'}
+                          {amcStatus === 'loading'         && 'Fetching your store’s AMC vendor…'}
+                          {amcStatus === 'found'           && '✓ AMC vendor auto-filled from the store record'}
+                          {amcStatus === 'not-applicable'  && '✓ No active AMC vendor — routed to HO / Facility Manager'}
+                          {amcStatus === 'error'           && '⚠ Could not fetch AMC vendor — enter it manually below'}
+                        </p>
+                        {(amcStatus === 'found' || amcStatus === 'not-applicable') && (
+                          <div className="wf-amc-card">
+                            <span>Your AMC Vendor</span>
+                            <strong>{form.vendorName || '—'}</strong>
+                          </div>
+                        )}
+                        {(amcStatus === 'idle' || amcStatus === 'error') && (
+                          <input
+                            className={`wf-input ${errors.vendor ? 'err' : ''}`}
+                            type="text"
+                            placeholder="Enter AMC vendor manually"
+                            value={wf.vendorFreeText}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setWf(w => ({ ...w, vendorFreeText: v }));
+                              setForm(f => ({ ...f, vendorName: v.trim() }));
+                            }}
+                          />
+                        )}
+                        {errors.vendor && <p className="err-msg">{errors.vendor}</p>}
+                      </>
+                    )}
+                    {isAmcManualMode && (
+                      <>
+                        <p className="wf-help">
+                          Select the AMC vendor from the live SQL list, or type a custom vendor name.
+                        </p>
+                        <input
+                          className="wf-input"
+                          type="text"
+                          placeholder="Search AMC vendor…"
+                          value={wf.vendorQuery}
+                          onChange={e => setWf(w => ({ ...w, vendorQuery: e.target.value }))}
+                        />
+                        <select
+                          className={`wf-input ${errors.vendor ? 'err' : ''}`}
+                          value={form.vendorName}
+                          onChange={e => {
+                            setWf(w => ({ ...w, vendorFreeText: '' }));
+                            setForm(f => ({ ...f, vendorName: e.target.value }));
+                          }}
+                        >
+                          <option value="">— Select AMC vendor —</option>
+                          {filteredVendors.map(v => <option key={v} value={v}>{v}</option>)}
+                          {form.vendorName && !filteredVendors.includes(form.vendorName) && (
+                            <option value={form.vendorName}>{form.vendorName}</option>
+                          )}
+                        </select>
+                        <input
+                          className="wf-input"
+                          type="text"
+                          placeholder="Or enter AMC vendor manually"
+                          value={wf.vendorFreeText}
+                          onChange={e => {
+                            const v = e.target.value;
+                            setWf(w => ({ ...w, vendorFreeText: v, vendorQuery: '' }));
+                            setForm(f => ({ ...f, vendorName: v.trim() }));
+                          }}
+                        />
+                        {errors.vendor && <p className="err-msg">{errors.vendor}</p>}
+                      </>
+                    )}
+                    {isBrandMode && (
+                      <>
+                        <input
+                          className="wf-input"
+                          type="text"
+                          placeholder="Search brand…"
+                          value={wf.vendorQuery}
+                          onChange={e => setWf(w => ({ ...w, vendorQuery: e.target.value }))}
+                        />
+                        <select
+                          className={`wf-input ${errors.vendor ? 'err' : ''}`}
+                          value={form.vendorName === 'N/A — HO Direct' ? '__none__' : form.vendorName}
+                          onChange={e => {
+                            const v = e.target.value;
+                            setWf(w => ({ ...w, noneBrand: '' }));
+                            setForm(f => ({ ...f, vendorName: v === '__none__' ? 'N/A — HO Direct' : v }));
+                          }}
+                        >
+                          <option value="">— Select brand —</option>
+                          {brandOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                          <option value="__none__">None of the above (HO team will handle)</option>
+                          {form.vendorName && !brandOptions.includes(form.vendorName) && form.vendorName !== 'N/A — HO Direct' && (
+                            <option value={form.vendorName}>{form.vendorName}</option>
+                          )}
+                        </select>
+                        {form.vendorName === 'N/A — HO Direct' && (
+                          <input
+                            className="wf-input"
+                            type="text"
+                            placeholder="Brand name (optional — added to remarks)"
+                            value={wf.noneBrand}
+                            onChange={e => setWf(w => ({ ...w, noneBrand: e.target.value }))}
+                          />
+                        )}
+                        <p className="wf-help">
+                          {brandOptions.length} brand(s) available for {form.productName || 'this product'}
+                          {!PRODUCT_VENDORS[norm(form.productName)] && ' — showing the standard warranty brand list'}
+                        </p>
+                        {errors.vendor && <p className="err-msg">{errors.vendor}</p>}
+                      </>
+                    )}
+                    {isPlainVendorMode && (
+                      <>
+                        <p className="wf-help">Portal rule — enter the vendor/company name manually.</p>
+                        <input
+                          className={`wf-input ${errors.vendor ? 'err' : ''}`}
+                          type="text"
+                          placeholder={wf.warranty === 'Under AMC'
+                            ? 'e.g. BlueStar Services, Carrier AMC'
+                            : 'e.g. LG, Samsung, Voltas, Daikin, or NA'}
+                          value={wf.vendorFreeText}
+                          onChange={e => {
+                            const v = e.target.value;
+                            setWf(w => ({ ...w, vendorFreeText: v }));
+                            setForm(f => ({ ...f, vendorName: v.trim() }));
+                          }}
+                        />
+                        {errors.vendor && <p className="err-msg">{errors.vendor}</p>}
+                      </>
+                    )}
+                    {!wf.warranty && <p className="wf-help">Select a warranty status first.</p>}
+                  </div>
+                )}
+                {i === 6 && (
+                  <>
+                    <input className={`wf-input ${errors.productLocation ? 'err' : ''}`} type="text" placeholder="e.g. Ground Floor near lift" value={form.productLocation} onChange={e => setForm(f => ({ ...f, productLocation: e.target.value }))} />
+                    {errors.productLocation && <p className="err-msg">{errors.productLocation}</p>}
+                  </>
+                )}
+                {i === 7 && (
+                  <input className="wf-input wf-file" type="file" multiple accept="image/*,.pdf" onChange={e => setForm(f => ({ ...f, attachments: Array.from(e.target.files || []) }))} />
+                )}
+                {i === 8 && (
+                  <>
+                    <textarea className={`wf-input ${errors.remarks ? 'err' : ''}`} rows={3} placeholder="Describe the problem…" value={form.remarks} onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))} />
+                    {errors.remarks && <p className="err-msg">{errors.remarks}</p>}
+                  </>
+                )}
+                {i === 9 && (
+                  <div className="wf-review">
+                    {[
+                      ['Type', form.complaintType],
+                      ['Category', wf.category],
+                      ['Product', form.productName],
+                      ['Nature', form.natureOfComplaint],
+                      ['Warranty', wf.warranty],
+                      ['Vendor', form.vendorName],
+                      ...(wf.noneBrand ? [['Brand info', wf.noneBrand]] : []),
+                      ['Location', form.productLocation],
+                      ['Photos', form.attachments.length ? form.attachments.map(f => f.name).join(', ') : ''],
+                      ['Remarks', form.remarks],
+                    ].map(([label, value]) => (
+                      <div key={label} className="wf-review-item">
+                        <span>{label}</span>
+                        <strong className={value ? '' : 'empty'}>{value || '—'}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </WorkflowStep>
+            ))}
           </div>
         </div>
 
