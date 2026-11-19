@@ -213,9 +213,6 @@
 .fu-store-group-row.fu-row-selected { background: #ede9fe !important; border-left-color: #7c3aed; }
 .fu-store-group-row.fu-row-partial { border-left-color: #c4b5fd; }
 .fu-store-group-row.fu-row-selected:hover { background: #ddd6fe !important; }
-.fu-store-group-row.fu-row-taken { opacity: 0.55; cursor: not-allowed; }
-.fu-store-group-row.fu-row-taken:hover { background: inherit !important; }
-.fu-badge-taken { background: #f3f4f6; color: #6b7280; }
 .fu-sgr-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .fu-sgr-code { font-family: monospace; font-size: 13px; font-weight: 700; color: #1e1b4b; white-space: nowrap; }
 .fu-sgr-name { font-size: 12px; color: #374151; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
