@@ -175,6 +175,53 @@ try {
             fail("Unknown sheet: $sheet", 404);
         }
 
+    // ── Store-wise AMC vendors (production vmmdb) ──────────────────────────────
+    case 'vmm-amc-vendors':
+        $r = rows($db, "SELECT store_code       AS storeCode,
+                               store_name       AS storeName,
+                               service_type     AS serviceType,
+                               vendor_name      AS vendorName,
+                               vendor_email     AS vendorEmail,
+                               vendor_phone     AS vendorPhone
+                        FROM vmmdb.vmm_amc_vendors
+                        WHERE is_active = 1
+                        ORDER BY FIELD(service_type, 'AC AMC', 'Lift AMC', 'Pest Control AMC'), store_code");
+        foreach ($r as &$x) { $x['id'] = $x['serviceType'] . '|' . $x['storeCode']; }
+        unset($x);
+        ok(['rows' => $r, 'source' => 'vmmdb.vmm_amc_vendors']);
+
+    case 'vmm-amc-vendor-save':
+        if ($METHOD !== 'POST') fail('POST required');
+        $storeCode   = strtoupper(trim($body['storeCode']   ?? ''));
+        $serviceType = trim($body['serviceType'] ?? '');
+        $vendorName  = trim($body['vendorName']  ?? '');
+        if (!$storeCode || !in_array($serviceType, ['AC AMC', 'Lift AMC', 'Pest Control AMC'], true) || !$vendorName) {
+            fail('storeCode, serviceType and vendorName are required');
+        }
+        $storeName   = $body['storeName']   ?? null;
+        $vendorEmail = $body['vendorEmail'] ?? null;
+        $vendorPhone = $body['vendorPhone'] ?? null;
+        $stmt = mysqli_prepare($db, "UPDATE vmmdb.vmm_amc_vendors
+            SET store_name = ?, vendor_name = ?, vendor_email = ?, vendor_phone = ?, updated_at = NOW()
+            WHERE store_code = ? AND service_type = ?");
+        if (!$stmt) fail('Could not prepare AMC update');
+        mysqli_stmt_bind_param($stmt, 'ssssss', $storeName, $vendorName, $vendorEmail, $vendorPhone, $storeCode, $serviceType);
+        mysqli_stmt_execute($stmt);
+        if (mysqli_stmt_affected_rows($stmt) === 0) {
+            mysqli_stmt_close($stmt);
+            fail('AMC vendor row not found', 404);
+        }
+        mysqli_stmt_close($stmt);
+        ok(['row' => [
+            'id'          => $serviceType . '|' . $storeCode,
+            'storeCode'   => $storeCode,
+            'storeName'   => $storeName,
+            'serviceType' => $serviceType,
+            'vendorName'  => $vendorName,
+            'vendorEmail' => $vendorEmail,
+            'vendorPhone' => $vendorPhone,
+        ]]);
+
     case 'vmm-sp-vendors':
         $r = rows($db, "SELECT id, name FROM {$px}vendors WHERE is_deleted='No' AND status='1' ORDER BY name");
         ok(['vendors' => $r]);

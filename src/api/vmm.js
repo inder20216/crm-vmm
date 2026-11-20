@@ -30,6 +30,33 @@ async function post(base, path, body) {
   return r.json();
 }
 
+// Store-wise AMC vendors: local Vite middleware in dev, PHP SQL API in production.
+const APP_BASE = import.meta.env.BASE_URL || '/';
+const AMC_READ_URL = import.meta.env.DEV
+  ? `${APP_BASE}api/amc-vendors`
+  : `${PHP}/vmm-amc-vendors`;
+const AMC_WRITE_URL = import.meta.env.DEV
+  ? `${APP_BASE}api/amc-vendors`
+  : `${PHP}/vmm-amc-vendor-save`;
+
+async function fetchAmcVendors() {
+  const r = await fetch(AMC_READ_URL);
+  if (!r.ok) throw new Error(`vmm-amc-vendors failed: ${r.status}`);
+  const data = await r.json();
+  return data.rows || [];
+}
+
+async function saveAmcVendorRow(row) {
+  const r = await fetch(AMC_WRITE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(row),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || data.success === false) throw new Error(data.error || `AMC save failed: ${r.status}`);
+  return data.row || row;
+}
+
 export const vmm = {
   // ── SQL-backed CRM data (live n8n workflows) ────────
   lookupStore:       (code)   => get(SQL, 'vmm-sp-store',          { code }),
@@ -42,25 +69,9 @@ export const vmm = {
   saveMasterRow:     (sheet, action, row) => post(SQL, 'vmm-master-save', { sheet, action, row }),
   getVendors:        ()       => get(SQL, 'vmm-sp-vendors'),
   getAmcVendor:        (storeCode, product) => get(SQL, 'vmm-sp-amc-vendor', { storeCode, product }),
-  // The facility portal's live store-AMC workflows return vendor_name directly.
-  // vmm-sp-amc-vendor has no matching SQL rows, so use these for the New Case form.
-  getPortalAmcVendor: (storeCode, product) => {
-    const key = (product || '').trim().toLowerCase();
-    const webhook = ['ac', 'server room ac'].includes(key) ? 'AC-AMC'
-                  : ['lift', 'escalator'].includes(key) ? 'Lift-AMC'
-                  : null;
-    if (!webhook) return Promise.resolve({ found: false, vendor: '' });
-    return post(BASE, webhook, { store_id: storeCode }).then(res => {
-      const raw = String(res?.vendor_name || '').trim();
-      // index (47).html: empty / "Not Applicable" both route to HO Direct.
-      const notApplicable = !raw || raw.toLowerCase() === 'not applicable';
-      return {
-        found: true,
-        notApplicable,
-        vendor: notApplicable ? 'N/A — HO Direct' : raw,
-      };
-    });
-  },
+  // Store-wise AMC vendors now come from vmmdb.vmm_amc_vendors.
+  getAmcVendors:      ()       => fetchAmcVendors(),
+  saveAmcVendor:      (row)    => saveAmcVendorRow(row),
   getEscalationMatrix: (params = {})        => get(SQL, 'vmm-sp-escalation-matrix', params),
   logComplaint:        (data)   => post(SQL, 'vmm-log-complaint',           data),
   polishRemarks:       (text)   => post(BASE, 'vmm-ai-polish',              { text }),

@@ -1,15 +1,15 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { vmm } from '../../api/vmm';
 import { useAuth } from '../../context/AuthContext';
+import { useAmcVendors } from '../../hooks/useAmcVendors';
 
 const ATTACHMENT_MANDATORY = ['Breakdown', 'Repair'];
 
-// The VMM complaint workflow, shown step by step below Source of Complaint
-// Verify + Employee are combined into one step because they use the same search.
+// The VMM complaint workflow. Store/employee verification is already handled by
+// the smart search above, so the workflow starts directly with the case details.
 const COMPLAINT_STEPS = [
-  { name: 'Verify & Employee', sub: 'Employee code, store code or mobile' },
-  { name: 'Category',       sub: 'Select the category' },
   { name: 'Product',        sub: 'Select specific item' },
+  { name: 'Category',       sub: 'Select the category' },
   { name: 'Complaint',      sub: 'Nature of issue' },
   { name: 'Warranty',       sub: 'AMC/Warranty status' },
   { name: 'Vendor',         sub: 'Brand or vendor name' },
@@ -19,8 +19,15 @@ const COMPLAINT_STEPS = [
   { name: 'Review',         sub: 'Check & submit' },
 ];
 
-// Products whose AMC vendor varies by store — auto-fetched via the AC-AMC / Lift-AMC webhooks
-const AMC_LOOKUP_PRODUCTS = new Set(['ac', 'server room ac', 'lift', 'escalator']);
+// Products whose AMC vendor is store-wise — mapped to vmm_amc_vendors service types
+const PRODUCT_AMC_SERVICE = {
+  'ac':             'AC AMC',
+  'server room ac': 'AC AMC',
+  'lift':           'Lift AMC',
+  'escalator':      'Lift AMC',
+  'pest control':   'Pest Control AMC',
+};
+const AMC_LOOKUP_PRODUCTS = new Set(Object.keys(PRODUCT_AMC_SERVICE));
 
 // Products with one fixed, known vendor — no per-store lookup needed
 const FIXED_VENDOR_PRODUCTS = { sensormatic: 'Adtech' };
@@ -77,6 +84,7 @@ const PRODUCT_VENDORS = {
 
 function norm(s) { return (s || '').trim().toLowerCase(); }
 const getVendorsForProduct = (name) => PRODUCT_VENDORS[norm(name)] || WARRANTY_VENDORS;
+const getAmcServiceType = (name) => PRODUCT_AMC_SERVICE[norm(name)] || null;
 const isAmcLookupProduct = (name) => AMC_LOOKUP_PRODUCTS.has(norm(name));
 const isHoDirectProduct  = (name) => HO_DIRECT_PRODUCTS.has(norm(name));
 const isFireProductName  = (name) => FIRE_PRODUCTS.has(norm(name));
@@ -121,40 +129,50 @@ function pick(obj, ...keys) {
 }
 
 function ProductSearch({ products, value, onChange, error, disabled }) {
-  const [query,    setQuery]    = useState(value || '');
-  const [open,     setOpen]     = useState(false);
-  const [focused,  setFocused]  = useState(false);
-  const wrapRef = useRef(null);
+  const [open,   setOpen]   = useState(false);
+  const [search, setSearch] = useState('');
+  const wrapRef   = useRef(null);
+  const searchRef = useRef(null);
 
-  // Portal product search matches product names only. SQL has one row per
-  // vendor, so collapse to one entry per product name as the HTML list does.
-  const matched = query.trim().length > 0
-    ? products.filter(p => p.name.toLowerCase().includes(query.toLowerCase()))
-    : products;
+  // SQL has one row per vendor, so collapse to one entry per product name.
+  const allProducts = useMemo(() => {
+    const seen = new Set();
+    const list = [];
+    for (const p of products) {
+      const key = norm(p.name);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      list.push(p);
+    }
+    return list;
+  }, [products]);
 
-  const seen = new Set();
-  const filtered = [];
-  for (const p of matched) {
-    const key = norm(p.name);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    filtered.push(p);
-  }
+  const filtered = search.trim()
+    ? allProducts.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()))
+    : allProducts;
+
+  const close = () => { setOpen(false); setSearch(''); };
 
   useEffect(() => {
-    if (!focused) setQuery(value || '');
-  }, [value, focused]);
+    if (open && searchRef.current) searchRef.current.focus();
+  }, [open]);
 
   useEffect(() => {
-    const handler = e => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const handler = e => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) close();
+    };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape' && open) close(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [open]);
+
   const select = (product) => {
-    setQuery(product.name);
-    setOpen(false);
-    setFocused(false);
+    close();
     onChange(product);
   };
 
@@ -162,28 +180,48 @@ function ProductSearch({ products, value, onChange, error, disabled }) {
     <div ref={wrapRef} style={{ position: 'relative' }}>
       <input
         type="text"
-        className={error ? 'err' : ''}
-        placeholder={disabled ? 'Loading…' : 'Type to search product…'}
-        value={query}
+        className={`product-select-input ${error ? 'err' : ''}`}
+        placeholder={disabled ? 'Loading…' : 'Select product…'}
+        value={value || ''}
+        readOnly
         disabled={disabled}
-        onChange={e => { setQuery(e.target.value); setOpen(true); }}
-        onFocus={() => { setFocused(true); setOpen(true); }}
-        onBlur={() => setFocused(false)}
-        autoComplete="off"
+        onClick={() => !disabled && setOpen(o => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
       />
-      {open && filtered.length > 0 && (
-        <div className="product-dropdown">
-          {filtered.slice(0, 30).map((p, i) => (
-            <div key={i} className="product-option" onMouseDown={() => select(p)}>
-              <span className="product-option-name">{p.name}</span>
-              <span className="product-option-vendor">{isAmcLookupProduct(p.name) ? 'AMC vendor by store' : (p.category || '—')}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {open && query.trim().length > 0 && filtered.length === 0 && (
-        <div className="product-dropdown">
-          <div className="product-option-empty">No products found for "{query}"</div>
+      <span className="product-caret" aria-hidden="true">▾</span>
+      {open && (
+        <div className="product-dropdown" role="listbox">
+          <div className="product-search-wrap">
+            <input
+              ref={searchRef}
+              type="text"
+              className="product-search-input"
+              placeholder="Search all products…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              autoComplete="off"
+            />
+            <span className="product-count">{filtered.length} / {allProducts.length}</span>
+          </div>
+          <div className="product-list">
+            {filtered.map(p => (
+              <div
+                key={norm(p.name)}
+                className="product-option"
+                role="option"
+                onMouseDown={() => select(p)}
+              >
+                <span className="product-option-name">{p.name}</span>
+                <span className="product-option-vendor">
+                  {isAmcLookupProduct(p.name) ? 'AMC vendor by store' : (p.category || '—')}
+                </span>
+              </div>
+            ))}
+            {filtered.length === 0 && (
+              <div className="product-option-empty">No products found for “{search}”</div>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -230,6 +268,7 @@ const emptyForm = {
 
 export default function CaseLoggingForm() {
   const { currentUser } = useAuth();
+  const { rows: amcRows } = useAmcVendors();
   const [form, setForm]           = useState(emptyForm);
   const [errors, setErrors]       = useState({});
   const [storeErr, setStoreErr]   = useState('');
@@ -249,15 +288,12 @@ export default function CaseLoggingForm() {
   const [warrantyQty,      setWarrantyQty]      = useState(0);
   const [warrantyVendor,   setWarrantyVendor]   = useState('');
   const [showConfirm,      setShowConfirm]      = useState(false);
-  const [amcStatus,        setAmcStatus]        = useState('idle'); // idle|loading|found|not-applicable|error
   const [gensetChoice,     setGensetChoice]     = useState('');
   const [resolvedTo,       setResolvedTo]       = useState([]);
   const [resolvedCc,       setResolvedCc]       = useState([]);
   const [extraTo,          setExtraTo]          = useState('');
   const [extraCc,          setExtraCc]          = useState('');
   const [polishing,        setPolishing]        = useState(false);
-  const amcLookupKeyRef = useRef('');
-  const amcRequestIdRef = useRef(0);
 
   const [products, setProducts]   = useState([]);
   const [natures, setNatures]     = useState([]);
@@ -277,8 +313,7 @@ export default function CaseLoggingForm() {
   formRef.current = form;
   const wfRef = useRef(wf);
   wfRef.current = wf;
-  const isPortalAmcActive = (product = formRef.current.productName) =>
-    wfRef.current.warranty === 'Under AMC' && isAmcLookupProduct(product);
+  const amcAutoFillKeyRef = useRef('');
 
   const today = new Date();
   const edc   = form.tatDays ? addDays(today, Number(form.tatDays)) : null;
@@ -315,21 +350,50 @@ export default function CaseLoggingForm() {
   const isGenset         = isGensetProduct(form.productName);
   const isFireProduct    = isFireProductName(form.productName);
   const isAutoRouted     = !!autoWarranty;
-  const isAmcWebhookMode = wf.warranty === 'Under AMC' && isAmcLookupProduct(form.productName) && !isAutoRouted;
-  const isAmcManualMode  = wf.warranty === 'Under AMC' && !isAutoRouted && !isAmcWebhookMode;
-  const isBrandMode      = wf.warranty === 'Under Warranty' && !isAutoRouted;
-  const isPlainVendorMode = !!wf.warranty && !isAutoRouted && !isAmcWebhookMode && !isAmcManualMode && !isBrandMode;
+  const isAmcStoreMode  = wf.warranty === 'Under AMC' && isAmcLookupProduct(form.productName) && !isAutoRouted;
+  const isAmcManualMode = wf.warranty === 'Under AMC' && !isAutoRouted;
+  const isBrandMode     = wf.warranty === 'Under Warranty' && !isAutoRouted;
+  const isPlainVendorMode = !!wf.warranty && !isAutoRouted && !isAmcManualMode && !isBrandMode;
 
-  // "Under Warranty" uses the portal's product→brand map; AMC is filled from the
-  // store webhook, and other statuses keep the full live SQL vendor list.
-  // The search box filters the brand dropdown too (while always keeping the
-  // current selection visible so the <select> never goes blank mid-typing).
+  // Store-wise AMC vendors come from the vmm_amc_vendors dataset.
+  const amcServiceType = getAmcServiceType(form.productName);
+  const storeAmcVendors = useMemo(() => {
+    if (!form.storeCode || !amcServiceType) return [];
+    const code = form.storeCode.trim().toUpperCase();
+    return [...new Set(amcRows
+      .filter(r => r.serviceType === amcServiceType && String(r.storeCode).trim().toUpperCase() === code)
+      .map(r => r.vendorName)
+      .filter(Boolean))];
+  }, [amcRows, form.storeCode, amcServiceType]);
+
+  // Auto-fill the store's AMC vendor once per store/product/warranty combination.
+  // The ref stops a later re-render (or a manual edit) from overwriting the agent's
+  // choice, while a store, product or warranty switch triggers a fresh fill.
+  useEffect(() => {
+    if (!isAmcStoreMode || !storeAmcVendors.length) {
+      amcAutoFillKeyRef.current = '';
+      return;
+    }
+    const key = `${form.storeCode}|${amcServiceType}|${wf.warranty}`;
+    if (amcAutoFillKeyRef.current === key) return;
+    amcAutoFillKeyRef.current = key;
+    setWf(w => ({ ...w, vendorQuery: '', vendorFreeText: '' }));
+    setForm(f => ({ ...f, vendorName: storeAmcVendors[0] }));
+  }, [isAmcStoreMode, storeAmcVendors, form.storeCode, amcServiceType, wf.warranty]);
+
+  // "Under Warranty" uses the portal's product→brand map; "Under AMC" uses the
+  // store's AMC vendor first, then the live SQL vendor list; other statuses keep
+  // the full SQL list. The search box always keeps the current selection visible
+  // so the <select> never goes blank mid-typing.
   const brandOptions    = getVendorsForProduct(form.productName);
   const filteredBrands  = brandOptions.filter(v =>
     !wf.vendorQuery.trim() || v.toLowerCase().includes(wf.vendorQuery.toLowerCase()) || v === form.vendorName
   );
-  const vendorOptions   = sqlVendorOptions;
-  const filteredVendors = vendorOptions.filter(v => v.toLowerCase().includes(wf.vendorQuery.toLowerCase()));
+  const vendorOptions   = (isAmcStoreMode && storeAmcVendors.length)
+    ? [...storeAmcVendors, ...sqlVendorOptions.filter(v => !storeAmcVendors.includes(v))]
+    : sqlVendorOptions;
+  const filteredVendors = vendorOptions.filter(v =>
+    !wf.vendorQuery.trim() || v.toLowerCase().includes(wf.vendorQuery.toLowerCase()) || v === form.vendorName);
 
   // One fill routine for all three search boxes — picks camelCase or snake_case
   // field names so every detail populates whatever the API returns.
@@ -442,41 +506,6 @@ export default function CaseLoggingForm() {
     setLookupLoading(false);
   };
 
-  // Auto-fetch the store's AMC vendor only when the warranty is "Under AMC"
-  // (Under Warranty uses the brand map instead). The guard is cleared whenever
-  // AMC is left so switching Warranty → AMC always performs a fresh lookup.
-  useEffect(() => {
-    const product   = form.productName;
-    const storeCode = form.storeCode;
-    if (!product || !storeCode || wf.warranty !== 'Under AMC' || !isAmcLookupProduct(product)) {
-      amcLookupKeyRef.current = '';
-      amcRequestIdRef.current += 1;
-      setAmcStatus('idle');
-      return;
-    }
-    const key = `${storeCode}|${norm(product)}`;
-    if (amcLookupKeyRef.current === key) return;
-    amcLookupKeyRef.current = key;
-    const requestId = ++amcRequestIdRef.current;
-    setAmcStatus('loading');
-    vmm.getPortalAmcVendor(storeCode, product)
-      .then(res => {
-        if (requestId !== amcRequestIdRef.current || !isPortalAmcActive(product)) return;
-        if (res.found && res.vendor) {
-          setForm(f => ({ ...f, vendorName: res.vendor }));
-          setAmcStatus(res.notApplicable ? 'not-applicable' : 'found');
-        } else {
-          setForm(f => ({ ...f, vendorName: '' }));
-          setAmcStatus('error');
-        }
-      })
-      .catch(() => {
-        if (requestId !== amcRequestIdRef.current || !isPortalAmcActive(product)) return;
-        setForm(f => ({ ...f, vendorName: '' }));
-        setAmcStatus('error');
-      });
-  }, [form.productName, form.storeCode, wf.warranty]);
-
   const fetchRecentComplaints = async (storeCode) => {
     setLoadingRecent(true);
     setRecentComplaints([]);
@@ -581,8 +610,6 @@ export default function CaseLoggingForm() {
       e.vendor = isBrandMode ? 'Select a brand (or choose None of the above)'
                : isAmcManualMode ? 'Select or enter the AMC vendor'
                : 'Enter the vendor name';
-    if (isAmcWebhookMode && amcStatus !== 'found' && amcStatus !== 'not-applicable' && !form.vendorName)
-      e.vendor = 'Enter the AMC vendor manually (store lookup unavailable)';
     if (!form.productLocation.trim())                        e.productLocation = 'Product location is required';
     if (!form.remarks.trim())                                e.remarks         = 'Complaint description is required';
     if (ATTACHMENT_MANDATORY.includes(form.complaintType) && form.attachments.length === 0 && !noImage)
@@ -737,9 +764,6 @@ export default function CaseLoggingForm() {
     setRecentComplaints([]);
     setWf(emptyWf);
     wfRef.current = emptyWf;
-    amcLookupKeyRef.current = '';
-    amcRequestIdRef.current += 1;
-    setAmcStatus('idle');
     setGensetChoice('');
     setLookupQuery('');
     setLookupMsg('');
@@ -1072,7 +1096,7 @@ export default function CaseLoggingForm() {
         <div className="card workflow-card">
           <div className="wf-header">
             <h3 className="card-title">Complaint Workflow</h3>
-            <span className="wf-count">10 steps</span>
+            <span className="wf-count">9 steps</span>
           </div>
           {loadingRef && <p className="hint">Loading product and nature lists from SQL…</p>}
           {!loadingRef && refError && (
@@ -1083,61 +1107,8 @@ export default function CaseLoggingForm() {
           )}
           <div className="wf-grid">
             {COMPLAINT_STEPS.map((step, i) => (
-              <WorkflowStep key={step.name} n={i + 1} title={step.name} sub={step.sub} wide={i === 0 || i === 9}>
+              <WorkflowStep key={step.name} n={i + 1} title={step.name} sub={step.sub} wide={i === 8}>
                 {i === 0 && (
-                  <>
-                    <div className="wf-inline">
-                      <input
-                        type="text"
-                        className="wf-input"
-                        placeholder="Employee code, store code or mobile"
-                        value={lookupQuery}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setLookupQuery(val);
-                          setLookupMsg('');
-                          clearTimeout(lookupTimer.current);
-                          if (val.trim().length >= 4) lookupTimer.current = setTimeout(() => runSmartLookup(val), 600);
-                        }}
-                        onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), runSmartLookup(lookupQuery))}
-                      />
-                      <button type="button" className="wf-btn" onClick={() => runSmartLookup(lookupQuery)} disabled={lookupLoading}>
-                        {lookupLoading ? 'Searching…' : 'Verify'}
-                      </button>
-                    </div>
-                    {lookupMsg && (
-                      <p className={`wf-msg ${lookupMsg.startsWith('✓') ? 'ok' : 'bad'}`}>{lookupMsg}</p>
-                    )}
-                    {form.employeeName ? (
-                      <div className="wf-verified">
-                        <span className="wf-verified-dot" />
-                        <strong>{form.employeeName}</strong>
-                        <span>{form.employeeCode}</span>
-                        <span>{form.storeName || form.storeCode}</span>
-                      </div>
-                    ) : (
-                      <p className="wf-help">Your name, employee code and store details will appear here after verification.</p>
-                    )}
-                    <div className="wf-subfield">
-                      <label>Contact number</label>
-                      <input
-                        type="tel"
-                        className={`wf-input ${errors.contactNumber ? 'err' : ''}`}
-                        value={form.contactNumber}
-                        onChange={e => setForm(f => ({ ...f, contactNumber: e.target.value.replace(/\D/g, '').slice(0, 10) }))}
-                        placeholder="10-digit mobile"
-                      />
-                      {errors.contactNumber && <p className="err-msg">{errors.contactNumber}</p>}
-                    </div>
-                  </>
-                )}
-                {i === 1 && (
-                  <select className="wf-input" value={wf.category} onChange={e => setWf(w => ({ ...w, category: e.target.value }))}>
-                    <option value="">— Select category —</option>
-                    {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                )}
-                {i === 2 && (
                   <>
                     <ProductSearch
                       products={products}
@@ -1170,13 +1141,10 @@ export default function CaseLoggingForm() {
                           vendorFreeText: '',
                           noneBrand: '',
                         };
-                        amcLookupKeyRef.current = '';
-                        amcRequestIdRef.current += 1;
                         formRef.current = { ...formRef.current, productName: p.name, vendorName };
                         wfRef.current = nextWf;
                         setWf(nextWf);
                         setGensetChoice('');
-                        setAmcStatus('idle');
                         setForm(f => {
                           const next = {
                             ...f,
@@ -1199,7 +1167,23 @@ export default function CaseLoggingForm() {
                     {errors.productName && <p className="err-msg">{errors.productName}</p>}
                   </>
                 )}
-                {i === 3 && (
+                {i === 1 && (
+                  <>
+                    <select
+                      className="wf-input"
+                      value={wf.category}
+                      disabled={!!form.productName}
+                      onChange={e => setWf(w => ({ ...w, category: e.target.value }))}
+                    >
+                      <option value="">— Select category —</option>
+                      {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    {form.productName && (
+                      <p className="wf-msg ok">✓ Auto-selected from “{form.productName}” — change the product to change the category.</p>
+                    )}
+                  </>
+                )}
+                {i === 2 && (
                   <>
                     <select className={`wf-input ${errors.natureOfComplaint ? 'err' : ''}`} value={form.natureOfComplaint} onChange={handleNatureChange}>
                       <option value="">— Select Nature of Complaint —</option>
@@ -1211,7 +1195,7 @@ export default function CaseLoggingForm() {
                     {errors.natureOfComplaint && <p className="err-msg">{errors.natureOfComplaint}</p>}
                   </>
                 )}
-                {i === 4 && (
+                {i === 3 && (
                   isAutoRouted ? (
                     <p className={`wf-msg ${isFixedVendor || isHoDirect ? 'ok' : ''}`}>
                       {isFixedVendor && `Portal rule — vendor ${getFixedVendor(form.productName)} auto-assigned; warranty step skipped.`}
@@ -1235,9 +1219,6 @@ export default function CaseLoggingForm() {
                         // Portal buildVendorStep() resets the vendor on every
                         // warranty switch — never keep a value from the previous
                         // status (brand → AMC → plain text, etc.).
-                        amcLookupKeyRef.current = '';
-                        amcRequestIdRef.current += 1;
-                        setAmcStatus('idle');
                         setGensetChoice('');
                         setForm(f => ({ ...f, vendorName: '' }));
                       }}>
@@ -1251,7 +1232,7 @@ export default function CaseLoggingForm() {
                     </>
                   )
                 )}
-                {i === 5 && (
+                {i === 4 && (
                   <div className="wf-stack">
                     {isFixedVendor && (
                       <p className="wf-msg ok">
@@ -1299,44 +1280,19 @@ export default function CaseLoggingForm() {
                         />
                       </>
                     )}
-                    {isAmcWebhookMode && (
-                      <>
-                        <p className={`wf-msg ${
-                          amcStatus === 'found' || amcStatus === 'not-applicable' ? 'ok' :
-                          amcStatus === 'error' ? 'bad' : ''
-                        }`}>
-                          {amcStatus === 'idle'            && 'Search a store to auto-fill the AMC vendor, or enter it below'}
-                          {amcStatus === 'loading'         && 'Fetching your store’s AMC vendor…'}
-                          {amcStatus === 'found'           && '✓ AMC vendor auto-filled from the store record'}
-                          {amcStatus === 'not-applicable'  && '✓ No active AMC vendor — routed to HO / Facility Manager'}
-                          {amcStatus === 'error'           && '⚠ Could not fetch AMC vendor — enter it manually below'}
-                        </p>
-                        {(amcStatus === 'found' || amcStatus === 'not-applicable') && (
-                          <div className="wf-amc-card">
-                            <span>Your AMC Vendor</span>
-                            <strong>{form.vendorName || '—'}</strong>
-                          </div>
-                        )}
-                        {(amcStatus === 'idle' || amcStatus === 'error') && (
-                          <input
-                            className={`wf-input ${errors.vendor ? 'err' : ''}`}
-                            type="text"
-                            placeholder="Enter AMC vendor manually"
-                            value={wf.vendorFreeText}
-                            onChange={e => {
-                              const v = e.target.value;
-                              setWf(w => ({ ...w, vendorFreeText: v }));
-                              setForm(f => ({ ...f, vendorName: v.trim() }));
-                            }}
-                          />
-                        )}
-                        {errors.vendor && <p className="err-msg">{errors.vendor}</p>}
-                      </>
-                    )}
                     {isAmcManualMode && (
                       <>
+                        {isAmcStoreMode && (
+                          <p className={`wf-msg ${storeAmcVendors.length ? 'ok' : ''}`}>
+                            {storeAmcVendors.length
+                              ? `✓ ${form.storeCode} · ${amcServiceType}: ${storeAmcVendors[0]} — auto-filled from the store record`
+                              : `No ${amcServiceType} vendor mapped for ${form.storeCode || 'this store'} — select below or enter manually.`}
+                          </p>
+                        )}
                         <p className="wf-help">
-                          Select the AMC vendor from the live SQL list, or type a custom vendor name.
+                          {isAmcStoreMode
+                            ? 'Auto-filled from this store’s AMC record — you can change it below or type a custom vendor name.'
+                            : 'Select the AMC vendor from the live SQL list, or type a custom vendor name.'}
                         </p>
                         <input
                           className="wf-input"
@@ -1416,17 +1372,38 @@ export default function CaseLoggingForm() {
                     )}
                     {isPlainVendorMode && (
                       <>
-                        <p className="wf-help">Portal rule — enter the vendor/company name manually.</p>
+                        <p className="wf-help">
+                          Select the vendor from the live SQL list, or type a custom name / NA.
+                        </p>
                         <input
-                          className={`wf-input ${errors.vendor ? 'err' : ''}`}
+                          className="wf-input"
                           type="text"
-                          placeholder={wf.warranty === 'Under AMC'
-                            ? 'e.g. BlueStar Services, Carrier AMC'
-                            : 'e.g. LG, Samsung, Voltas, Daikin, or NA'}
+                          placeholder="Search vendor…"
+                          value={wf.vendorQuery}
+                          onChange={e => setWf(w => ({ ...w, vendorQuery: e.target.value }))}
+                        />
+                        <select
+                          className={`wf-input ${errors.vendor ? 'err' : ''}`}
+                          value={form.vendorName}
+                          onChange={e => {
+                            setWf(w => ({ ...w, vendorFreeText: '' }));
+                            setForm(f => ({ ...f, vendorName: e.target.value }));
+                          }}
+                        >
+                          <option value="">— Select vendor —</option>
+                          {filteredVendors.map(v => <option key={v} value={v}>{v}</option>)}
+                          {form.vendorName && !filteredVendors.includes(form.vendorName) && (
+                            <option value={form.vendorName}>{form.vendorName}</option>
+                          )}
+                        </select>
+                        <input
+                          className="wf-input"
+                          type="text"
+                          placeholder="Or enter vendor manually (or NA)"
                           value={wf.vendorFreeText}
                           onChange={e => {
                             const v = e.target.value;
-                            setWf(w => ({ ...w, vendorFreeText: v }));
+                            setWf(w => ({ ...w, vendorFreeText: v, vendorQuery: '' }));
                             setForm(f => ({ ...f, vendorName: v.trim() }));
                           }}
                         />
@@ -1436,13 +1413,13 @@ export default function CaseLoggingForm() {
                     {!wf.warranty && <p className="wf-help">Select a warranty status first.</p>}
                   </div>
                 )}
-                {i === 6 && (
+                {i === 5 && (
                   <>
                     <input className={`wf-input ${errors.productLocation ? 'err' : ''}`} type="text" placeholder="e.g. Ground Floor near lift" value={form.productLocation} onChange={e => setForm(f => ({ ...f, productLocation: e.target.value }))} />
                     {errors.productLocation && <p className="err-msg">{errors.productLocation}</p>}
                   </>
                 )}
-                {i === 7 && (
+                {i === 6 && (
                   <div className="wf-stack">
                     {ATTACHMENT_MANDATORY.includes(form.complaintType) && !noImage && (
                       <p className="wf-help">Mandatory for {form.complaintType} complaints.</p>
@@ -1475,7 +1452,7 @@ export default function CaseLoggingForm() {
                     {errors.attachments && <p className="err-msg">{errors.attachments}</p>}
                   </div>
                 )}
-                {i === 8 && (
+                {i === 7 && (
                   <>
                     <div className="wf-remarks-head">
                       <span>Describe the problem</span>
@@ -1494,7 +1471,7 @@ export default function CaseLoggingForm() {
                     {errors.remarks && <p className="err-msg">{errors.remarks}</p>}
                   </>
                 )}
-                {i === 9 && (
+                {i === 8 && (
                   <div className="wf-review">
                     {[
                       ['Type', form.complaintType],
