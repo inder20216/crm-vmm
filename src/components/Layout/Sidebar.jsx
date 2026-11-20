@@ -16,6 +16,7 @@ const ADMIN_NAV = [
   { label: 'Follow-up',       icon: '🔁', to: '/followup'      },
   { label: 'Follow-up Flow',  icon: '🔀', to: '/followup-flow' },
   { label: 'Bulk Close',      icon: '✅', to: '/bulk-close'    },
+  { label: 'AMC Vendors',     icon: '🏭', to: '/amc-vendors'   },
   { label: 'Reports',         icon: '📊', to: '/reports'       },
   { label: 'User Management', icon: '👥', to: '/users'         },
   { label: 'Process Flow',    icon: '🔀', to: '/flow'          },

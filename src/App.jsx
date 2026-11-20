@@ -11,6 +11,7 @@ import EmailComplaints    from './pages/EmailComplaints';
 import NtrRequests        from './pages/NtrRequests';
 import ComplaintDetail    from './pages/ComplaintDetail';
 import Reports             from './pages/Reports';
+import AmcVendors          from './pages/AmcVendors';
 import FollowUp            from './pages/FollowUp';
 import BulkClose           from './pages/BulkClose';
 import UserManagement      from './pages/UserManagement';
@@ -159,6 +160,7 @@ export default function App() {
               <Route path="/followup"         element={<RoleRoute adminOnly><FollowUp /></RoleRoute>} />
               <Route path="/followup-flow"    element={<RoleRoute adminOnly><FollowUpFlow /></RoleRoute>} />
               <Route path="/bulk-close"       element={<RoleRoute adminOnly><BulkClose /></RoleRoute>} />
+              <Route path="/amc-vendors"      element={<RoleRoute adminOnly><AmcVendors /></RoleRoute>} />
               <Route path="/reports"          element={<RoleRoute adminOnly><Reports /></RoleRoute>} />
               <Route path="/users"            element={<RoleRoute adminOnly><UserManagement /></RoleRoute>} />
               <Route path="/settings"         element={<RoleRoute adminOnly><Settings /></RoleRoute>} />
