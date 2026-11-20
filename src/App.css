@@ -209,6 +209,19 @@ body {
 .wf-msg.ok  { color: #15803d; }
 .wf-msg.bad { color: #b91c1c; }
 .wf-help { font-size: 12px; color: #94a3b8; }
+.wf-remarks-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wf-remarks-head span { font-size: 12px; font-weight: 700; color: #475569; }
+.btn-ai-polish {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 14px; border: none; border-radius: 20px;
+  background: linear-gradient(135deg, #7c3aed, #4f46e5); color: #fff;
+  font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+  transition: opacity .15s, transform .1s;
+}
+.btn-ai-polish:hover:not(:disabled) { opacity: .88; transform: scale(1.03); }
+.btn-ai-polish:disabled { opacity: .5; cursor: default; }
+.btn-ai-polish.loading { animation: ai-pulse 1s infinite; }
+@keyframes ai-pulse { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
 .wf-amc-card {
   display: flex;
   flex-direction: column;

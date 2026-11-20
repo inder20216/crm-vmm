@@ -63,6 +63,7 @@ export const vmm = {
   },
   getEscalationMatrix: (params = {})        => get(SQL, 'vmm-sp-escalation-matrix', params),
   logComplaint:        (data)   => post(SQL, 'vmm-log-complaint',           data),
+  polishRemarks:       (text)   => post(BASE, 'vmm-ai-polish',              { text }),
   getComplaint:        (complaintno) => get(SQL, 'vmm-get-complaint',       { complaintno }),
   sendEscalationEmail:          (data) => graph.sendEscalationEmailDirect(data),
   buildEscalationEmailContent: (data) => graph.buildEscalationEmailContent(data),

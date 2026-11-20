@@ -14,7 +14,7 @@ const COMPLAINT_STEPS = [
   { name: 'Warranty',       sub: 'AMC/Warranty status' },
   { name: 'Vendor',         sub: 'Brand or vendor name' },
   { name: 'Location',       sub: 'Where in the store?' },
-  { name: 'Photos',         sub: 'Upload images' },
+  { name: 'Photos',         sub: 'Photos / files' },
   { name: 'Remarks',        sub: 'Describe the problem' },
   { name: 'Review',         sub: 'Check & submit' },
 ];
@@ -120,7 +120,7 @@ function pick(obj, ...keys) {
   return '';
 }
 
-function ProductSearch({ products, value, vendorName, onChange, error, disabled }) {
+function ProductSearch({ products, value, onChange, error, disabled }) {
   const [query,    setQuery]    = useState(value || '');
   const [open,     setOpen]     = useState(false);
   const [focused,  setFocused]  = useState(false);
@@ -255,6 +255,7 @@ export default function CaseLoggingForm() {
   const [resolvedCc,       setResolvedCc]       = useState([]);
   const [extraTo,          setExtraTo]          = useState('');
   const [extraCc,          setExtraCc]          = useState('');
+  const [polishing,        setPolishing]        = useState(false);
   const amcLookupKeyRef = useRef('');
   const amcRequestIdRef = useRef(0);
 
@@ -321,7 +322,12 @@ export default function CaseLoggingForm() {
 
   // "Under Warranty" uses the portal's product→brand map; AMC is filled from the
   // store webhook, and other statuses keep the full live SQL vendor list.
+  // The search box filters the brand dropdown too (while always keeping the
+  // current selection visible so the <select> never goes blank mid-typing).
   const brandOptions    = getVendorsForProduct(form.productName);
+  const filteredBrands  = brandOptions.filter(v =>
+    !wf.vendorQuery.trim() || v.toLowerCase().includes(wf.vendorQuery.toLowerCase()) || v === form.vendorName
+  );
   const vendorOptions   = sqlVendorOptions;
   const filteredVendors = vendorOptions.filter(v => v.toLowerCase().includes(wf.vendorQuery.toLowerCase()));
 
@@ -552,6 +558,17 @@ export default function CaseLoggingForm() {
     }));
   };
 
+  const polishRemarks = async () => {
+    if (!form.remarks.trim()) return;
+    setPolishing(true);
+    try {
+      const res = await vmm.polishRemarks(form.remarks);
+      if (res?.success && res.polishedText)
+        setForm(f => ({ ...f, remarks: res.polishedText }));
+    } catch { /* keep the original text if polishing is unavailable */ }
+    finally { setPolishing(false); }
+  };
+
   const validate = () => {
     const e = {};
     if (!form.storeCode || !form.storeName)                  e.storeCode      = 'Valid store code is required';
@@ -729,6 +746,7 @@ export default function CaseLoggingForm() {
     setAutoFillNote('');
     setExtraTo('');
     setExtraCc('');
+    setPolishing(false);
     setResolvedTo([]);
     setResolvedCc([]);
   };
@@ -1124,7 +1142,6 @@ export default function CaseLoggingForm() {
                     <ProductSearch
                       products={products}
                       value={form.productName}
-                      vendorName={form.vendorName}
                       error={!!errors.productName}
                       onChange={p => {
                         const fixedVendor = getFixedVendor(p.name);
@@ -1215,12 +1232,14 @@ export default function CaseLoggingForm() {
                         };
                         setWf(nextWf);
                         wfRef.current = nextWf;
-                        // Re-enter AMC cleanly on every switch, and clear any vendor
-                        // carried over from the previous warranty state.
-                        if (isAmcLookupProduct(form.productName) || PRODUCT_VENDORS[norm(form.productName)]) {
-                          amcLookupKeyRef.current = '';
-                          setForm(f => ({ ...f, vendorName: '' }));
-                        }
+                        // Portal buildVendorStep() resets the vendor on every
+                        // warranty switch — never keep a value from the previous
+                        // status (brand → AMC → plain text, etc.).
+                        amcLookupKeyRef.current = '';
+                        amcRequestIdRef.current += 1;
+                        setAmcStatus('idle');
+                        setGensetChoice('');
+                        setForm(f => ({ ...f, vendorName: '' }));
                       }}>
                         <option value="">— Select warranty / AMC status —</option>
                         {['Under Warranty', 'Under AMC', 'Not Applicable'].map(x => <option key={x} value={x}>{x}</option>)}
@@ -1256,7 +1275,7 @@ export default function CaseLoggingForm() {
                           <button
                             type="button"
                             className={`wf-btn ${gensetChoice === 'other' ? 'active' : ''}`}
-                            onClick={() => { setGensetChoice('other'); setForm(f => ({ ...f, vendorName: '' })); }}
+                            onClick={() => { setGensetChoice('other'); setForm(f => ({ ...f, vendorName: 'N/A — HO Direct' })); }}
                           >
                             Other brand (HO)
                           </button>
@@ -1373,9 +1392,9 @@ export default function CaseLoggingForm() {
                           }}
                         >
                           <option value="">— Select brand —</option>
-                          {brandOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                          {filteredBrands.map(v => <option key={v} value={v}>{v}</option>)}
                           <option value="__none__">None of the above (HO team will handle)</option>
-                          {form.vendorName && !brandOptions.includes(form.vendorName) && form.vendorName !== 'N/A — HO Direct' && (
+                          {form.vendorName && !filteredBrands.includes(form.vendorName) && form.vendorName !== 'N/A — HO Direct' && (
                             <option value={form.vendorName}>{form.vendorName}</option>
                           )}
                         </select>
@@ -1424,11 +1443,54 @@ export default function CaseLoggingForm() {
                   </>
                 )}
                 {i === 7 && (
-                  <input className="wf-input wf-file" type="file" multiple accept="image/*,.pdf" onChange={e => setForm(f => ({ ...f, attachments: Array.from(e.target.files || []) }))} />
+                  <div className="wf-stack">
+                    {ATTACHMENT_MANDATORY.includes(form.complaintType) && !noImage && (
+                      <p className="wf-help">Mandatory for {form.complaintType} complaints.</p>
+                    )}
+                    {!noImage && (
+                      <>
+                        <input
+                          className={`wf-input wf-file ${errors.attachments ? 'err' : ''}`}
+                          type="file"
+                          accept=".jpg,.jpeg,.png,.pdf"
+                          multiple
+                          onChange={e => setForm(f => ({ ...f, attachments: Array.from(e.target.files || []) }))}
+                        />
+                        <p className="wf-help">Accepted: JPG, PNG, PDF</p>
+                        {form.attachments.length > 0 && (
+                          <ul className="file-list">
+                            {form.attachments.map((f, i) => <li key={i}>📎 {f.name}</li>)}
+                          </ul>
+                        )}
+                      </>
+                    )}
+                    <label className="no-image-check">
+                      <input
+                        type="checkbox"
+                        checked={noImage}
+                        onChange={e => { setNoImage(e.target.checked); setForm(f => ({ ...f, attachments: e.target.checked ? [] : f.attachments })); }}
+                      />
+                      No image available / will be shared later
+                    </label>
+                    {errors.attachments && <p className="err-msg">{errors.attachments}</p>}
+                  </div>
                 )}
                 {i === 8 && (
                   <>
+                    <div className="wf-remarks-head">
+                      <span>Describe the problem</span>
+                      <button
+                        type="button"
+                        className={`btn-ai-polish ${polishing ? 'loading' : ''}`}
+                        onClick={polishRemarks}
+                        disabled={polishing || !form.remarks.trim()}
+                        title="Let AI rewrite this professionally"
+                      >
+                        {polishing ? '✦ Polishing…' : '✦ AI Polish'}
+                      </button>
+                    </div>
                     <textarea className={`wf-input ${errors.remarks ? 'err' : ''}`} rows={3} placeholder="Describe the problem…" value={form.remarks} onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))} />
+                    <p className="wf-help">You can write in English or Hinglish — AI Polish will rewrite it professionally.</p>
                     {errors.remarks && <p className="err-msg">{errors.remarks}</p>}
                   </>
                 )}
@@ -1443,7 +1505,7 @@ export default function CaseLoggingForm() {
                       ['Vendor', form.vendorName],
                       ...(wf.noneBrand ? [['Brand info', wf.noneBrand]] : []),
                       ['Location', form.productLocation],
-                      ['Photos', form.attachments.length ? form.attachments.map(f => f.name).join(', ') : ''],
+                      ['Attachments', form.attachments.length ? form.attachments.map(f => f.name).join(', ') : ''],
                       ['Remarks', form.remarks],
                     ].map(([label, value]) => (
                       <div key={label} className="wf-review-item">
@@ -1482,42 +1544,6 @@ export default function CaseLoggingForm() {
             </div>
           </div>
         )}
-
-        {/* Attachments */}
-        <div className="card">
-          <h3 className="card-title">
-            Attachments
-            {ATTACHMENT_MANDATORY.includes(form.complaintType) && !noImage && (
-              <span className="mandatory-tag">Mandatory for {form.complaintType}</span>
-            )}
-          </h3>
-          {!noImage && (
-            <>
-              <input
-                type="file"
-                accept=".jpg,.jpeg,.png,.pdf"
-                multiple
-                onChange={e => setForm(f => ({ ...f, attachments: Array.from(e.target.files) }))}
-                className={errors.attachments ? 'err' : ''}
-              />
-              <p className="hint">Accepted: JPG, PNG, PDF</p>
-              {form.attachments.length > 0 && (
-                <ul className="file-list">
-                  {form.attachments.map((f, i) => <li key={i}>📎 {f.name}</li>)}
-                </ul>
-              )}
-            </>
-          )}
-          <label className="no-image-check">
-            <input
-              type="checkbox"
-              checked={noImage}
-              onChange={e => { setNoImage(e.target.checked); setForm(f => ({ ...f, attachments: [] })); }}
-            />
-            No image available / will be shared later
-          </label>
-          {errors.attachments && <p className="err-msg">{errors.attachments}</p>}
-        </div>
 
         {/* Number of ACs — only shown when product is AC/HVAC */}
         {isAcProduct && (
