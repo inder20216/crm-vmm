@@ -1,9 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
 import { vmm } from '../api/vmm';
 import { useAuth } from '../context/AuthContext';
-import { HO_POC, AC_VENDOR_MAP } from '../auth/escalationMatrix';
+import { HO_POC } from '../auth/escalationMatrix';
 import { searchSentEmails, replyOnThread } from '../auth/graphService';
 import { mergeNatures } from '../data/natures';
+import { useAmcVendors } from '../hooks/useAmcVendors';
+import EmailComplaintWizard from '../components/CaseLogging/EmailComplaintWizard';
+import { buildReplyPreview, buildReplyHtml, buildMissingInfoReply, hasMissingInfoReply, MISSING_INFO_MARKER } from '../workflow/emailPipeline';
+import {
+  ATTACHMENT_MANDATORY, WARRANTY_LABELS, getAutoWarranty, getFixedVendor,
+  isHoDirectProduct, isGensetProduct, isTemperatureNature, showsTemperatureOption,
+  toContractType, toWarrantyLabel, norm, resolveStoreAmcVendor,
+} from '../components/CaseLogging/caseWorkflow';
 import './EmailComplaints.css';
 
 function fmtTime(dt) {
@@ -12,13 +20,170 @@ function fmtTime(dt) {
   return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
-const HO_EMAIL = 'ho.vmm@openmind.in';
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return '';
+}
 
-// Products where an external vendor handles AMC & Warranty (auto-lookup for AMC, user picks for Warranty)
-const AMC_WARRANTY_PRODUCTS = new Set(['ac','server room ac','air curtain','electrical panel','fly catcher','genset','led light','lift','servo','track light']);
-// Products where vendor handles AMC only (user picks vendor; Warranty = FM/HO)
-const AMC_ONLY_PRODUCTS     = new Set(['civil work','weighing scale','pest control','shampoo dispenser machine','safe lock','sensormatic']);
-// Everything else → FM / HO Team (no external vendor)
+// AI parsing is best-effort. Accept common response aliases and fall back to the
+// email body so the shared employee fields are still filled when the webhook
+// misses them.
+function extractEmployeeFields(res = {}, bodyText = '') {
+  const provided = res.alreadyProvided || {};
+  const employee = res.employee || {};
+
+  const code = firstNonEmpty(
+    res.employeeCode, res.empCode, res.employeeId, res.employee_id,
+    employee.code, provided.employeeCode, provided.empCode
+  ).toUpperCase().replace(/\s+/g, '');
+
+  const name = firstNonEmpty(
+    res.employeeName, res.empName, employee.name, provided.employeeName
+  );
+
+  const rawContact = firstNonEmpty(
+    res.contactNumber, res.contactNo, res.contact_no, res.contact,
+    res.mobile, res.phone, res.phoneNumber, employee.mobile,
+    provided.contactNumber, provided.contact, provided.mobile
+  );
+
+  const employeeEmail = firstNonEmpty(
+    res.employeeEmail, res.empEmail, employee.email, provided.employeeEmail
+  );
+
+  const plain = (bodyText || '').replace(/<[^>]*>/g, ' ');
+  const codeHit = plain.match(/\b(?:employee|emp\.?|staff)\s*(?:code|id|no\.?|number)?\s*[-:]?\s*([A-Z]{0,3}\d{3,7})\b/i);
+  const bodyCode = codeHit ? codeHit[1].toUpperCase() : '';
+
+  const contactHit = plain.match(/(?:contact(?:\s*(?:no\.?|number))?|mob(?:ile)?|phone(?:\s*no\.?)?)(?:\s+is)?\s*[-:]?\s*([+]?\d[\d\s()-]{7,16}\d)/i);
+  let bodyContact = '';
+  if (contactHit) {
+    const digits = contactHit[1].replace(/\D/g, '');
+    if (digits.length >= 10) bodyContact = digits.slice(-10);
+  }
+
+  // AI often omits the employee entirely. A store email is normally signed with
+  // just a name, so keep those names/emails as hints for the store fallback.
+  const nameHints = [];
+  const emailHints = [];
+  const cleanName = (value) => String(value || '')
+    .replace(/^[\s*#>•\-–—]+/, '')
+    .replace(/[\s,;:|\-–—]+$/, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, 60);
+  const addName = (value) => {
+    const hint = cleanName(value);
+    if (hint.length < 2 || /^(team|support|helpdesk|regards|thanks|thank you)$/i.test(hint)) return;
+    if (!nameHints.some(n => n.toLowerCase() === hint.toLowerCase())) nameHints.push(hint);
+  };
+
+  const namedField = /(?:employee|emp\.?|staff)\s*name\s*[-:]\s*([^\n\r|<]{2,60})/gi;
+  let m;
+  while ((m = namedField.exec(plain))) addName(m[1]);
+  const signature = /(?:regards|thanks|thank\s+you|sincerely|yours\s+faithfully)[,\s]*[\r\n]+([^\r\n]{2,60})/gi;
+  while ((m = signature.exec(plain))) addName(m[1]);
+  addName(name);
+
+  const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+  while ((m = emailRe.exec(plain))) {
+    const address = m[0].toLowerCase();
+    if (/helpdesk|no-?reply|openmind\.in/.test(address)) continue;
+    if (!emailHints.includes(address)) emailHints.push(address);
+  }
+  if (employeeEmail && !emailHints.includes(employeeEmail.toLowerCase())) emailHints.unshift(employeeEmail.toLowerCase());
+
+  const contactDigits = rawContact.replace(/\D/g, '');
+  return {
+    employeeCode: code || bodyCode,
+    employeeName: name || nameHints[0] || '',
+    employeeEmail,
+    contactNumber: contactDigits.length >= 10 ? contactDigits.slice(-10) : (rawContact || bodyContact),
+    nameHints,
+    emailHints,
+  };
+}
+
+function normEmployeeText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function employeeNameScore(candidateName, hints = []) {
+  const candidate = normEmployeeText(candidateName);
+  if (!candidate) return 0;
+  let best = 0;
+  for (const raw of hints) {
+    const hint = normEmployeeText(raw);
+    if (!hint) continue;
+    if (hint === candidate) best = Math.max(best, 80);
+    else if (hint.includes(candidate) || candidate.includes(hint)) best = Math.max(best, 55);
+    else {
+      const overlap = candidate.split(' ').filter(t => t.length > 2 && hint.split(' ').includes(t)).length;
+      if (overlap) best = Math.max(best, Math.min(80, 35 * overlap));
+    }
+  }
+  return best;
+}
+
+function employeeDesignationScore(designation = '') {
+  const value = String(designation || '').toLowerCase();
+  if (/store\s*manager|^\s*sm\b/.test(value)) return 24;
+  if (/\basm\b|assistant\s*manager/.test(value)) return 18;
+  if (/manager/.test(value)) return 14;
+  if (/store\s*person|sales|executive/.test(value)) return 8;
+  return 0;
+}
+
+// Choose the best employee for a store when the AI provides no code or mobile.
+// Exact email/mobile/signature-name matches win; otherwise prefer an active
+// store-manager row so a generic store mailbox still produces useful values.
+function pickEmployeeForStore(employees, { storeCode = '', emails = [], names = [], mobiles = [] } = {}) {
+  const store = String(storeCode || '').trim().toUpperCase();
+  const emailSet = emails.filter(Boolean).map(e => String(e).trim().toLowerCase());
+  const nameList = names.filter(Boolean);
+  const mobileSet = mobiles
+    .map(m => String(m || '').replace(/\D/g, ''))
+    .filter(m => m.length >= 10)
+    .map(m => m.slice(-10));
+  const list = Array.isArray(employees) ? employees : [];
+
+  let candidates = store
+    ? list.filter(e => String(e?.storeCode || '').trim().toUpperCase() === store)
+    : [];
+  if (!candidates.length && emailSet.length) {
+    const prefixes = emailSet
+      .map(e => e.split('@')[0].split('.')[0].toUpperCase())
+      .filter(p => /^[A-Z]{2}\d{2,3}$/.test(p));
+    candidates = list.filter(e => prefixes.includes(String(e?.storeCode || '').trim().toUpperCase()));
+  }
+  if (!candidates.length) return null;
+
+  let best = null;
+  let bestScore = -1;
+  for (const emp of candidates) {
+    let score = 0;
+    const empEmail = String(emp?.email || '').trim().toLowerCase();
+    if (empEmail && emailSet.includes(empEmail)) score += 90;
+    const empMobile = String(emp?.mobile || '').replace(/\D/g, '');
+    if (empMobile && mobileSet.includes(empMobile.slice(-10))) score += 80;
+    score += employeeNameScore(emp?.name, nameList);
+    const active = String(emp?.status || '').toLowerCase() === 'active';
+    score += active ? (score ? 8 : 20) : (score ? 2 : 5);
+    score += employeeDesignationScore(emp?.designation);
+    if (score > bestScore) { bestScore = score; best = emp; }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+const HO_EMAIL = 'ho.vmm@openmind.in';
 
 const DELAY_REASONS = {
   'Delay From Vendor Side': [
@@ -61,63 +226,77 @@ function matchDelaySub(stored, mainCat) {
   return ci ? ci.label : '';
 }
 
-const REQUIRED_FIELDS = ['storeCode', 'productName', 'natureOfProblem', 'description'];
+const REQUIRED_FIELDS = ['storeCode'];
+// Set false to keep the missing-details draft manual during testing/troubleshooting.
+const AUTO_MISSING_INFO_REPLY = true;
 const FIELD_LABELS = {
   storeCode: 'Store Code', employeeCode: 'Employee Code', employeeName: 'Employee Name',
-  contactNumber: 'Contact Number',
-  productLocation: 'Product Location', description: 'Description',
+  employeeEmail: 'Employee Email', contactNumber: 'Contact Number',
 };
 
-// onFreeText fires on blur/Enter when the user typed a custom value (not picked from list)
-function SearchableSelect({ options, value, onChange, placeholder, getLabel, getSub, onFreeText }) {
-  const [query,   setQuery]   = useState(value || '');
-  const [open,    setOpen]    = useState(false);
-  const pickedRef = useRef(false);
-  const ref = useRef(null);
-
-  useEffect(() => { setQuery(value || ''); }, [value]);
-
-  useEffect(() => {
-    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, []);
-
-  const filtered = query.trim()
-    ? options.filter(o => getLabel(o).toLowerCase().includes(query.toLowerCase()))
-    : options;
-
-  const commitFreeText = () => {
-    if (onFreeText && !pickedRef.current) onFreeText(query.trim());
-    pickedRef.current = false;
-    setOpen(false);
+// One complaint = one independent copy of the New Case 9-step wizard.
+function makeComplaintItem(id, overrides = {}) {
+  return {
+    id,
+    productName: '', aiProductName: '', productUnmatched: false,
+    productShortName: '', category: '', productType: '',
+    natureOfProblem: '', complaintType: '', tatDays: '',
+    warranty: '', contractType: '', vendorName: '', vendorEmail: '',
+    productLocation: '', description: '',
+    vendorQuery: '', vendorFreeText: '', noneBrand: '', gensetChoice: '',
+    amcAutoFillKey: '', amcLookup: 'idle',
+    selectedAttachIndices: null, localAttachments: [], noImage: false,
+    extraEscTo: '', extraEscCc: '', removedAutoCC: [],
+    ...overrides,
   };
+}
 
-  return (
-    <div ref={ref} style={{ position: 'relative' }}>
-      <input
-        type="text"
-        className="ec-field-input"
-        placeholder={placeholder}
-        value={query}
-        onChange={e => { setQuery(e.target.value); setOpen(true); pickedRef.current = false; }}
-        onFocus={() => setOpen(true)}
-        onBlur={commitFreeText}
-        onKeyDown={e => { if (e.key === 'Escape') setOpen(false); if (e.key === 'Enter') { e.preventDefault(); commitFreeText(); } }}
-      />
-      {open && filtered.length > 0 && (
-        <div className="ec-picker-dropdown">
-          {filtered.slice(0, 25).map((item, i) => (
-            <div key={i} className="ec-picker-option"
-              onMouseDown={() => { pickedRef.current = true; onChange(item); setQuery(getLabel(item)); setOpen(false); }}>
-              <span className="ec-picker-main">{getLabel(item)}</span>
-              {getSub && getSub(item) && <span className="ec-picker-sub">{getSub(item)}</span>}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+function hydrateComplaintItem(id, p, products, natures, overrides = {}) {
+  const productName = p?.productName || '';
+  const matchedProduct = findBestByText(products, productName, ['name']);
+  const matchedNature  = findBestByText(natures, p?.natureOfProblem || '', ['nature']);
+  // Only a real product-master row can be shown as a dropdown selection. An
+  // unmatched AI value is kept separately for the warning and left unselected.
+  const name = matchedProduct?.name || '';
+  // Respect an explicit flag set by the reconciliation layer. Otherwise only
+  // flag a missing product when the master list was available to compare
+  // against — an empty list means "cannot verify", not "not found".
+  const productUnmatched = p?.productUnmatched === undefined
+    ? (!!(products || []).length && !!productName && !matchedProduct)
+    : !!p.productUnmatched;
+  const auto = getAutoWarranty(name);
+  const rawWarranty = p?.warranty || toWarrantyLabel(p?.contractType);
+  const warranty = auto || (WARRANTY_LABELS.includes(rawWarranty) ? rawWarranty : '');
+  let vendorName = p?.vendorName || '';
+  if (!vendorName && auto && getFixedVendor(name)) vendorName = getFixedVendor(name);
+  if (!vendorName && isHoDirectProduct(name)) vendorName = 'N/A — HO Direct';
+
+  // Portal rule: temperature natures are AC / Server Room AC only. If the AI
+  // returns one for another product, drop it so the agent must pick a valid nature.
+  const rawNature = matchedNature?.nature || p?.natureOfProblem || '';
+  const nature = (!showsTemperatureOption(name) && isTemperatureNature(rawNature)) ? '' : rawNature;
+
+  return makeComplaintItem(id, {
+    productName: name,
+    aiProductName: p?.aiProductName || (productUnmatched ? productName : ''),
+    productUnmatched,
+    productShortName: matchedProduct?.shortName || p?.productShortName || '',
+    category: matchedProduct?.category || p?.category || '',
+    productType: matchedProduct?.category || p?.productType || '',
+    natureOfProblem: nature,
+    complaintType: nature ? (matchedNature?.type || p?.complaintType || '') : '',
+    tatDays: nature ? (matchedNature?.tatDays ?? p?.tatDays ?? '') : '',
+    warranty,
+    contractType: warranty ? toContractType(warranty) : (p?.contractType || ''),
+    vendorName,
+    vendorEmail: p?.vendorEmail || '',
+    productLocation: p?.productLocation || '',
+    description: p?.description || '',
+    extraEscTo: p?.extraEscTo || '',
+    extraEscCc: p?.extraEscCc || '',
+    removedAutoCC: p?.removedAutoCC || [],
+    ...overrides,
+  });
 }
 
 function camelToLabel(key) {
@@ -158,6 +337,264 @@ function stripHtml(html) {
     .trim();
 }
 
+// Build one readable transcript from every message in the conversation. The
+// newest store/customer replies often contain the missing code, mobile, product
+// or remark, so the AI must see the whole thread rather than only the selected
+// message. `uniqueBodyHtml` is preferred when n8n provides it to avoid repeating
+// quoted history inside every message.
+function buildFullEmailThreadText(selected = {}, messages = []) {
+  const address = (name, addr) => {
+    const n = String(name || '').trim();
+    const a = String(addr || '').trim();
+    if (n && a) return `${n} <${a}>`;
+    return n || a || '';
+  };
+
+  const sorted = [...(messages || [])].sort((a, b) => {
+    const da = new Date(a?.receivedDateTime || a?.receivedAt || a?.sentDateTime || 0).getTime() || 0;
+    const db = new Date(b?.receivedDateTime || b?.receivedAt || b?.sentDateTime || 0).getTime() || 0;
+    return da - db;
+  });
+
+  const blocks = sorted.map((m, i) => {
+    const body = stripHtml(m?.uniqueBodyHtml || m?.body || m?.bodyHtml || m?.bodyPreview || '');
+    return [
+      `[EMAIL ${i + 1}]`,
+      `From: ${m?.fromDisplay || address(m?.fromName, m?.from)}`,
+      `To: ${m?.toFull || m?.to || ''}`,
+      `Cc: ${m?.ccFull || m?.cc || ''}`,
+      `Date: ${m?.receivedDateTime || m?.receivedAt || ''}`,
+      `Subject: ${m?.subject || selected?.subject || ''}`,
+      '',
+      body || '(No content)',
+    ].join('\n');
+  });
+
+  const selectedBody = stripHtml(selected?.body || selected?.bodyHtml || selected?.bodyPreview || '');
+  const signature = selectedBody.slice(0, 160);
+  if (selectedBody && !blocks.some(b => signature && b.includes(signature))) {
+    blocks.push([
+      '[SELECTED EMAIL]',
+      `From: ${selected?.fromDisplay || address(selected?.fromName, selected?.fromAddr)}`,
+      `To: ${selected?.toDisplay || selected?.to || ''}`,
+      `Cc: ${selected?.ccDisplay || selected?.cc || ''}`,
+      `Date: ${selected?.receivedAt || ''}`,
+      `Subject: ${selected?.subject || ''}`,
+      '',
+      selectedBody,
+    ].join('\n'));
+  }
+
+  return blocks.join('\n\n--- END OF EMAIL ---\n\n');
+}
+
+const PRODUCT_ALIASES = {
+  'ac': 'AC', 'a c': 'AC', 'air conditioner': 'AC', 'air conditioning': 'AC',
+  'server ac': 'Server Room Ac', 'server a c': 'Server Room Ac', 'server room a c': 'Server Room Ac',
+  'cctv camera': 'Cctv', 'dvr': 'Digital Video Recorder', 'video recorder': 'Digital Video Recorder',
+  'led': 'Led Light', 'led bulb': 'Led Light', 'tube light': 'Lights',
+  'water pump': 'Water Motor', 'shampoo dispenser': 'Shampoo Dispenser Machine',
+  'rolling shutter': 'Shutter', 'glass door': 'Glass Door', 'main door': 'Door',
+  'cash counter': 'Cash Drawer', 'biometric': 'Biometric system',
+};
+
+const NATURE_KEYWORDS = [
+  { re: /\b(temperature|cooling|not cold|hot|warm|heat|thermostat)\b/i, nature: 'Not Maintaining Proper Temperature' },
+  { re: /\b(spare|part|parts|component)\b/i,                            nature: 'Part Not Working' },
+  { re: /\b(service|servicing|maintenance|maintainance|amc)\b/i,         nature: 'Servicing or Maintainance Required' },
+  { re: /\b(repair|repairing|rectify)\b/i,                               nature: 'Repair Required' },
+  { re: /\b(requirement|installation|replace|replacement|supply|need|request)\b/i, nature: 'Requirement / Installation / Replacement' },
+  { re: /\b(not working|defective|faulty|broken|malfunction|issue|problem)\b/i, nature: 'Not Working' },
+];
+
+function compactText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function uniqueMasterRows(rows) {
+  const seen = new Set();
+  const list = [];
+  for (const row of rows || []) {
+    const key = compactText(row?.name || row?.nature || row);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    list.push(row);
+  }
+  return list;
+}
+
+function matchProductMaster(products, rawValue) {
+  const target = compactText(rawValue);
+  if (!target) return null;
+  const goals = [...new Set([target, compactText(PRODUCT_ALIASES[target])].filter(Boolean))];
+  let best = null;
+  let bestScore = 0;
+  for (const product of uniqueMasterRows(products)) {
+    const name = compactText(product.name);
+    for (const goal of goals) {
+      let score = 0;
+      if (name === goal) score = 100;
+      else if (name.includes(goal) || goal.includes(name)) score = 80;
+      else {
+        const words = name.split(' ');
+        const overlap = words.filter(w => goal.split(' ').includes(w)).length;
+        if (overlap) score = Math.round((overlap / Math.max(words.length, goal.split(' ').length)) * 70);
+      }
+      if (score > bestScore) { bestScore = score; best = product; }
+    }
+  }
+  return bestScore >= 60 ? best : null;
+}
+
+function findProductInThread(products, fullText) {
+  const text = compactText(fullText);
+  if (!text) return null;
+  const list = uniqueMasterRows(products);
+  const terms = [
+    ...list.map(product => ({ product, term: compactText(product.name) })),
+    ...Object.entries(PRODUCT_ALIASES).map(([alias, name]) => ({
+      product: list.find(p => compactText(p.name) === compactText(name)),
+      term: compactText(alias),
+    })),
+  ].filter(t => t.product && t.term).sort((a, b) => b.term.length - a.term.length);
+
+  for (const { product, term } of terms) {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+');
+    if (new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`).test(text)) return product;
+  }
+  return null;
+}
+
+function matchNatureMaster(natures, rawValue) {
+  const target = compactText(rawValue);
+  if (!target) return null;
+  let best = null;
+  let bestScore = 0;
+  for (const nature of uniqueMasterRows(natures)) {
+    const name = compactText(nature.nature);
+    let score = 0;
+    if (name === target) score = 100;
+    else if (name.includes(target) || target.includes(name)) score = 75;
+    else {
+      const words = name.split(' ').filter(w => w.length > 3);
+      const overlap = words.filter(w => target.split(' ').includes(w)).length;
+      if (overlap) score = Math.round((overlap / Math.max(words.length, 2)) * 60);
+    }
+    if (score > bestScore) { bestScore = score; best = nature; }
+  }
+  return bestScore >= 55 ? best : null;
+}
+
+function findNatureInThread(natures, fullText) {
+  const list = uniqueMasterRows(natures);
+  for (const { re, nature } of NATURE_KEYWORDS) {
+    if (!re.test(fullText || '')) continue;
+    const key = compactText(nature);
+  const row = list.find(n => compactText(n.nature) === key);
+    if (row) return row;
+  }
+  return null;
+}
+
+function detectStoreCode(fullText, messages = []) {
+  const text = String(fullText || '');
+  const labelled = text.match(/\bstore\s*(?:code)?\s*[-:]\s*([A-Z]{2}\d{2,3})\b/i);
+  if (labelled) return labelled[1].toUpperCase();
+  for (const msg of messages) {
+    const addresses = [msg?.from, msg?.to, msg?.toFull, msg?.cc, msg?.ccFull].filter(Boolean).join(' ');
+    const hit = addresses.match(/\b([A-Z]{2}\d{2,3})\s*\.\s*sm\s*@/i);
+    if (hit) return hit[1].toUpperCase();
+  }
+  const loose = text.match(/\b([A-Z]{2}\d{2,3})\b/);
+  return loose ? loose[1].toUpperCase() : '';
+}
+
+function extractProductLocation(fullText) {
+  const labelled = String(fullText || '').match(/(?:product\s*)?(?:location|site|area)\s*[-:]\s*([^\n\r]{2,100})/i);
+  if (labelled) return labelled[1].trim();
+  const place = String(fullText || '').match(/\b(entry gate|main gate|billing counter|washroom|trial room|server room|stock room|back office|parking|basement|first floor|second floor)\b/i);
+  return place ? place[1] : '';
+}
+
+function buildDeterministicDescription(fullText, messages = [], selected = {}) {
+  const inbound = [...(messages || [])]
+    .filter(m => {
+      const from = String(m?.from || '').toLowerCase();
+      return from && !from.includes('helpdesk') && !from.includes('openmind');
+    })
+    .sort((a, b) => new Date(b?.receivedDateTime || b?.receivedAt || 0) - new Date(a?.receivedDateTime || a?.receivedAt || 0))[0];
+  const body = stripHtml(
+    inbound?.uniqueBodyHtml || inbound?.body || inbound?.bodyHtml || inbound?.bodyPreview
+    || selected?.body || selected?.bodyHtml || selected?.bodyPreview || fullText || ''
+  );
+  return body
+    .replace(/\s+disclaimer:[\s\S]*$/i, '')
+    .split(/\n\s*(?:_{3,}|from:\s|sent:\s|to:\s)/i)[0]
+    .trim()
+    .slice(0, 1200);
+}
+
+// AI extraction is treated as a hint. Master data and the full thread are the
+// source of truth, so a wrong/missing AI value is corrected here.
+function reconcileParsedResult({ res = {}, fullText = '', fullMessages = [], selected = {}, products = [], natures = [], locked = {}, bodyStoreCode = '' }) {
+  const out = { ...res };
+  const masterProducts = uniqueMasterRows(products);
+  const masterNatures = uniqueMasterRows(natures);
+
+  // Store — inbox metadata and explicit thread labels beat the AI value.
+  const validStore = (code) => /^[A-Z]{2}\d{2,3}$/i.test(String(code || '').trim());
+  out.storeCode = locked.storeCode
+    || (validStore(selected?.storeCode) ? selected.storeCode.toUpperCase() : '')
+    || (validStore(out.storeCode) ? String(out.storeCode).toUpperCase() : '')
+    || (validStore(bodyStoreCode) ? bodyStoreCode.toUpperCase() : '')
+    || detectStoreCode(fullText, fullMessages)
+    || '';
+
+  // Product — keep an agent-locked value, then AI, then search the whole thread.
+  const aiProductRaw = String(out.productName || '').trim();
+  const lockedProduct = locked.productName
+    ? (matchProductMaster(masterProducts, locked.productName) || { name: locked.productName })
+    : null;
+  const aiProduct = matchProductMaster(masterProducts, aiProductRaw);
+  const threadProduct = (!lockedProduct && !aiProduct) ? findProductInThread(masterProducts, fullText) : null;
+  const chosenProduct = lockedProduct || aiProduct || threadProduct;
+  if (chosenProduct) {
+    out.productName = chosenProduct.name;
+    out.productUnmatched = false;
+    out.aiProductName = '';
+  } else {
+    out.productName = '';
+    out.productUnmatched = !!(masterProducts.length && aiProductRaw);
+    out.aiProductName = out.productUnmatched ? aiProductRaw : (out.aiProductName || '');
+  }
+
+  // Nature — same order: locked, AI, then keyword scan of the old emails.
+  const lockedNature = locked.natureOfProblem
+    ? (matchNatureMaster(masterNatures, locked.natureOfProblem) || { nature: locked.natureOfProblem, type: locked.complaintType || '' })
+    : null;
+  const aiNature = matchNatureMaster(masterNatures, out.natureOfProblem);
+  const threadNature = (!lockedNature && !aiNature) ? findNatureInThread(masterNatures, fullText) : null;
+  const chosenNature = lockedNature || aiNature || threadNature;
+  if (chosenNature) {
+    out.natureOfProblem = chosenNature.nature;
+    if (chosenNature.type) out.complaintType = chosenNature.type;
+  }
+
+  // Description/location — only replace weak AI values with thread text.
+  const threadDescription = buildDeterministicDescription(fullText, fullMessages, selected);
+  const aiDescription = String(out.description || '').trim();
+  if (!aiDescription || aiDescription.length < 25 || /^(please find|as discussed|refer|attached|ntr|requirement)$/i.test(aiDescription)) {
+    if (threadDescription) out.description = threadDescription;
+  }
+  out.productLocation = out.productLocation || locked.productLocation || extractProductLocation(fullText) || '';
+
+  return out;
+}
+
 function findBestByText(items, text, fields) {
   const target = normalizeText(text);
   if (!target) return null;
@@ -180,6 +617,7 @@ function findBestByText(items, text, fields) {
 
 export default function EmailComplaints() {
   const { currentUser } = useAuth();
+  const { rows: amcRows } = useAmcVendors();
   const [activeTab,    setActiveTab]    = useState('inbox'); // 'inbox' | 'sent'
   const [inboxEmails,  setInboxEmails]  = useState(() => {
     try { const c = sessionStorage.getItem('vmm_inbox_list'); return c ? JSON.parse(c) : []; } catch { return []; }
@@ -232,20 +670,18 @@ export default function EmailComplaints() {
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
   const [products,     setProducts]     = useState([]);  // raw rows: each row = { name, vendor, category, hoName, hoEmail, vendorEmail }
   const [natures,      setNatures]      = useState([]);
-  const [parsedEdits,  setParsedEdits]  = useState({ storeCode: '', employeeCode: '', contactNumber: '', productLocation: '', description: '' });
+  const [parsedEdits,  setParsedEdits]  = useState({ storeCode: '', employeeCode: '', employeeName: '', employeeEmail: '', contactNumber: '', productLocation: '', description: '' });
   const [replyTo,         setReplyTo]         = useState([]);
   const [replyCc,         setReplyCc]         = useState([]);
   const [toInput,         setToInput]         = useState('');
   const [ccInput,         setCcInput]         = useState('');
   const [empLookupStatus, setEmpLookupStatus] = useState('idle'); // idle|loading|found|not-found
   const [resolvedEmpName, setResolvedEmpName] = useState('');
+  const [empLookupSource, setEmpLookupSource] = useState(''); // code|mobile|store
   const [showReplyEditor, setShowReplyEditor] = useState(false);
   const itemIdRef = useRef(1);
-  const [complaintItems, setComplaintItems] = useState([{
-    id: 1, productName: '', vendorName: '', contractType: '', vendorEmail: '',
-    natureOfProblem: '', complaintType: '', description: '', extraEscTo: '', extraEscCc: '', removedAutoCC: [],
-    amcLookup: 'idle', selectedAttachIndices: null,
-  }]);
+  const [activeComplaintId, setActiveComplaintId] = useState(1);
+  const [complaintItems, setComplaintItems] = useState([makeComplaintItem(1)]);
   const [emTab,           setEmTab]           = useState('form');  // 'form' | 'matrix'
   const [escalationMatrix, setEscalationMatrix] = useState([]);
   const [emLoading,       setEmLoading]       = useState(false);
@@ -253,6 +689,7 @@ export default function EmailComplaints() {
   const [emRegion,        setEmRegion]        = useState('');
   const [emLevel,         setEmLevel]         = useState('');
   const [confirmModal,    setConfirmModal]    = useState(false);
+  const [showValidation,  setShowValidation]  = useState(false);
   const [activeClaims,    setActiveClaims]    = useState({});
   const [recentCases,     setRecentCases]     = useState([]);
   const [loadingRecent,   setLoadingRecent]   = useState(false);
@@ -290,9 +727,23 @@ export default function EmailComplaints() {
     fetchEmails('inbox');
   }, []); // eslint-disable-line
 
+
   const showToast = (msg, type = 'ok') => {
     setToast({ msg, type });
     setTimeout(() => setToast(''), 3500);
+  };
+
+  // New natures are saved to the master sheet immediately so they appear in
+  // Settings, New Case and reports. The wizard also keeps the value locally.
+  const addCustomNature = async (nature) => {
+    const name = String(nature || '').trim();
+    if (!name) return;
+    setNatures(prev => prev.some(n => norm(n.nature) === norm(name))
+      ? prev
+      : [...prev, { nature: name, type: 'Repair', tatDays: null }]);
+    try {
+      await vmm.saveMasterRow('Nature', 'create', { nature: name, type: 'Repair', tatDays: null });
+    } catch { /* keep the value in the local list */ }
   };
 
   const tagEmail = (id, type, label) => {
@@ -448,7 +899,13 @@ export default function EmailComplaints() {
   useEffect(() => {
     if (!parsed) return;
     const code = (parsedEdits.employeeCode || '').toString().trim().toUpperCase();
-    if (!code) { setEmpLookupStatus('idle'); setResolvedEmpName(''); return; }
+    if (!code) {
+      setEmpLookupStatus('idle');
+      setResolvedEmpName('');
+      setEmpLookupSource('');
+      setParsedEdits(prev => ({ ...prev, employeeName: '', employeeEmail: '' }));
+      return;
+    }
     setEmpLookupStatus('loading');
     const t = setTimeout(async () => {
       try {
@@ -456,10 +913,23 @@ export default function EmailComplaints() {
         if (empRes.found && empRes.employee?.name) {
           setResolvedEmpName(empRes.employee.name);
           setEmpLookupStatus('found');
-          if (!parsedEdits.contactNumber && empRes.employee.mobile)
-            setParsedEdits(prev => ({ ...prev, contactNumber: empRes.employee.mobile }));
-        } else { setResolvedEmpName(''); setEmpLookupStatus('not-found'); }
-      } catch { setResolvedEmpName(''); setEmpLookupStatus('not-found'); }
+          setEmpLookupSource(prev => prev || 'code');
+          setParsedEdits(prev => ({
+            ...prev,
+            employeeName: empRes.employee.name,
+            employeeEmail: empRes.employee.email || '',
+            contactNumber: prev.contactNumber || empRes.employee.mobile || '',
+          }));
+        } else {
+          setResolvedEmpName('');
+          setEmpLookupStatus('not-found');
+          setParsedEdits(prev => ({ ...prev, employeeName: '', employeeEmail: '' }));
+        }
+      } catch {
+        setResolvedEmpName('');
+        setEmpLookupStatus('not-found');
+        setParsedEdits(prev => ({ ...prev, employeeName: '', employeeEmail: '' }));
+      }
     }, 600);
     return () => clearTimeout(t);
   }, [parsedEdits.employeeCode]); // eslint-disable-line
@@ -477,10 +947,21 @@ export default function EmailComplaints() {
         if (empRes?.found && empRes.employee?.name) {
           setResolvedEmpName(empRes.employee.name);
           setEmpLookupStatus('found');
-          if (empRes.employee.code)
-            setParsedEdits(prev => ({ ...prev, employeeCode: String(empRes.employee.code) }));
-        } else { setResolvedEmpName(''); setEmpLookupStatus('not-found'); }
-      } catch { setResolvedEmpName(''); setEmpLookupStatus('not-found'); }
+          setEmpLookupSource(prev => prev || 'mobile');
+          setParsedEdits(prev => ({
+            ...prev,
+            employeeCode: empRes.employee.code ? String(empRes.employee.code) : '',
+            employeeName: empRes.employee.name,
+            employeeEmail: empRes.employee.email || '',
+          }));
+        } else {
+          setResolvedEmpName('');
+          setEmpLookupStatus('not-found');
+        }
+      } catch {
+        setResolvedEmpName('');
+        setEmpLookupStatus('not-found');
+      }
     }, 800);
     return () => clearTimeout(t);
   }, [parsedEdits.contactNumber, parsedEdits.employeeCode]); // eslint-disable-line
@@ -525,8 +1006,11 @@ export default function EmailComplaints() {
     setToInput('');
     setCcInput('');
     setShowReplyEditor(false);
-    setComplaintItems([{ id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', description: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [] }]);
+    const freshId = ++itemIdRef.current;
+    setActiveComplaintId(freshId);
+    setComplaintItems([makeComplaintItem(freshId)]);
     setEmTab('form');
+    setShowValidation(false);
     setEmSearch('');
     setEmRegion('');
     setEmLevel('');
@@ -542,30 +1026,35 @@ export default function EmailComplaints() {
       setParsedEdits({
         storeCode:       p.storeCode || email.storeCode || '',
         employeeCode:    p.employeeCode    || '',
+        employeeName:    p.employeeName    || '',
+        employeeEmail:   p.employeeEmail   || '',
         contactNumber:   p.contactNumber   || '',
         productLocation: p.productLocation || '',
         description:     p.description     || '',
       });
-      setComplaintItems([{
-        id: (++itemIdRef.current),
+      const wipId = ++itemIdRef.current;
+      setActiveComplaintId(wipId);
+      setComplaintItems([hydrateComplaintItem(wipId, {
+        ...p,
         productName:     matchedProduct?.name || p.productName     || '',
-        vendorName:      p.vendorName      || '',
         natureOfProblem: matchedNature?.nature  || p.natureOfProblem || '',
         complaintType:   matchedNature?.type    || p.complaintType   || '',
-        contractType: '', vendorEmail: '', description: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [],
-      }]);
+      }, products, natures)]);
       if (p.employeeCode) {
         setEmpLookupStatus(p.employeeName ? 'found' : 'idle');
         setResolvedEmpName(p.employeeName || '');
+        setEmpLookupSource(p.employeeSource || 'code');
       } else {
         setEmpLookupStatus('idle');
         setResolvedEmpName('');
+        setEmpLookupSource('');
       }
       if (p.suggestedReply) setReplyBody(p.suggestedReply);
     } else {
       setEmpLookupStatus('idle');
       setResolvedEmpName('');
-      setParsedEdits({ storeCode: email.storeCode || '', employeeCode: '', contactNumber: '', productLocation: '', description: '' });
+      setEmpLookupSource('');
+      setParsedEdits({ storeCode: email.storeCode || '', employeeCode: '', employeeName: '', employeeEmail: '', contactNumber: '', productLocation: '', description: '' });
     }
   };
 
@@ -575,15 +1064,79 @@ export default function EmailComplaints() {
       .catch(() => {});
   };
 
+  // Automatic clarification reply. Sends once per conversation, on the original
+  // thread, so a client's later reply re-parses without triggering another email.
+  const sendAutomaticMissingInfoReply = async ({ email, messages, parsedResult, missingFields }) => {
+    const threadKey = email.conversationId || email.id;
+    const localStorageKey = `vmm_missing_info_sent_${threadKey}`;
+    if (localStorage.getItem(localStorageKey) === '1' || hasMissingInfoReply(messages)) return false;
+
+    const preview = buildReplyPreview(parsedResult, email, messages);
+    const to = [...new Set([...preview.to, email.fromAddr]
+      .map(a => String(a || '').trim())
+      .filter(a => a && a.toLowerCase() !== OWN_ADDR.toLowerCase()))];
+    if (!to.length) return false;
+
+    const rawCc = [
+      ...preview.cc,
+      ...(Array.isArray(email.cc) ? email.cc : String(email.cc || '').split(/[,;]/)),
+    ];
+    const toSet = new Set(to.map(a => a.toLowerCase()));
+    const cc = [...new Set(rawCc.map(a => String(a || '').trim()).filter(Boolean))]
+      .filter(a => a.toLowerCase() !== OWN_ADDR.toLowerCase() && !toSet.has(a.toLowerCase()));
+
+    const body = buildMissingInfoReply(missingFields, { subject: email.subject });
+    const htmlBody = buildReplyHtml(body).replace(
+      /<\/div>$/,
+      `<span style="display:none">${MISSING_INFO_MARKER}:${threadKey}</span></div>`
+    );
+
+    await vmm.sendEmailReply({
+      messageId: email.id,
+      conversationId: email.conversationId || '',
+      subject: preview.subject,
+      htmlBody,
+      body,
+      toRecipients: to,
+      ccRecipients: cc,
+    });
+
+    localStorage.setItem(localStorageKey, '1');
+    const wip = {
+      id: email.id, conversationId: email.conversationId || '', subject: email.subject,
+      fromAddr: email.fromAddr, storeCode: email.storeCode || parsedResult.storeCode || '',
+      receivedAt: email.receivedAt, repliedAt: new Date().toISOString(),
+      parsed: parsedResult, status: 'Awaiting Info', savedBy: 'Auto VMM',
+    };
+    setWipList(prev => [...prev.filter(w => w.id !== email.id), wip]);
+    vmm.saveWip({
+      emailId: email.id, conversationId: email.conversationId || '',
+      subject: email.subject || '', fromAddr: email.fromAddr || '',
+      storeCode: wip.storeCode, receivedAt: email.receivedAt || '',
+      repliedAt: wip.repliedAt, parsed: parsedResult, savedBy: wip.savedBy,
+      status: wip.status,
+    }).catch(() => {});
+    patchEmailCategories(email.id, ['Awaiting Info', 'New CRM']);
+    tagEmail(email.id, 'awaiting-info', `Awaiting Info • ${missingFields.length} field${missingFields.length === 1 ? '' : 's'} missing`);
+    setInboxEmails(prev => prev.filter(e => e.id !== email.id));
+    setSelected(null); setParsed(null); setReplyBody('');
+    showToast('Missing details requested — marked Awaiting Info', 'ok');
+    return true;
+  };
+
   const lookupResendComplaint = async () => {
     if (!resendNo.trim()) return;
     setResendLoading(true); setResendData(null); setResendVendorEmail(''); setResendDescription('');
     try {
       const r = await vmm.getComplaint(resendNo.trim());
       if (!r.success) { showToast('Complaint not found', 'warn'); return; }
-      setResendData(r.complaint);
-      setResendVendorEmail(r.complaint.vendoremail || '');
-      setResendDescription(r.complaint.description || '');
+      const c = r.complaint;
+      const autoVendor = resolveStoreAmcVendor(
+        amcRows, c.storecode, c.productname, c.vendorname
+      );
+      setResendData(c);
+      setResendVendorEmail(c.vendoremail || autoVendor?.email || '');
+      setResendDescription(c.description || '');
     } catch { showToast('Lookup failed — check n8n is running', 'warn'); }
     finally { setResendLoading(false); }
   };
@@ -592,6 +1145,9 @@ export default function EmailComplaints() {
     if (!resendData || !resendVendorEmail.trim()) return;
     setResendSending(true);
     try {
+      const autoVendor = resolveStoreAmcVendor(
+        amcRows, resendData.storecode, resendData.productname, resendData.vendorname
+      );
       await vmm.sendEscalationEmail({
         storeCode:         resendData.storecode   || '',
         storeName:         resendData.storename   || '',
@@ -605,6 +1161,9 @@ export default function EmailComplaints() {
         productName:       resendData.productname || '',
         natureOfComplaint: resendData.natureofproblem || '',
         manualVendorEmail: resendVendorEmail.trim(),
+        amcVendorEmail:    autoVendor?.email  || '',
+        amcVendorName:     autoVendor?.name   || '',
+        amcVendorSource:   autoVendor?.source || '',
         complaints: [{
           complaintno:     resendData.complaintno,
           productLocation: resendData.productlocation || '',
@@ -628,106 +1187,272 @@ export default function EmailComplaints() {
     // Mark this email as "being worked on" by this agent
     claimEmail(selected.id, 'claim');
     try {
-      // If direct body is empty (e.g. WIP sidebar click), build from thread messages
-      // n8n thread returns bodyHtml (no plain text body); fall back chain: body → bodyHtml → bodyPreview
-      const threadBodyText = threadMessages.length > 0
-        ? threadMessages.map(m => `[From: ${m.fromName || m.from}]\n${m.body || m.bodyHtml || m.bodyPreview || ''}`).join('\n\n---\n\n')
-        : '';
-      const emailBody = selected.body || selected.bodyPreview || threadBodyText;
+      // Always load the complete conversation before parsing. A reply can hold
+      // details that were absent from the original store email.
+      let fullMessages = [...(threadMessages || [])];
+      if (selected?.conversationId) {
+        try {
+          const threadRes = await vmm.fetchThread(selected.conversationId);
+          const fetched = threadRes?.messages || [];
+          if (fetched.length) {
+            fullMessages = fetched;
+            setThreadMessages(fetched);
+          }
+        } catch {
+          // Keep the messages already loaded; parsing still works with those.
+        }
+      }
+      const fullThreadText = buildFullEmailThreadText(selected, fullMessages);
+      const emailBody = fullThreadText || selected.body || selected.bodyPreview || '';
 
-      // Extract store code + employee code from body text when the email address didn't reveal them
-      const rawText = emailBody.replace(/<[^>]*>/g, ' ');
+      // Extract store code and employee fields from every message in the thread.
+      const rawText = fullThreadText.replace(/<[^>]*>/g, ' ');
       let bodyStoreCode = selected.storeCode || '';
       if (!bodyStoreCode) {
         const hit = rawText.match(/\bstore\s*(?:code)?\s*[-:]\s*([A-Z]{2}\d{2,3})\b/i);
         if (hit) bodyStoreCode = hit[1].toUpperCase();
       }
-      let bodyEmpCode = '';
-      const empHit = rawText.match(/\b(?:employee|emp|staff)\s*(?:code|id|no\.?)?\s*[-:]\s*(\d{5,7}|VMM\d{3})\b/i);
-      if (empHit) bodyEmpCode = empHit[1];
+      const bodyEmployee = extractEmployeeFields({}, rawText);
 
-      const res = await vmm.parseEmail({
+      // The product master may still be loading when the agent starts parsing.
+      // Fetch it before matching so the locked category is never left blank.
+      let productRows = products;
+      if (!productRows.length) {
+        try {
+          const pr = await vmm.getProducts();
+          productRows = pr.products || [];
+          if (productRows.length) setProducts(productRows);
+        } catch {
+          // Keep the current list; the parser can still return a product name.
+        }
+      }
+
+      // Confirmed values are locked for re-parses. Employee code is only locked
+      // when it passes the known format (VMM+3 digits OR 5-7 digits).
+      const lockedFields = parsedEdits ? {
+        storeCode:       parsedEdits.storeCode       || '',
+        employeeCode:    (/^VMM\d{3}$|^\d{5,7}$/.test(parsedEdits.employeeCode || '')) ? parsedEdits.employeeCode : '',
+        employeeName:    parsedEdits.employeeName     || resolvedEmpName || '',
+        employeeEmail:   parsedEdits.employeeEmail    || '',
+        contactNumber:   parsedEdits.contactNumber    || '',
+        productLocation: parsedEdits.productLocation  || '',
+        productName:     parsedEdits.productName      || '',
+        natureOfProblem: parsedEdits.natureOfProblem  || '',
+        description:     parsedEdits.description      || '',
+      } : {};
+
+      let res = await vmm.parseEmail({
         fromEmail:  selected.fromAddr,
         subject:    selected.subject,
         emailBody,
+        // Full conversation for the AI, both as transcript and structured rows.
+        emailThread: fullThreadText,
+        fullEmailThread: fullThreadText,
+        threadMessages: fullMessages.map(m => ({
+          from:       m?.from || '',
+          fromName:   m?.fromName || '',
+          to:         m?.toFull || m?.to || '',
+          cc:         m?.ccFull || m?.cc || '',
+          date:       m?.receivedDateTime || m?.receivedAt || '',
+          subject:    m?.subject || selected.subject || '',
+          body:       stripHtml(m?.uniqueBodyHtml || m?.body || m?.bodyHtml || m?.bodyPreview || ''),
+        })),
+        threadMessageCount: fullMessages.length,
         storeCode:  bodyStoreCode || selected.storeCode,
         templates,
         natures:    natures.map(n => ({ nature: n.nature, type: n.type })),
         // Unique product names so AI picks from the real list (e.g. "Server room AC" → "AC")
-        productNames: [...new Set(products.map(p => p.name))],
-        // Pass currently confirmed values — backend will not overwrite these
-        // Employee code is only locked if it passes format validation (VMM+3 digits OR 5-7 digits)
-        lockedFields: parsedEdits ? {
-          storeCode:       parsedEdits.storeCode       || '',
-          employeeCode:    (/^VMM\d{3}$|^\d{5,7}$/.test(parsedEdits.employeeCode || '')) ? parsedEdits.employeeCode : '',
-          employeeName:    parsedEdits.employeeName     || '',
-          contactNumber:   parsedEdits.contactNumber    || '',
-          productLocation: parsedEdits.productLocation  || '',
-          productName:     parsedEdits.productName      || '',
-          natureOfProblem: parsedEdits.natureOfProblem  || '',
-          description:     parsedEdits.description      || '',
-        } : {},
+        productNames: [...new Set(productRows.map(p => p.name))],
+        // Pass currently confirmed values — backend will not overwrite these.
+        lockedFields,
+        // Deterministic hints from the thread so the AI is guided as well.
+        hints: {
+          storeCode:    bodyStoreCode || selected.storeCode || '',
+          productNames: [...new Set(productRows.map(p => p.name))],
+          natureNames:  natures.map(n => n.nature),
+        },
       });
-      // Employee — lookup from code if present (from AI or body regex); clear if not
-      const effectiveEmpCode = res.employeeCode || bodyEmpCode;
+
+      // Correct imperfect AI output using the full thread + master data.
+      res = reconcileParsedResult({
+        res, fullText: fullThreadText, fullMessages, selected,
+        products: productRows, natures, locked: lockedFields, bodyStoreCode,
+      });
+
+      // Employee — accept AI aliases, email signatures and template fields,
+      // then enrich from the employee master.
+      const parsedEmployee = extractEmployeeFields(res, rawText);
+      let effectiveEmpCode = parsedEmployee.employeeCode || bodyEmployee.employeeCode;
+      let effectiveName = parsedEmployee.employeeName;
+      let effectiveEmail = parsedEmployee.employeeEmail || bodyEmployee.employeeEmail;
+      let effectiveContact = parsedEmployee.contactNumber || bodyEmployee.contactNumber;
+      let employeeSource = '';
+
+      // Many templates contain only a mobile number. Resolve the code immediately
+      // so all employee fields are filled as soon as parsing completes.
+      if (!effectiveEmpCode && effectiveContact) {
+        try {
+          const byMobile = await vmm.lookupEmployeeByMobile(effectiveContact.replace(/\D/g, ''));
+          if (byMobile?.found && byMobile.employee?.code) {
+            effectiveEmpCode = String(byMobile.employee.code);
+            effectiveName = byMobile.employee.name || effectiveName;
+            effectiveEmail = byMobile.employee.email || effectiveEmail;
+            employeeSource = 'mobile';
+          }
+        } catch {
+          // Keep the AI-provided name/contact; the on-edit lookup can retry later.
+        }
+      }
+
+      // Last resort: the AI and template often give only a store code. Match it
+      // against the employee master using the store mailbox and signature name.
+      let storeMatchedEmployee = null;
       if (!effectiveEmpCode) {
-        res.employeeName = null;
+        const namesFromThread = [];
+        const emailsFromThread = [];
+        const mobilesFromThread = [];
+        fullMessages.forEach(msg => {
+          const from = String(msg?.from || '').trim().toLowerCase();
+          if (!from || from.includes('helpdesk') || from === OWN_ADDR.toLowerCase()) return;
+          emailsFromThread.push(from);
+          const hints = extractEmployeeFields({}, msg.uniqueBodyHtml || msg.body || msg.bodyHtml || msg.bodyPreview || '');
+          namesFromThread.push(...(hints.nameHints || []));
+          if (hints.contactNumber) mobilesFromThread.push(hints.contactNumber);
+        });
+        if (selected?.fromAddr) emailsFromThread.push(selected.fromAddr.toLowerCase());
+        if (selected?.fromName) namesFromThread.push(selected.fromName);
+
+        const storeForMatch = res.storeCode || bodyStoreCode || selected?.storeCode || '';
+        try {
+          const employees = await vmm.getEmployees();
+          storeMatchedEmployee = pickEmployeeForStore(employees, {
+            storeCode: storeForMatch,
+            emails: [...emailsFromThread, ...(parsedEmployee.emailHints || []), ...(bodyEmployee.emailHints || [])],
+            names: [...namesFromThread, ...(parsedEmployee.nameHints || []), ...(bodyEmployee.nameHints || [])],
+            mobiles: [...mobilesFromThread, effectiveContact].filter(Boolean),
+          });
+          if (storeMatchedEmployee) {
+            effectiveEmpCode = String(storeMatchedEmployee.code || '');
+            effectiveName = storeMatchedEmployee.name || effectiveName;
+            effectiveEmail = storeMatchedEmployee.email || effectiveEmail;
+            effectiveContact = effectiveContact || String(storeMatchedEmployee.mobile || '');
+            employeeSource = 'store';
+          }
+        } catch {
+          // Store matching is best-effort — every shared field stays editable.
+        }
+      }
+
+      res.employeeCode = effectiveEmpCode || '';
+      res.employeeName = effectiveName || '';
+      res.employeeEmail = effectiveEmail || '';
+      res.contactNumber = effectiveContact || '';
+      res.employeeSource = employeeSource;
+
+      if (!effectiveEmpCode) {
         setEmpLookupStatus('idle');
-        setResolvedEmpName('');
+        setResolvedEmpName(effectiveName || '');
+        setEmpLookupSource('');
       } else {
-        res.employeeCode = effectiveEmpCode;
+        setResolvedEmpName(effectiveName || '');
         setEmpLookupStatus('loading');
         try {
           const empRes = await vmm.lookupEmployee(effectiveEmpCode);
-          if (empRes.found && empRes.employee?.name) {
-            res.employeeName = empRes.employee.name;
-            if (!res.contactNumber && empRes.employee.mobile) {
-              res.contactNumber = empRes.employee.mobile;
-            }
-            // If store code is missing, auto-fill from employee's store
-            if (!res.storeCode && !bodyStoreCode && !selected.storeCode && empRes.employee.storeCode) {
-              res.storeCode = empRes.employee.storeCode;
-            }
-            setResolvedEmpName(empRes.employee.name);
+          const lookupName = empRes.found && empRes.employee?.name ? empRes.employee.name : '';
+          const lookupMobile = empRes.employee?.mobile || '';
+          res.employeeName = lookupName || effectiveName;
+          res.employeeEmail = empRes.employee?.email || effectiveEmail;
+          if (!effectiveContact && lookupMobile) effectiveContact = lookupMobile;
+          res.contactNumber = effectiveContact || String(storeMatchedEmployee?.mobile || '');
+          // If store code is missing, auto-fill from employee's store
+          if (!res.storeCode && !bodyStoreCode && !selected.storeCode && empRes.employee?.storeCode) {
+            res.storeCode = empRes.employee.storeCode;
+          }
+          setResolvedEmpName(res.employeeName || '');
+          if (lookupName) {
             setEmpLookupStatus('found');
+            setEmpLookupSource(employeeSource || 'code');
+          } else if (storeMatchedEmployee) {
+            // Already verified against the full employee master.
+            setEmpLookupStatus('found');
+            setEmpLookupSource('store');
           } else {
-            res.employeeName = null;
-            setResolvedEmpName('');
             setEmpLookupStatus('not-found');
+            setEmpLookupSource('');
           }
         } catch {
-          res.employeeName = null;
-          setResolvedEmpName('');
-          setEmpLookupStatus('not-found');
+          res.employeeName = effectiveName;
+          res.employeeEmail = effectiveEmail;
+          res.contactNumber = effectiveContact;
+          setResolvedEmpName(effectiveName || '');
+          if (storeMatchedEmployee) {
+            setEmpLookupStatus('found');
+            setEmpLookupSource('store');
+          } else {
+            setEmpLookupStatus('not-found');
+            setEmpLookupSource('');
+          }
         }
       }
       // Product — nearest match from real list
-      const matchedProduct = findBestByText(products, res.productName || '', ['name']);
+      const matchedProduct = findBestByText(productRows, res.productName || '', ['name']);
       // Nature — nearest match from real natures list
       const matchedNature  = findBestByText(natures,  res.natureOfProblem || '', ['nature']);
+
+      // Fields still missing after deterministic reconciliation. These drive the
+      // automatic clarification reply instead of a generic "template incomplete" note.
+      const missingFields = [];
+      if (!res.storeCode && !bodyStoreCode && !selected.storeCode) missingFields.push('storeCode');
+      if (!matchedProduct) missingFields.push('productName');
+      if (!matchedNature) missingFields.push('natureOfProblem');
+      if (!(res.description || '').trim()) missingFields.push('description');
+      if (!res.employeeCode && !res.contactNumber) missingFields.push('contactNumber');
+      for (const field of res.missingFromTemplate || []) {
+        if (field === 'storeCode' && (res.storeCode || bodyStoreCode || selected.storeCode)) continue;
+        if (field === 'productName' && matchedProduct) continue;
+        if (field === 'natureOfProblem' && matchedNature) continue;
+        if (field === 'description' && res.description) continue;
+        if (!missingFields.includes(field)) missingFields.push(field);
+      }
+
       setParsedEdits(prev => ({
         storeCode:       res.storeCode       || bodyStoreCode         || selected?.storeCode    || prev?.storeCode       || '',
-        employeeCode:    res.employeeCode    || bodyEmpCode           || prev?.employeeCode    || '',
+        employeeCode:    res.employeeCode    || prev?.employeeCode    || '',
+        employeeName:    res.employeeName    || '',
+        employeeEmail:   res.employeeEmail   || '',
         contactNumber:   res.contactNumber   || prev?.contactNumber   || '',
         productLocation: res.productLocation || prev?.productLocation || '',
         description:     res.description     || prev?.description     || '',
       }));
+      const firstId = complaintItems[0]?.id || (++itemIdRef.current);
+      setActiveComplaintId(firstId);
+      const hydratedFirst = hydrateComplaintItem(firstId, {
+        ...res,
+        productName:     matchedProduct?.name || res.productName || '',
+        natureOfProblem: matchedNature?.nature || res.natureOfProblem || '',
+        complaintType:   matchedNature?.type   || res.complaintType   || '',
+        description:     res.description || '',
+      }, productRows, natures);
       setComplaintItems(prev => {
-        const first = prev[0] || {};
-        return [
-          { ...first,
-            productName:     matchedProduct?.name || res.productName || first.productName || '',
-            vendorName:      res.vendorName      || first.vendorName      || '',
-            natureOfProblem: matchedNature?.nature  || res.natureOfProblem || first.natureOfProblem || '',
-            complaintType:   matchedNature?.type    || res.complaintType   || first.complaintType   || '',
-            description:     first.description || res.description || '',
-          },
-          ...prev.slice(1),
-        ];
+        const first = prev[0] || makeComplaintItem(firstId);
+        return [{ ...first, ...hydratedFirst }, ...prev.slice(1)];
       });
       setParsed(res);
       setSelectedTemplateId(res.selectedTemplateId || null);
       if (res.suggestedReply) setReplyBody(res.suggestedReply);
+
+      if (AUTO_MISSING_INFO_REPLY && missingFields.length) {
+        try {
+          await sendAutomaticMissingInfoReply({
+            email: selected,
+            messages: fullMessages,
+            parsedResult: res,
+            missingFields,
+          });
+        } catch (err) {
+          showToast('Could not send missing-details request — please reply manually', 'warn');
+        }
+      }
     } catch {
       showToast('AI parsing failed. Please try again.', 'err');
     } finally { setParsing(false); }
@@ -797,57 +1522,30 @@ export default function EmailComplaints() {
 
   // ── Complaint item helpers ────────────────────────────────────────
   const updateItem = (id, patch) => setComplaintItems(prev => prev.map(x => x.id === id ? { ...x, ...patch } : x));
-  const removeItem = (id) => setComplaintItems(prev => prev.filter(x => x.id !== id));
-  const addItem = () => setComplaintItems(prev => [
-    ...prev,
-    { id: (++itemIdRef.current), productName: '', vendorName: '', contractType: '', vendorEmail: '', natureOfProblem: '', complaintType: '', description: '', extraEscTo: '', extraEscCc: '', amcLookup: 'idle', selectedAttachIndices: null, removedAutoCC: [] },
-  ]);
+  const removeItem = (id) => {
+    setComplaintItems(prev => {
+      const next = prev.filter(x => x.id !== id);
+      if (id === activeComplaintId) setActiveComplaintId(next[0]?.id || null);
+      return next.length ? next : [makeComplaintItem(++itemIdRef.current)];
+    });
+  };
+  const addItem = () => {
+    const id = ++itemIdRef.current;
+    setActiveComplaintId(id);
+    setComplaintItems(prev => [...prev, makeComplaintItem(id)]);
+  };
+  const updateActiveItem = (patch) => {
+    if (activeComplaintId) updateItem(activeComplaintId, patch);
+  };
   const toggleVendorEmail = (id, email) => setComplaintItems(prev => prev.map(x => {
     if (x.id !== id) return x;
     const emails = (x.vendorEmail || '').split(',').map(e => e.trim()).filter(Boolean);
     const next = emails.includes(email) ? emails.filter(e => e !== email) : [...emails, email];
     return { ...x, vendorEmail: next.join(', ') };
   }));
-  const lookupAmcForItem = async (id, productName) => {
-    const storeCode = parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode || '';
-    if (!storeCode || !productName) return;
-    updateItem(id, { amcLookup: 'loading' });
-    try {
-      const res = await vmm.getAmcVendor(storeCode, productName);
-      if (res.found) updateItem(id, { vendorName: res.vendor, amcLookup: 'found' });
-      else updateItem(id, { amcLookup: 'not-found' });
-    } catch { updateItem(id, { amcLookup: 'not-found' }); }
-  };
-  const isAttachSelected = (item, idx) => item.selectedAttachIndices === null || item.selectedAttachIndices.includes(idx);
-  const toggleAttach = (id, idx) => {
-    setComplaintItems(prev => prev.map(x => {
-      if (x.id !== id) return x;
-      const all = (attachmentData || []).filter(a => a.viewLink).map((_, i) => i);
-      if (x.selectedAttachIndices === null) return { ...x, selectedAttachIndices: all.filter(i => i !== idx) };
-      const next = x.selectedAttachIndices.includes(idx)
-        ? x.selectedAttachIndices.filter(i => i !== idx)
-        : [...x.selectedAttachIndices, idx];
-      return { ...x, selectedAttachIndices: next.length === all.length ? null : next };
-    }));
-  };
-  const getItemVendors = (productName) => {
-    const selProd = (productName || '').toLowerCase().trim();
-    if (!selProd || !products.length) return [];
-    const exact = products.filter(p => p.name.toLowerCase() === selProd);
-    if (exact.length > 0) return exact.map(p => ({ name: p.vendor, email: p.vendorEmail || '' }));
-    const fuzzy = products.filter(p => p.name.toLowerCase().includes(selProd) || selProd.includes(p.name.toLowerCase()));
-    return [...new Map(fuzzy.map(p => [p.vendor.toLowerCase(), { name: p.vendor, email: p.vendorEmail || '' }])).values()];
-  };
   const getItemHoEmail = (productName) => {
     const row = products.find(p => p.name.toLowerCase() === (productName || '').toLowerCase());
     return row?.hoEmail || HO_EMAIL;
-  };
-  const getItemVendorType = (productName) => {
-    const k = (productName || '').toLowerCase().trim();
-    return AMC_WARRANTY_PRODUCTS.has(k) ? 'amc_warranty' : AMC_ONLY_PRODUCTS.has(k) ? 'amc_only' : 'fm_ho';
-  };
-  const getItemShowVendorSection = (item) => {
-    return item.contractType === 'AMC' || item.contractType === 'Warranty';
   };
 
   const logComplaint = async () => {
@@ -887,7 +1585,8 @@ export default function EmailComplaints() {
         asmName:             store.asmName || employee.asmName || '',
         asmMobile:           store.asmMobile || '',
         employeeCode:        parsedEdits.employeeCode || parsed.employeeCode || employee.code || '',
-        employeeName:        resolvedEmpName || parsed.employeeName || employee.name || '',
+        employeeName:        resolvedEmpName || parsedEdits.employeeName || parsed.employeeName || employee.name || '',
+        employeeEmail:       parsedEdits.employeeEmail || parsed.employeeEmail || employee.email || '',
         contactNumber:       parsedEdits.contactNumber || parsed.contactNumber || employee.mobile || '',
         designation:         employee.designation || '',
         productLocation:     parsedEdits.productLocation || parsed.productLocation || 'See email',
@@ -908,33 +1607,47 @@ export default function EmailComplaints() {
           || { name: item.productName || '', vendor: item.vendorName || '', category: '' };
         const nature = natures.find(n => n.nature.toLowerCase() === (item.natureOfProblem || '').toLowerCase())
           || { nature: item.natureOfProblem || '', type: item.complaintType || 'Repair', tatDays: 7 };
-        const itemAttachments = item.selectedAttachIndices === null
-          ? driveAttachments
-          : item.selectedAttachIndices.map(i => driveAttachments[i]).filter(Boolean);
-        const attachmentText = itemAttachments.length
-          ? '\n\nAttachments:\n' + itemAttachments.map(a => `- ${a.name}: ${a.viewLink}`).join('\n')
+        const itemAttachments = item.noImage ? [] : (
+          item.selectedAttachIndices === null
+            ? driveAttachments
+            : (item.selectedAttachIndices || []).map(i => driveAttachments[i]).filter(Boolean)
+        );
+        const localNames = item.noImage ? [] : (item.localAttachments || []).map(f => f.name);
+        const attachmentText = [...itemAttachments.map(a => `- ${a.name}: ${a.viewLink}`),
+          ...localNames.map(name => `- ${name} (local upload)`)].length
+          ? '\n\nAttachments:\n' + [
+              ...itemAttachments.map(a => `- ${a.name}: ${a.viewLink}`),
+              ...localNames.map(name => `- ${name} (local upload)`),
+            ].join('\n')
           : '';
-        const itemDescription = complaintItems.length > 1
-          ? (item.description || '').replace(/\n+/g, ' ').trim()
-          : (item.description || parsedEdits.description || parsed.description || '').replace(/\n+/g, ' ').trim();
+        const itemDescription = (item.description || parsedEdits.description || parsed.description || '')
+          .replace(/\n+/g, ' ').trim();
+        const warrantyLabel = item.warranty || getAutoWarranty(item.productName)
+          || toWarrantyLabel(item.contractType);
+        const itemLocation = item.productLocation || parsedEdits.productLocation || parsed.productLocation || 'See email';
+        const itemAmcVendor = resolveStoreAmcVendor(
+          amcRows, storeCode, product.name || item.productName, item.vendorName
+        );
         const payload = {
           ...sharedPayload,
           productName:       product.name    || item.productName    || '',
           vendorName:        item.vendorName  || product.vendor      || '',
-          productType:       product.category || '',
+          productType:       item.productType || product.category || '',
           natureOfComplaint: nature.nature    || item.natureOfProblem || '',
           complaintType:     item.complaintType || nature.type       || 'Repair',
-          contractType:      item.contractType  || '',
-          tatDays:           nature.tatDays     || 7,
+          contractType:      item.contractType || (warrantyLabel ? toContractType(warrantyLabel) : ''),
+          warrantyStatus:    warrantyLabel,
+          tatDays:           item.tatDays || nature.tatDays || 7,
+          productLocation:   itemLocation,
           description:       itemDescription,
-          vendorEmail:       item.vendorEmail   || '',
+          vendorEmail:       item.vendorEmail || itemAmcVendor?.email || '',
           remarks:           complaintItems.length > 1
             ? `[${item.productName}] ${itemDescription}${providedText}${attachmentText}`.trim()
             : `${itemDescription}${providedText}${attachmentText}`.trim(),
           attachmentLinks:   itemAttachments,
         };
         const res = await vmm.logComplaint(payload);
-        if (res.success) allResults.push({ res, item, payload, itemAttachments });
+        if (res.success) allResults.push({ res, item, payload, itemAttachments, amcVendor: itemAmcVendor });
         else { showToast(`"${item.productName || `Complaint ${allResults.length + 1}`}" failed: ${res.message || 'Unknown error'}`, 'err'); break; }
       }
 
@@ -986,7 +1699,7 @@ export default function EmailComplaints() {
           vmm.categorizeEmail(wipMatch.id, ['Case Logged', 'New CRM']).catch(() => {});
         }
         // One escalation email per complaint item (different product/vendor each)
-        for (const { res, item, payload: iPayload, itemAttachments } of allResults) {
+        for (const { res, item, payload: iPayload, itemAttachments, amcVendor } of allResults) {
           vmm.sendEscalationEmail({
             storeCode:         sharedPayload.storeCode  || '',
             storeName:         sharedPayload.storeName  || '',
@@ -999,7 +1712,10 @@ export default function EmailComplaints() {
             storeState:        store.state              || '',
             storeCity:         store.city               || '',
             manualVendorEmail: item.vendorEmail         || '',
-            complaints: [{ complaintno: res.complaintno, productLocation: iPayload.productLocation, natureOfProblem: item.natureOfProblem || '', edcDate: res.edcDate, description: complaintItems.length > 1 ? (item.description || '').replace(/\n+/g, ' ').trim() : (item.description || parsedEdits.description || parsed.description || '').replace(/\n+/g, ' ').trim() }],
+            amcVendorEmail:    amcVendor?.email          || '',
+            amcVendorName:     amcVendor?.name           || '',
+            amcVendorSource:   amcVendor?.source         || '',
+            complaints: [{ complaintno: res.complaintno, productLocation: iPayload.productLocation, natureOfProblem: item.natureOfProblem || '', edcDate: res.edcDate, description: iPayload.description }],
             attachmentLinks: itemAttachments,
             extraToEmails: item.extraEscTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
             extraCcEmails: item.extraEscCc.split(/[;,]/).map(s => s.trim()).filter(Boolean),
@@ -1057,15 +1773,61 @@ export default function EmailComplaints() {
     setReplyBody(lines.join('\n'));
   };
 
-  const missingRequired = parsed ? (parsed.missingFromTemplate || []) : [];
-  // Unique product names for dropdown (deduplicate by name)
-  const uniqueProducts = [...new Map(products.map(p => [p.name.toLowerCase(), p])).values()];
-  // Can log if: store present + employee verified + every complaint item has product/nature/type/contract
+  // Same validation as New Case, applied independently to every complaint item.
+  const isFixedVendorOK = (item) => !!getFixedVendor(item.productName);
+  const getItemErrors = (item) => {
+    const e = {};
+    const auto     = getAutoWarranty(item.productName);
+    const warranty = item.warranty || auto;
+    if (item.productUnmatched)                  e.productName        = `“${item.aiProductName || item.productName}” does not exist in the product dropdown — select a valid product`;
+    else if (!item.productName)                 e.productName        = 'Select a product';
+    if (!item.natureOfProblem)                  e.natureOfComplaint  = 'Select nature of complaint';
+    if (!warranty)                              e.warranty           = 'Select warranty / AMC status';
+    if (!isFixedVendorOK(item) && !isHoDirectProduct(item.productName)
+        && (warranty === 'Under Warranty' || warranty === 'Under AMC' || isGensetProduct(item.productName))
+        && !item.vendorName) {
+      e.vendor = warranty === 'Under Warranty' ? 'Select a brand (or choose None of the above)'
+               : warranty === 'Under AMC' ? 'Select or enter the AMC vendor'
+               : 'Enter the vendor name';
+    }
+    if (!(item.productLocation || '').trim())   e.productLocation    = 'Product location is required';
+    if (!(item.description || '').trim())       e.description        = 'Complaint description is required';
+    const driveFiles = (attachmentData || []).filter(a => a.viewLink);
+    const selectedDrive = item.noImage ? 0 : (
+      item.selectedAttachIndices === null ? driveFiles.length : (item.selectedAttachIndices || []).length
+    );
+    const attachmentsCount = selectedDrive + (item.noImage ? 0 : (item.localAttachments || []).length);
+    if (ATTACHMENT_MANDATORY.includes(item.complaintType) && attachmentsCount === 0 && !item.noImage)
+      e.attachments = `At least 1 attachment is mandatory for ${item.complaintType} complaints (or check "No image available")`;
+    return e;
+  };
+
+  const itemErrors = complaintItems.map(getItemErrors);
   const storeOk    = !!(parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode);
   const employeeOk = !parsed?.employeeCode || empLookupStatus === 'found';
-  const canLog     = parsed && storeOk && employeeOk && complaintItems.length > 0
-    && complaintItems.every(item => item.productName && item.natureOfProblem && item.complaintType && item.contractType
-      && (complaintItems.length === 1 || item.description.trim()));
+  const canLog     = !!parsed && storeOk && employeeOk && complaintItems.length > 0
+    && itemErrors.every(errs => Object.keys(errs).length === 0);
+  const activeItem = complaintItems.find(x => x.id === activeComplaintId) || complaintItems[0] || null;
+  const activeStoreCode = parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode || '';
+  const activeAmcVendor = activeItem
+    ? resolveStoreAmcVendor(amcRows, activeStoreCode, activeItem.productName, activeItem.vendorName)
+    : null;
+  const activeManualVendorEmails = activeItem?.vendorEmail || '';
+  const activeManualVendorEmailSet = new Set(activeManualVendorEmails.split(',').map(e => e.trim()).filter(Boolean));
+  const activeEscVendorEmails = activeManualVendorEmails || activeAmcVendor?.email || '';
+  const activeErrors = activeItem && showValidation ? getItemErrors(activeItem) : {};
+  // Products the AI could not map to the master list. The warning disappears as
+  // soon as the agent picks a real product (or adds one through the dropdown).
+  const unmatchedProducts = complaintItems
+    .filter(x => x.productUnmatched)
+    .map(x => x.aiProductName || x.productName)
+    .filter(Boolean);
+
+  const attemptLog = () => {
+    setShowValidation(true);
+    if (canLog) setConfirmModal(true);
+    else showToast('Complete the highlighted fields before logging', 'err');
+  };
 
   const handleTemplateChange = (newId) => {
     setSelectedTemplateId(newId);
@@ -1125,12 +1887,18 @@ export default function EmailComplaints() {
 
               {/* Complaint details */}
               {resendData && (() => {
+                const autoVendor = resolveStoreAmcVendor(
+                  amcRows, resendData.storecode, resendData.productname, resendData.vendorname
+                );
                 const { toAddresses, ccAddresses } = vmm.resolveEscalationRecipients({
                   storeCode: resendData.storecode, storeEmail: resendData.storeemail, storeName: resendData.storename,
                   fmEmail: resendData.fmemail, fmName: resendData.fmname,
                   vendorName: resendData.vendorname, productName: resendData.productname,
                   storeState: resendData.statename, storeCity: resendData.storecity,
                   manualVendorEmail: resendVendorEmail.trim(),
+                  amcVendorEmail:    autoVendor?.email  || '',
+                  amcVendorName:     autoVendor?.name   || '',
+                  amcVendorSource:   autoVendor?.source || '',
                 });
                 const toSet = new Set(toAddresses.map(r => r.emailAddress.address.toLowerCase()));
                 const previewCC = ccAddresses.filter(r => !toSet.has(r.emailAddress.address.toLowerCase()));
@@ -1151,7 +1919,7 @@ export default function EmailComplaints() {
                     <div>
                       <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
                         Vendor Email <span style={{ color: '#ef4444' }}>*</span>
-                        <span style={{ color: '#6b7280', fontWeight: 400, marginLeft: 6 }}>(not stored — enter manually)</span>
+                        <span style={{ color: '#6b7280', fontWeight: 400, marginLeft: 6 }}>(auto-filled from store AMC when available)</span>
                       </div>
                       <input
                         style={{ width: '100%', padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
@@ -1304,7 +2072,8 @@ export default function EmailComplaints() {
                 {[
                   { label: 'Store Code',     val: parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode, req: true },
                   { label: 'Employee Code',  val: parsedEdits.employeeCode || parsed?.employeeCode,  req: false },
-                  { label: 'Employee Name',  val: resolvedEmpName || parsed?.employeeName,            req: false },
+                  { label: 'Employee Name',  val: resolvedEmpName || parsedEdits.employeeName || parsed?.employeeName, req: false },
+                  { label: 'Employee Email', val: parsedEdits.employeeEmail || parsed?.employeeEmail, req: false },
                   { label: 'Contact Number', val: parsedEdits.contactNumber || parsed?.contactNumber, req: false },
                 ].map(({ label, val, req }) => (
                   <div key={label} className={`ec-confirm-row${!val && req ? ' warn' : ''}`}>
@@ -1313,7 +2082,12 @@ export default function EmailComplaints() {
                   </div>
                 ))}
               </div>
-              {complaintItems.map((item, idx) => (
+              {complaintItems.map((item, idx) => {
+                const itemAmcVendor = resolveStoreAmcVendor(
+                  amcRows, activeStoreCode, item.productName, item.vendorName
+                );
+                const escalationTo = item.vendorEmail || itemAmcVendor?.email || '';
+                return (
                 <div key={item.id} style={{ margin: '8px 0', padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12 }}>
                   <div style={{ fontWeight: 700, color: '#4f46e5', marginBottom: 6, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.04em' }}>
                     {complaintItems.length > 1 ? `Complaint #${idx + 1}` : 'Complaint'}
@@ -1322,7 +2096,7 @@ export default function EmailComplaints() {
                     { label: 'Product',          val: item.productName,    req: true },
                     { label: 'Contract',         val: item.contractType === 'AMC' ? 'Under AMC' : item.contractType === 'Warranty' ? 'Under Warranty' : item.contractType === 'NotApplicable' ? 'Not Applicable' : '', req: true },
                     { label: 'Vendor',           val: item.vendorName,     req: false },
-                    ...(item.vendorEmail ? [{ label: 'Escalation To', val: item.vendorEmail, req: false }] : []),
+                    ...(escalationTo ? [{ label: 'Escalation To', val: escalationTo, req: false }] : []),
                     { label: 'Nature',           val: item.natureOfProblem, req: true },
                     { label: 'Type',             val: item.complaintType,   req: true },
                     { label: 'Description',      val: item.description,     req: complaintItems.length > 1 },
@@ -1334,7 +2108,8 @@ export default function EmailComplaints() {
                     </div>
                   ))}
                 </div>
-              ))}
+                );
+              })}
             </div>
             <div className="ec-confirm-actions" style={{ padding: '16px 28px 24px', flexShrink: 0, borderTop: '1px solid #f1f5f9' }}>
               <button className="ec-confirm-cancel" onClick={() => setConfirmModal(false)}>Go Back &amp; Edit</button>
@@ -2604,6 +3379,17 @@ export default function EmailComplaints() {
                     </select>
                   </div>
 
+                  {/* AI product not found in the product master */}
+                  {unmatchedProducts.length > 0 && (
+                    <div className="ec-product-not-found" role="alert">
+                      <strong>⚠ Product doesn&apos;t exist in the dropdown</strong>
+                      <span>
+                        AI extracted {unmatchedProducts.map(n => `“${n}”`).join(', ')}.
+                        {' '}Select a product from the Step 1 dropdown (or add it with ➕) before logging.
+                      </span>
+                    </div>
+                  )}
+
                   {/* Already provided */}
                   {parsed.alreadyProvided && Object.keys(parsed.alreadyProvided).length > 0 && (
                     <div className="ec-already-provided">
@@ -2640,348 +3426,277 @@ export default function EmailComplaints() {
                   </div>
 
                   {emTab === 'form' && <>
-                  {/* Standard fields */}
-                  <div className="ec-fields-grid">
-                    {Object.entries(FIELD_LABELS).map(([key, label]) => {
-                      // Employee Name — show lookup status, not raw AI value
-                      if (key === 'employeeName') {
-                        const STATUS = {
-                          idle:        { cls: 'missing',     val: '—' },
-                          loading:     { cls: 'missing',     val: 'Looking up…' },
-                          found:       { cls: 'filled',      val: resolvedEmpName },
-                          'not-found': { cls: 'missing-req', val: '⚠ Employee code not found in system' },
-                        };
-                        const s = STATUS[empLookupStatus] || STATUS.idle;
-                        return (
-                          <div key={key} className={`ec-field ${s.cls}`}>
-                            <span className="ec-field-label">Employee Name</span>
-                            <span className="ec-field-val">{s.val}</span>
-                          </div>
-                        );
-                      }
-                      // Store Code — always editable; auto-filled from email domain or employee record
-                      if (key === 'storeCode') {
-                        const storeVal = parsedEdits.storeCode || parsed.storeCode || selected?.storeCode || '';
-                        const autoSrc  = !parsed.storeCode && !selected?.storeCode && parsedEdits.storeCode
-                          ? ' (from employee record)' : '';
-                        return (
-                          <div key={key} className={`ec-field ${storeVal ? 'filled' : 'missing-req'}`}>
-                            <span className="ec-field-label">
-                              Store Code<span className="req"> *</span>
-                              {autoSrc && <span style={{ fontSize: 10, color: '#7c3aed', marginLeft: 4 }}>auto-filled{autoSrc}</span>}
-                            </span>
-                            <input
-                              className="ec-field-input"
-                              placeholder="Enter store code manually…"
-                              value={parsedEdits.storeCode}
-                              onChange={e => setParsedEdits(prev => ({ ...prev, storeCode: e.target.value.toUpperCase() }))}
-                            />
-                          </div>
-                        );
-                      }
-                      // Employee Code — editable; changing triggers auto-lookup
-                      if (key === 'employeeCode') {
-                        const val = parsedEdits.employeeCode;
-                        return (
-                          <div key={key} className={`ec-field ${val ? 'filled' : 'missing'}`}>
-                            <span className="ec-field-label">Employee Code</span>
-                            <input
-                              className="ec-field-input"
-                              placeholder="Enter employee code…"
-                              value={val}
-                              onChange={e => setParsedEdits(prev => ({ ...prev, employeeCode: e.target.value.toUpperCase() }))}
-                            />
-                          </div>
-                        );
-                      }
-                      // Contact Number — editable
-                      if (key === 'contactNumber') {
-                        const val = parsedEdits.contactNumber;
-                        return (
-                          <div key={key} className={`ec-field ${val ? 'filled' : 'missing'}`}>
-                            <span className="ec-field-label">Contact Number</span>
-                            <input
-                              className="ec-field-input"
-                              placeholder="Enter contact number…"
-                              value={val}
-                              onChange={e => setParsedEdits(prev => ({ ...prev, contactNumber: e.target.value }))}
-                            />
-                          </div>
-                        );
-                      }
-                      // Product Location — editable
-                      if (key === 'productLocation') {
-                        const val = parsedEdits.productLocation;
-                        return (
-                          <div key={key} className={`ec-field ${val ? 'filled' : 'missing'}`}>
-                            <span className="ec-field-label">Product Location</span>
-                            <input
-                              className="ec-field-input"
-                              placeholder="Enter product location…"
-                              value={val}
-                              onChange={e => setParsedEdits(prev => ({ ...prev, productLocation: e.target.value }))}
-                            />
-                          </div>
-                        );
-                      }
-                      // Description — editable textarea
-                      if (key === 'description') {
-                        const val = parsedEdits.description;
-                        const isReq = REQUIRED_FIELDS.includes(key);
-                        return (
-                          <div key={key} className={`ec-field ec-field-full ${val ? 'filled' : (isReq ? 'missing-req' : 'missing')}`}>
-                            <span className="ec-field-label">Description{isReq && <span className="req"> *</span>}</span>
-                            <textarea
-                              className="ec-field-input"
-                              rows={3}
-                              placeholder="Enter complaint description…"
-                              value={val}
-                              onChange={e => setParsedEdits(prev => ({ ...prev, description: e.target.value }))}
-                              style={{ resize: 'vertical' }}
-                            />
-                          </div>
-                        );
-                      }
-                      // Fallback (shouldn't hit with current FIELD_LABELS)
-                      const val    = parsed[key];
-                      const isMiss = !val;
-                      const isReq  = REQUIRED_FIELDS.includes(key);
-                      return (
-                        <div key={key} className={`ec-field ${isMiss ? (isReq ? 'missing-req' : 'missing') : 'filled'}`}>
-                          <span className="ec-field-label">{label}{isReq && <span className="req"> *</span>}</span>
-                          <span className="ec-field-val">{val || (isReq ? '⚠ Missing' : '—')}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {/* ── Complaint item cards ── */}
-                  {complaintItems.map((item, idx) => {
-                    const itemProdInList  = products.some(p => p.name.toLowerCase() === (item.productName || '').toLowerCase().trim());
-                    const itemVendors     = getItemVendors(item.productName);
-                    const itemHoEmail    = getItemHoEmail(item.productName);
-                    const itemVendorType = getItemVendorType(item.productName);
-                    const itemShowVendor = getItemShowVendorSection(item);
-                    const itemNatureOk   = natures.some(n => n.nature === item.natureOfProblem);
-                    const complaintTypes = [...new Set(natures.map(n => n.type).filter(Boolean))];
-                    const driveFiles     = (attachmentData || []).filter(a => a.viewLink);
-                    return (
-                      <div key={item.id} style={{ border: '1.5px solid #c7d2fe', borderRadius: 10, padding: '12px 14px', margin: '10px 0', background: '#fafafa' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: '#4f46e5', textTransform: 'uppercase', letterSpacing: '.04em' }}>
-                            {complaintItems.length > 1 ? `Complaint #${idx + 1}` : 'Complaint Details'}
-                            {item.productName && <span style={{ marginLeft: 6, fontWeight: 400, color: '#374151', textTransform: 'none', letterSpacing: 0 }}>— {item.productName}</span>}
-                          </span>
-                          {complaintItems.length > 1 && (
-                            <button onClick={() => removeItem(item.id)} style={{ padding: '2px 10px', fontSize: 11, color: '#dc2626', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>Remove</button>
-                          )}
-                        </div>
-                        <div className="ec-fields-grid">
-                          {/* Product */}
-                          <div className={`ec-field ${itemProdInList ? 'filled' : 'missing-req'}`}>
-                            <span className="ec-field-label">Product<span className="req"> *</span></span>
-                            <SearchableSelect
-                              options={uniqueProducts}
-                              value={item.productName}
-                              placeholder="Search product…"
-                              getLabel={p => p.name}
-                              getSub={p => {
-                                const cnt = products.filter(r => r.name.toLowerCase() === p.name.toLowerCase()).length;
-                                return `${p.category || ''}${cnt > 1 ? ` · ${cnt} vendors` : ''}`;
-                              }}
-                              onChange={p => updateItem(item.id, { productName: p.name, vendorName: '', contractType: '', vendorEmail: '' })}
-                            />
-                            {item.productName && !itemProdInList && <span style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>⚠ Not in product list</span>}
-                          </div>
-                          {/* Service Contract */}
-                          <div className={`ec-field ${item.contractType ? 'filled' : 'missing'}`}>
-                            <span className="ec-field-label">Service Contract<span className="req"> *</span></span>
-                            <select className="ec-field-input" value={item.contractType}
-                              onChange={e => {
-                                const val = e.target.value;
-                                const patch = { contractType: val, amcLookup: 'idle' };
-                                if (val !== 'AMC') { patch.vendorEmail = ''; patch.vendorName = ''; }
-                                updateItem(item.id, patch);
-                                if (val === 'AMC') lookupAmcForItem(item.id, item.productName);
-                              }}
-                              style={{ cursor: 'pointer' }}>
-                              <option value="">— Select contract type —</option>
-                              <option value="AMC">Under AMC</option>
-                              {itemVendorType === 'amc_warranty' && <option value="Warranty">Under Warranty</option>}
-                              <option value="NotApplicable">Not Applicable</option>
-                            </select>
-                            {itemVendorType === 'fm_ho' && item.contractType && <span style={{ fontSize: 10, color: '#7c3aed', marginTop: 3, display: 'block' }}>⚡ Escalates to FM &amp; HO</span>}
-                            {item.contractType === 'AMC' && item.amcLookup === 'loading' && <span style={{ fontSize: 10, color: '#7c3aed', marginTop: 2 }}>Looking up AMC vendor…</span>}
-                            {item.contractType === 'AMC' && item.amcLookup === 'not-found' && <span style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>⚠ No AMC vendor — enter manually</span>}
-                          </div>
-                          {/* Nature of Problem */}
-                          <div className={`ec-field ${itemNatureOk ? 'filled' : 'missing-req'}`}>
-                            <span className="ec-field-label">Nature of Problem<span className="req"> *</span></span>
-                            <SearchableSelect options={natures} value={item.natureOfProblem} placeholder="Search nature…"
-                              getLabel={n => n.nature} getSub={n => `${n.type} · ${n.tatDays}d TAT`}
-                              onChange={n => updateItem(item.id, { natureOfProblem: n.nature, complaintType: n.type })} />
-                          </div>
-                          {/* Complaint Type */}
-                          <div className={`ec-field ${item.complaintType ? 'filled' : 'missing-req'}`}>
-                            <span className="ec-field-label">Complaint Type<span className="req"> *</span></span>
-                            <select className="ec-field-input" value={item.complaintType}
-                              onChange={e => updateItem(item.id, { complaintType: e.target.value })} style={{ cursor: 'pointer' }}>
-                              <option value="">— Select type —</option>
-                              {complaintTypes.map(t => <option key={t} value={t}>{t}</option>)}
-                            </select>
-                          </div>
-                          {/* Vendor */}
-                          {itemShowVendor && (
-                            <div className={`ec-field ${item.vendorName ? 'filled' : 'missing'}`}>
-                              <span className="ec-field-label">Vendor</span>
-                              <SearchableSelect options={itemVendors} value={item.vendorName}
-                                placeholder={itemVendors.length ? 'Search vendor…' : 'Enter vendor name…'}
-                                getLabel={v => v.name} getSub={v => v.email ? `📧 ${v.email}` : ''}
-                                onChange={v => updateItem(item.id, { vendorName: v.name, vendorEmail: v.email || item.vendorEmail })}
-                                onFreeText={text => updateItem(item.id, { vendorName: text })} />
+                    {/* ── Shared store / employee fields (email-specific) ── */}
+                    <div className="ec-fields-grid">
+                      {Object.entries(FIELD_LABELS).map(([key, label]) => {
+                        // Employee Name — show lookup status, not raw AI value
+                        if (key === 'employeeName') {
+                          const STATUS = {
+                            idle:        { cls: 'missing',     val: '—' },
+                            loading:     { cls: resolvedEmpName ? 'filled' : 'missing', val: resolvedEmpName || 'Looking up…' },
+                            found:       { cls: 'filled',      val: resolvedEmpName },
+                            'not-found': { cls: resolvedEmpName ? 'filled' : 'missing-req', val: resolvedEmpName || '⚠ Employee code not found in system' },
+                          };
+                          const s = STATUS[empLookupStatus] || STATUS.idle;
+                          return (
+                            <div key={key} className={`ec-field ${s.cls}`}>
+                              <span className="ec-field-label">
+                                Employee Name
+                                {empLookupSource && (
+                                  <span style={{ fontSize: 10, color: '#7c3aed', marginLeft: 4 }}>
+                                    {empLookupSource === 'store' ? 'from store master' : `from ${empLookupSource}`}
+                                  </span>
+                                )}
+                              </span>
+                              <span className="ec-field-val">{s.val}</span>
                             </div>
-                          )}
-                        </div>
-                        {/* Per-complaint description */}
-                        <div style={{ marginTop: 8 }}>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
-                            Description
-                            {complaintItems.length > 1
-                              ? <span style={{ color: '#ef4444', fontWeight: 600 }}> * required</span>
-                              : <span style={{ color: '#9ca3af', fontWeight: 400 }}> (specific to this product / vendor)</span>
-                            }
+                          );
+                        }
+                        // Store Code — always editable; auto-filled from email domain or employee record
+                        if (key === 'storeCode') {
+                          const storeVal = parsedEdits.storeCode || parsed.storeCode || selected?.storeCode || '';
+                          const autoSrc  = !parsed.storeCode && !selected?.storeCode && parsedEdits.storeCode
+                            ? ' (from employee record)' : '';
+                          return (
+                            <div key={key} className={`ec-field ${storeVal ? 'filled' : 'missing-req'}`}>
+                              <span className="ec-field-label">
+                                Store Code<span className="req"> *</span>
+                                {autoSrc && <span style={{ fontSize: 10, color: '#7c3aed', marginLeft: 4 }}>auto-filled{autoSrc}</span>}
+                              </span>
+                              <input
+                                className="ec-field-input"
+                                placeholder="Enter store code manually…"
+                                value={parsedEdits.storeCode}
+                                onChange={e => setParsedEdits(prev => ({ ...prev, storeCode: e.target.value.toUpperCase() }))}
+                              />
+                            </div>
+                          );
+                        }
+                        // Employee Code — editable; changing triggers auto-lookup
+                        if (key === 'employeeCode') {
+                          const val = parsedEdits.employeeCode;
+                          return (
+                            <div key={key} className={`ec-field ${val ? 'filled' : 'missing'}`}>
+                              <span className="ec-field-label">Employee Code</span>
+                              <input
+                                className="ec-field-input"
+                                placeholder="Enter employee code…"
+                                value={val}
+                                onChange={e => {
+                                  setEmpLookupSource('');
+                                  setParsedEdits(prev => ({ ...prev, employeeCode: e.target.value.toUpperCase() }));
+                                }}
+                              />
+                            </div>
+                          );
+                        }
+                        // Employee Email — editable, auto-filled from the employee record
+                        if (key === 'employeeEmail') {
+                          const val = parsedEdits.employeeEmail;
+                          return (
+                            <div key={key} className={`ec-field ${val ? 'filled' : 'missing'}`}>
+                              <span className="ec-field-label">Employee Email</span>
+                              <input
+                                className="ec-field-input"
+                                placeholder="Enter employee email…"
+                                value={val}
+                                onChange={e => setParsedEdits(prev => ({ ...prev, employeeEmail: e.target.value }))}
+                              />
+                            </div>
+                          );
+                        }
+                        // Contact Number — editable
+                        if (key === 'contactNumber') {
+                          const val = parsedEdits.contactNumber;
+                          return (
+                            <div key={key} className={`ec-field ${val ? 'filled' : 'missing'}`}>
+                              <span className="ec-field-label">Contact Number</span>
+                              <input
+                                className="ec-field-input"
+                                placeholder="Enter contact number…"
+                                value={val}
+                                onChange={e => setParsedEdits(prev => ({ ...prev, contactNumber: e.target.value }))}
+                              />
+                            </div>
+                          );
+                        }
+                        const val    = parsed[key];
+                        const isMiss = !val;
+                        const isReq  = REQUIRED_FIELDS.includes(key);
+                        return (
+                          <div key={key} className={`ec-field ${isMiss ? (isReq ? 'missing-req' : 'missing') : 'filled'}`}>
+                            <span className="ec-field-label">{label}{isReq && <span className="req"> *</span>}</span>
+                            <span className="ec-field-val">{val || (isReq ? '⚠ Missing' : '—')}</span>
                           </div>
-                          <textarea
-                            className="ec-field-input"
-                            rows={2}
-                            placeholder={complaintItems.length > 1 ? `Describe the ${item.productName || 'product'} issue specifically…` : 'Describe the issue for this product…'}
-                            value={item.description}
-                            onChange={e => updateItem(item.id, { description: e.target.value })}
-                            style={{ resize: 'vertical', background: '#fff', borderRadius: 6, borderColor: complaintItems.length > 1 && !item.description.trim() ? '#ef4444' : undefined }}
+                        );
+                      })}
+                    </div>
+
+                    {/* ── Complaint tabs — one independent 9-step wizard per item ── */}
+                    {complaintItems.length > 1 && (
+                      <div className="ec-complaint-tabs">
+                        {complaintItems.map((item, idx) => (
+                          <button
+                            key={item.id}
+                            className={`ec-complaint-tab ${item.id === activeComplaintId ? 'active' : ''} ${itemErrors[idx] && Object.keys(itemErrors[idx]).length ? 'incomplete' : ''}`}
+                            onClick={() => { setActiveComplaintId(item.id); setShowValidation(false); }}
+                          >
+                            <span className="ec-complaint-tab-num">{idx + 1}</span>
+                            <span className="ec-complaint-tab-label">{item.productName || 'New complaint'}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {activeItem && (
+                      <>
+                        <div className="ec-wizard-card">
+                          <div className="ec-wizard-title-row">
+                            <span className="ec-wizard-title">
+                              {complaintItems.length > 1 ? `Complaint #${complaintItems.findIndex(x => x.id === activeItem.id) + 1}` : 'Complaint Details'}
+                              {activeItem.productName && (
+                                <span className="ec-wizard-product">— {activeItem.productName}</span>
+                              )}
+                              {activeItem.productUnmatched && (
+                                <span className="ec-wizard-product unmatched">
+                                  — “{activeItem.aiProductName || activeItem.productName}” ⚠ not in dropdown
+                                </span>
+                              )}
+                            </span>
+                            {complaintItems.length > 1 && (
+                              <button className="ec-wizard-remove" onClick={() => removeItem(activeItem.id)}>Remove</button>
+                            )}
+                          </div>
+
+                          <EmailComplaintWizard
+                            item={activeItem}
+                            allItems={complaintItems}
+                            products={products}
+                            natures={natures}
+                            storeCode={parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode || ''}
+                            amcRows={amcRows}
+                            driveAttachments={attachmentData || []}
+                            errors={activeErrors}
+                            onChange={updateActiveItem}
+                            onSelectItem={(id) => { setActiveComplaintId(id); setShowValidation(false); }}
+                            onAddNature={addCustomNature}
                           />
-                          {complaintItems.length > 1 && !item.description.trim() && (
-                            <div style={{ fontSize: 10, color: '#ef4444', marginTop: 3 }}>⚠ Each complaint needs its own description when logging multiple</div>
-                          )}
                         </div>
-                        {/* Escalation Email */}
-                        {item.contractType && (
-                          <div style={{ border: '1px solid #e0e7ff', borderRadius: 10, padding: '12px 14px', background: '#f5f3ff', margin: '8px 0' }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', letterSpacing: .4, textTransform: 'uppercase', marginBottom: 10 }}>✉ Escalation Email</div>
-                            {/* TO — vendor email(s), multi-select via matrix or manual entry */}
+
+                        {/* ── Email-specific escalation controls for this complaint ── */}
+                        {activeItem.contractType && (
+                          <div className="ec-esc-block">
+                            <div className="ec-esc-title">✉ Escalation Email — {activeItem.productName || 'this complaint'}</div>
                             <div style={{ marginBottom: 10 }}>
                               <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
-                                To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(Vendor — select from 📋 Escalation tab or type below)</span>
+                                To <span style={{ color: '#9ca3af', fontWeight: 400 }}>(auto from store AMC, or override below)</span>
                               </div>
-                              {/* Chips for selected emails */}
-                              {item.vendorEmail && (
+                              {activeEscVendorEmails && (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
-                                  {item.vendorEmail.split(',').map(e => e.trim()).filter(Boolean).map(email => (
-                                    <span key={email} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#dbeafe', color: '#1d4ed8', borderRadius: 12, fontSize: 11, fontWeight: 500, border: '1px solid #93c5fd' }}>
+                                  {activeEscVendorEmails.split(',').map(e => e.trim()).filter(Boolean).map(email => (
+                                    <span key={email} className="ec-esc-chip">
                                       {email}
-                                      <button onClick={() => toggleVendorEmail(item.id, email)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#1d4ed8', padding: '0 0 0 2px', fontSize: 13, lineHeight: 1, fontWeight: 700 }}>×</button>
+                                      {activeManualVendorEmailSet.has(email) && (
+                                        <button onClick={() => toggleVendorEmail(activeItem.id, email)} title="Remove">×</button>
+                                      )}
                                     </span>
                                   ))}
                                 </div>
                               )}
-                              {/* Controlled input — every keystroke saves; supports comma-separated for direct paste */}
+                              {activeAmcVendor && !activeManualVendorEmails && (
+                                <div style={{ fontSize: 10, color: '#16a34a', marginBottom: 4 }}>
+                                  ✓ Auto-resolved: {activeAmcVendor.name} — {activeAmcVendor.source}
+                                </div>
+                              )}
                               <input className="ec-field-input" type="text"
-                                placeholder="vendor@email.com  (comma-separate for multiple, or use Escalation tab above)"
-                                value={item.vendorEmail}
-                                onChange={e => updateItem(item.id, { vendorEmail: e.target.value })}
+                                placeholder="Override vendor@email.com (comma-separate for multiple)"
+                                value={activeManualVendorEmails}
+                                onChange={e => updateActiveItem({ vendorEmail: e.target.value })}
                                 style={{ background: '#fff' }} />
-                              {!item.vendorEmail && <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 3 }}>⚠ No escalation email will be sent without a vendor email</div>}
+                              {!activeEscVendorEmails && (
+                                <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 3 }}>
+                                  ⚠ No vendor email resolved — escalation will fall back to FM (if configured)
+                                </div>
+                              )}
                             </div>
-                            {/* CC — auto SM + FM + HO */}
                             <div style={{ marginBottom: 8 }}>
                               <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(auto)</span></div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                 {[
                                   ['SM', '#dbeafe', '#1d4ed8', 'Store Manager (auto)'],
                                   ['FM', '#dcfce7', '#166534', 'Facility Manager (auto)'],
-                                  ['HO', '#fef3c7', '#92400e', itemHoEmail],
+                                  ['HO', '#fef3c7', '#92400e', getItemHoEmail(activeItem.productName)],
                                 ].map(([tag, bg, fg, txt]) => (
-                                  !(item.removedAutoCC || []).includes(tag) && txt && (
+                                  !(activeItem.removedAutoCC || []).includes(tag) && txt && (
                                     <div key={tag} style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
                                       <span style={{ background: bg, color: fg, borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>{tag}</span>
                                       {txt}
-                                      <button onClick={() => updateItem(item.id, { removedAutoCC: [...(item.removedAutoCC || []), tag] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title={`Remove ${tag}`}>✕</button>
+                                      <button onClick={() => updateActiveItem({ removedAutoCC: [...(activeItem.removedAutoCC || []), tag] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title={`Remove ${tag}`}>✕</button>
                                     </div>
                                   )
                                 ))}
                               </div>
                             </div>
-                            {/* Extra CC */}
                             <div>
                               <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4 }}>Extra CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(comma separated)</span></div>
-                              <input className="ec-field-input" type="text" placeholder="email1@example.com, email2@example.com" value={item.extraEscCc} onChange={e => updateItem(item.id, { extraEscCc: e.target.value })} style={{ background: '#fff' }} />
+                              <input className="ec-field-input" type="text" placeholder="email1@example.com, email2@example.com"
+                                value={activeItem.extraEscCc}
+                                onChange={e => updateActiveItem({ extraEscCc: e.target.value })}
+                                style={{ background: '#fff' }} />
                             </div>
                           </div>
                         )}
-                        {/* Image selection for this complaint */}
-                        {driveFiles.length > 0 && (
-                          <div style={{ marginTop: 10, padding: '10px 12px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8 }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: '#0369a1', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.04em' }}>📎 Images for this complaint</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                              {driveFiles.map((a, i) => (
-                                <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12, color: '#0f172a' }}>
-                                  <input type="checkbox" checked={isAttachSelected(item, i)} onChange={() => toggleAttach(item.id, i)} style={{ width: 14, height: 14, cursor: 'pointer' }} />
-                                  <span style={{ flex: 1 }}>{a.name}</span>
-                                  {a.viewLink && <a href={a.viewLink} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: '#0284c7', textDecoration: 'none' }}>View</a>}
-                                </label>
-                              ))}
+
+                        {/* Product-specific fields extracted from the thread */}
+                        {parsed.productSpecificFields && Object.keys(parsed.productSpecificFields).length > 0 && (
+                          <>
+                            <div className="ec-subsection-label">Product-Specific Details (extracted from thread)</div>
+                            <div className="ec-fields-grid">
+                              {Object.entries(parsed.productSpecificFields).map(([key, val]) => {
+                                const isMissing = parsed.missingProductFields?.includes(key);
+                                return (
+                                  <div key={key} className={`ec-field ${isMissing ? 'missing-req' : 'filled'}`}>
+                                    <span className="ec-field-label">{camelToLabel(key)}</span>
+                                    <span className="ec-field-val">{val || '⚠ Missing'}</span>
+                                  </div>
+                                );
+                              })}
                             </div>
-                          </div>
+                          </>
                         )}
+                      </>
+                    )}
+
+                    <button onClick={addItem} className="ec-add-complaint-btn">
+                      + Add Another Complaint (different product / vendor)
+                    </button>
+
+                    {/* Missing product-specific fields not yet in the grid */}
+                    {parsed.missingProductFields?.filter(f => !parsed.productSpecificFields?.[f]).length > 0 && (
+                      <div className="ec-fields-grid" style={{ marginTop: 4 }}>
+                        {parsed.missingProductFields.filter(f => !parsed.productSpecificFields?.[f]).map(key => (
+                          <div key={key} className="ec-field missing-req">
+                            <span className="ec-field-label">{camelToLabel(key)}</span>
+                            <span className="ec-field-val">⚠ Missing</span>
+                          </div>
+                        ))}
                       </div>
-                    );
-                  })}
-                  <button onClick={addItem} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '8px 16px', fontSize: 12, fontWeight: 600, color: '#4f46e5', background: '#eef2ff', border: '1.5px dashed #a5b4fc', borderRadius: 8, cursor: 'pointer', width: '100%', margin: '4px 0 12px' }}>
-                    + Add Another Complaint (different product / vendor)
-                  </button>
+                    )}
 
-                  {/* Product-specific fields */}
-                  {parsed.productSpecificFields && Object.keys(parsed.productSpecificFields).length > 0 && (
-                    <>
-                      <div className="ec-subsection-label">Product-Specific Details (extracted from thread)</div>
-                      <div className="ec-fields-grid">
-                        {Object.entries(parsed.productSpecificFields).map(([key, val]) => {
-                          const isMissing = parsed.missingProductFields?.includes(key);
-                          return (
-                            <div key={key} className={`ec-field ${isMissing ? 'missing-req' : 'filled'}`}>
-                              <span className="ec-field-label">{camelToLabel(key)}</span>
-                              <span className="ec-field-val">{val || '⚠ Missing'}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </>
-                  )}
-
-                  {/* Missing product-specific fields not yet in the grid */}
-                  {parsed.missingProductFields?.filter(f => !parsed.productSpecificFields?.[f]).length > 0 && (
-                    <div className="ec-fields-grid" style={{ marginTop: 4 }}>
-                      {parsed.missingProductFields.filter(f => !parsed.productSpecificFields?.[f]).map(key => (
-                        <div key={key} className="ec-field missing-req">
-                          <span className="ec-field-label">{camelToLabel(key)}</span>
-                          <span className="ec-field-val">⚠ Missing</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Action buttons — below all fields */}
-                  <div className="ec-parsed-actions">
-                    {canLog && (
-                      <button className="ec-log-btn" onClick={() => setConfirmModal(true)} disabled={logging}>
+                    {/* Action buttons — below all fields */}
+                    <div className="ec-parsed-actions">
+                      <button className={`ec-log-btn ${!canLog ? 'disabled-look' : ''}`}
+                        onClick={attemptLog} disabled={logging}
+                        title={canLog ? '' : 'Complete the highlighted wizard fields before logging'}>
                         {logging ? 'Logging…' : complaintItems.length > 1 ? `✓ Log ${complaintItems.length} Complaints` : '✓ Log Complaint'}
                       </button>
-                    )}
-                    <button
-                      className={`ec-ask-info-btn ${showReplyEditor ? 'active' : ''}`}
-                      onClick={openReplyEditor}
-                    >
-                      ✉ {showReplyEditor ? 'Edit Reply' : 'Ask for Missing Info'}
-                    </button>
-                  </div>
+                      <button
+                        className={`ec-ask-info-btn ${showReplyEditor ? 'active' : ''}`}
+                        onClick={openReplyEditor}
+                      >
+                        ✉ {showReplyEditor ? 'Edit Reply' : 'Ask for Missing Info'}
+                      </button>
+                    </div>
                   </>}
 
                   {emTab === 'matrix' && (

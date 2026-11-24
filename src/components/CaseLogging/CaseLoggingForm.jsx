@@ -2,113 +2,14 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { vmm } from '../../api/vmm';
 import { useAuth } from '../../context/AuthContext';
 import { useAmcVendors } from '../../hooks/useAmcVendors';
-
-const ATTACHMENT_MANDATORY = ['Breakdown', 'Repair'];
-
-// The VMM complaint workflow. Store/employee verification is already handled by
-// the smart search above, so the workflow starts directly with the case details.
-const COMPLAINT_STEPS = [
-  { name: 'Product',        sub: 'Select specific item' },
-  { name: 'Category',       sub: 'Select the category' },
-  { name: 'Complaint',      sub: 'Nature of issue' },
-  { name: 'Warranty',       sub: 'AMC/Warranty status' },
-  { name: 'Vendor',         sub: 'Brand or vendor name' },
-  { name: 'Location',       sub: 'Where in the store?' },
-  { name: 'Photos',         sub: 'Photos / files' },
-  { name: 'Remarks',        sub: 'Describe the problem' },
-  { name: 'Review',         sub: 'Check & submit' },
-];
-
-// Products whose AMC vendor is store-wise — mapped to vmm_amc_vendors service types
-const PRODUCT_AMC_SERVICE = {
-  'ac':             'AC AMC',
-  'server room ac': 'AC AMC',
-  'lift':           'Lift AMC',
-  'escalator':      'Lift AMC',
-  'pest control':   'Pest Control AMC',
-};
-const AMC_LOOKUP_PRODUCTS = new Set(Object.keys(PRODUCT_AMC_SERVICE));
-
-// Products with one fixed, known vendor — no per-store lookup needed
-const FIXED_VENDOR_PRODUCTS = { sensormatic: 'Adtech' };
-const getFixedVendor = (name) => FIXED_VENDOR_PRODUCTS[norm(name)] || null;
-
-// Products routed straight to Facility Manager / HO Team — no vendor needed
-const HO_DIRECT_PRODUCTS = new Set([
-  'acp', 'baggage rack', 'carpet', 'cash drawer', 'cctv', 'chair', 'civil work',
-  'diesel motor', 'digital video recorder', 'door', 'drainage', 'drawer',
-  'electrical', 'emergency bulb', 'exhaust fan', 'fan', 'fire equipment', 'fire hydrant',
-  'fly catcher', 'genset battery', 'glass', 'glass door', 'glow sign board', 'lift battery',
-  'lights', 'lock', 'mirror', 'mobile', 'music system', 'paint work',
-  'queue manager', 'railing', 'ramp', 'shutter', 'speaker', 'submersible pump',
-  'table', 'tiles', 'transformer', 'trial room', 'trolley', 'washroom',
-  'water meter', 'water motor', 'water pipe', 'water tank', 'wooden work',
-]);
-
-// Products where vendor is optional — agent checks a sticker on the unit
-const FIRE_PRODUCTS = new Set([
-  'fire alarm', 'fire exit door', 'fire exit key box', 'fire extinguisher',
-  'fire hooter', 'fire panel', 'fire alarm panel', 'fire pump',
-  'fire sprinkler', 'sprinkler system', 'fire water motor', 'fire water tank',
-  'hose reel', 'smoke detector',
-]);
-
-// Warranty brand lists — same product→brand mapping used by the facility portal.
-const WARRANTY_VENDORS = [
-  'Adtech', 'Ahuja', 'Arihant Infocoom', 'Blue Star', 'Carrier', 'Consul Neowatt',
-  'Ece', 'Euronics', 'Fuji Tech', 'Godrej', 'Gunnebo', 'Hitachi', 'Hublit',
-  'Jindal Electric', 'Johnson', 'Kirloskar', 'Kone', 'Krykard Atandra', 'Mitsubishi',
-  'Mitzvah', 'Neptune', 'Omega', 'Otis Elevator', 'Pie Industries', 'Schindler',
-  'Tk Elevator', 'Viewon', 'Western Control And Automation',
-];
-
-const PRODUCT_VENDORS = {
-  'ac':                        ['Blue Star', 'Carrier', 'Hitachi', 'Mitsubishi'],
-  'air curtain':               ['Euronics', 'Mitzvah'],
-  'amplifier':                 ['Ahuja', 'Arihant Infocoom'],
-  'drainage':                  ['Adtech'],
-  'electrical panel':          ['Neptune', 'Western Control And Automation'],
-  'escalator':                 ['Ece', 'Kone'],
-  'fly catcher':               ['Mitzvah'],
-  'genset':                    ['Kirloskar'],
-  'led light':                 ['Hublit', 'Viewon'],
-  'lift':                      ['Ece', 'Fuji Tech', 'Johnson', 'Kone', 'Omega', 'Otis Elevator', 'Schindler', 'Tk Elevator'],
-  'mic':                       ['Ahuja', 'Arihant Infocoom'],
-  'safe lock':                 ['Godrej', 'Gunnebo'],
-  'sensormatic':               ['Adtech'],
-  'server room ac':            ['Blue Star', 'Carrier', 'Hitachi', 'Mitsubishi'],
-  'servo':                     ['Consul Neowatt', 'Krykard Atandra', 'Jindal Electric'],
-  'shampoo dispenser machine': ['Pie Industries'],
-  'track light':               ['Hublit', 'Viewon'],
-};
-
-function norm(s) { return (s || '').trim().toLowerCase(); }
-const getVendorsForProduct = (name) => PRODUCT_VENDORS[norm(name)] || WARRANTY_VENDORS;
-const getAmcServiceType = (name) => PRODUCT_AMC_SERVICE[norm(name)] || null;
-const isAmcLookupProduct = (name) => AMC_LOOKUP_PRODUCTS.has(norm(name));
-const isHoDirectProduct  = (name) => HO_DIRECT_PRODUCTS.has(norm(name));
-const isFireProductName  = (name) => FIRE_PRODUCTS.has(norm(name));
-const isGensetProduct    = (name) => norm(name) === 'genset';
-
-// Portal rule: temperature nature applies only to AC/Server Room AC.
-const TEMP_PRODUCTS = new Set(['ac', 'server room ac']);
-const showsTemperatureOption = (name) => TEMP_PRODUCTS.has(norm(name));
-const isTemperatureNature = (name) => norm(name).includes('temperature');
-
-// Portal routing after the Complaint step — these products skip the normal
-// Warranty/Vendor path (same as confirmComplaintType() in index (47).html).
-function getAutoWarranty(name) {
-  if (getFixedVendor(name))   return 'N/A — Fixed Vendor';
-  if (isHoDirectProduct(name)) return 'N/A — HO Direct';
-  if (isGensetProduct(name))   return 'N/A — Genset';
-  if (isFireProductName(name)) return 'N/A — Local Vendor';
-  return '';
-}
-const isAutoRoutedProduct = (name) => !!getAutoWarranty(name);
-const isVendorOwnedProduct = (name) => isAutoRoutedProduct(name) || isAmcLookupProduct(name);
-const AUTO_WARRANTY_VALUES = new Set([
-  'N/A — Fixed Vendor', 'N/A — HO Direct', 'N/A — Genset', 'N/A — Local Vendor',
-]);
+import {
+  ATTACHMENT_MANDATORY, COMPLAINT_STEPS, PRODUCT_VENDORS, AUTO_WARRANTY_VALUES,
+  getAutoWarranty, getFixedVendor, getVendorsForProduct, getAmcServiceType,
+  isAmcLookupProduct, isHoDirectProduct, isFireProductName, isGensetProduct,
+  isVendorOwnedProduct, norm, showsTemperatureOption, isTemperatureNature,
+  getStoreAmcVendors, resolveStoreAmcVendor, catalogOptions,
+} from './caseWorkflow';
+import { AddableSelect, ProductSearch, WorkflowStep } from './WorkflowControls';
 
 function bufStr(v) {
   if (v == null) return '';
@@ -126,121 +27,6 @@ function pick(obj, ...keys) {
     if (v) return v;
   }
   return '';
-}
-
-function ProductSearch({ products, value, onChange, error, disabled }) {
-  const [open,   setOpen]   = useState(false);
-  const [search, setSearch] = useState('');
-  const wrapRef   = useRef(null);
-  const searchRef = useRef(null);
-
-  // SQL has one row per vendor, so collapse to one entry per product name.
-  const allProducts = useMemo(() => {
-    const seen = new Set();
-    const list = [];
-    for (const p of products) {
-      const key = norm(p.name);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      list.push(p);
-    }
-    return list;
-  }, [products]);
-
-  const filtered = search.trim()
-    ? allProducts.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()))
-    : allProducts;
-
-  const close = () => { setOpen(false); setSearch(''); };
-
-  useEffect(() => {
-    if (open && searchRef.current) searchRef.current.focus();
-  }, [open]);
-
-  useEffect(() => {
-    const handler = e => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) close();
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  useEffect(() => {
-    const handler = e => { if (e.key === 'Escape' && open) close(); };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [open]);
-
-  const select = (product) => {
-    close();
-    onChange(product);
-  };
-
-  return (
-    <div ref={wrapRef} style={{ position: 'relative' }}>
-      <input
-        type="text"
-        className={`product-select-input ${error ? 'err' : ''}`}
-        placeholder={disabled ? 'Loading…' : 'Select product…'}
-        value={value || ''}
-        readOnly
-        disabled={disabled}
-        onClick={() => !disabled && setOpen(o => !o)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-      />
-      <span className="product-caret" aria-hidden="true">▾</span>
-      {open && (
-        <div className="product-dropdown" role="listbox">
-          <div className="product-search-wrap">
-            <input
-              ref={searchRef}
-              type="text"
-              className="product-search-input"
-              placeholder="Search all products…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              autoComplete="off"
-            />
-            <span className="product-count">{filtered.length} / {allProducts.length}</span>
-          </div>
-          <div className="product-list">
-            {filtered.map(p => (
-              <div
-                key={norm(p.name)}
-                className="product-option"
-                role="option"
-                onMouseDown={() => select(p)}
-              >
-                <span className="product-option-name">{p.name}</span>
-                <span className="product-option-vendor">
-                  {isAmcLookupProduct(p.name) ? 'AMC vendor by store' : (p.category || '—')}
-                </span>
-              </div>
-            ))}
-            {filtered.length === 0 && (
-              <div className="product-option-empty">No products found for “{search}”</div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function WorkflowStep({ n, title, sub, wide, children }) {
-  return (
-    <div className={`wf-field ${wide ? 'wf-wide' : ''}`}>
-      <div className="wf-label">
-        <span className="wf-num">{n}</span>
-        <span className="wf-label-text">
-          <span className="wf-title">{title}</span>
-          <span className="wf-sub">{sub}</span>
-        </span>
-      </div>
-      <div className="wf-control">{children}</div>
-    </div>
-  );
 }
 
 function addDays(date, days) {
@@ -291,6 +77,7 @@ export default function CaseLoggingForm() {
   const [gensetChoice,     setGensetChoice]     = useState('');
   const [resolvedTo,       setResolvedTo]       = useState([]);
   const [resolvedCc,       setResolvedCc]       = useState([]);
+  const [escalationSource, setEscalationSource] = useState('');
   const [extraTo,          setExtraTo]          = useState('');
   const [extraCc,          setExtraCc]          = useState('');
   const [polishing,        setPolishing]        = useState(false);
@@ -337,8 +124,7 @@ export default function CaseLoggingForm() {
   }, []);
 
   // Options for the interactive workflow controls, derived from the loaded reference lists
-  const categoryOptions = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
-  const sqlVendorOptions = [...new Set(products.map(p => p.vendor).filter(Boolean))].sort();
+  const { categories: categoryOptions, vendors: sqlVendorOptions } = catalogOptions(products);
 
   // Portal-derived view state for the Complaint → Vendor steps.
   const visibleNatures   = natures.filter(n =>
@@ -357,14 +143,14 @@ export default function CaseLoggingForm() {
 
   // Store-wise AMC vendors come from the vmm_amc_vendors dataset.
   const amcServiceType = getAmcServiceType(form.productName);
-  const storeAmcVendors = useMemo(() => {
-    if (!form.storeCode || !amcServiceType) return [];
-    const code = form.storeCode.trim().toUpperCase();
-    return [...new Set(amcRows
-      .filter(r => r.serviceType === amcServiceType && String(r.storeCode).trim().toUpperCase() === code)
-      .map(r => r.vendorName)
-      .filter(Boolean))];
-  }, [amcRows, form.storeCode, amcServiceType]);
+  const storeAmcVendors = useMemo(
+    () => getStoreAmcVendors(amcRows, form.storeCode, form.productName),
+    [amcRows, form.storeCode, form.productName]
+  );
+  const storeAmcEscalationVendor = useMemo(
+    () => resolveStoreAmcVendor(amcRows, form.storeCode, form.productName, form.vendorName),
+    [amcRows, form.storeCode, form.productName, form.vendorName]
+  );
 
   // Auto-fill the store's AMC vendor once per store/product/warranty combination.
   // The ref stops a later re-render (or a manual edit) from overwriting the agent's
@@ -536,6 +322,7 @@ export default function CaseLoggingForm() {
           const natureName  = bufStr(c.natureofproblem || latest.natureofproblem);
           const natureMeta  = natures.find(n => norm(n.nature) === norm(natureName));
           const productMeta = products.find(p => norm(p.name) === norm(productName));
+          const category    = productMeta?.category || bufStr(latest.producttype) || '';
           // AMC, genset, fire and HO-direct products own the vendor field —
           // never seed it from the previous complaint, or a slow response can
           // overwrite the portal-routed value.
@@ -554,22 +341,32 @@ export default function CaseLoggingForm() {
             } catch { /* employee resolution is best-effort */ }
           }
 
-          setForm(f => ({
-            ...f,
-            employeeCode:      f.employeeCode      || bufStr(complaintEmployee?.code || latest.empcode) || '',
-            employeeName:      f.employeeName      || bufStr(complaintEmployee?.name || latest.empname) || '',
-            contactNumber:     f.contactNumber     || bufStr(complaintMobile) || '',
-            designation:       f.designation       || pick(complaintEmployee, 'designation') || '',
-            productName:        f.productName        || productName || '',
-            productShortName:   f.productShortName   || bufStr(c.productmodel) || '',
-            productType:        f.productType        || productMeta?.category || bufStr(latest.producttype) || '',
-            vendorName:         vendorOwned ? f.vendorName : (f.vendorName || bufStr(c.vendorname || latest.vendorname) || ''),
-            natureOfComplaint:  f.natureOfComplaint  || natureName || '',
-            complaintType:      f.complaintType      || natureMeta?.type || bufStr(c.typeofcomplaint || latest.typeofcomplaint) || '',
-            tatDays:            f.tatDays !== '' && f.tatDays != null ? f.tatDays : (natureMeta?.tatDays ?? fallbackTat),
-            productLocation:    f.productLocation    || bufStr(c.productlocation) || '',
-            remarks:            f.remarks            || bufStr(c.remarks || c.description) || '',
-          }));
+          setForm(f => {
+            const next = {
+              ...f,
+              employeeCode:      f.employeeCode      || bufStr(complaintEmployee?.code || latest.empcode) || '',
+              employeeName:      f.employeeName      || bufStr(complaintEmployee?.name || latest.empname) || '',
+              contactNumber:     f.contactNumber     || bufStr(complaintMobile) || '',
+              designation:       f.designation       || pick(complaintEmployee, 'designation') || '',
+              productName:        f.productName        || productName || '',
+              productShortName:   f.productShortName   || bufStr(c.productmodel) || '',
+              productType:        f.productType        || category || '',
+              vendorName:         vendorOwned ? f.vendorName : (f.vendorName || bufStr(c.vendorname || latest.vendorname) || ''),
+              natureOfComplaint:  f.natureOfComplaint  || natureName || '',
+              complaintType:      f.complaintType      || natureMeta?.type || bufStr(c.typeofcomplaint || latest.typeofcomplaint) || '',
+              tatDays:            f.tatDays !== '' && f.tatDays != null ? f.tatDays : (natureMeta?.tatDays ?? fallbackTat),
+              productLocation:    f.productLocation    || bufStr(c.productlocation) || '',
+              remarks:            f.remarks            || bufStr(c.remarks || c.description) || '',
+            };
+            // Portal rule: temperature nature is AC / Server Room AC only.
+            if (!showsTemperatureOption(next.productName) && isTemperatureNature(next.natureOfComplaint)) {
+              next.natureOfComplaint = '';
+              next.complaintType = '';
+              next.tatDays = '';
+            }
+            return next;
+          });
+          setWf(w => ({ ...w, category: w.category || category }));
           setAutoFillNote(`Form auto-filled from last SQL complaint ${latestNo} — please review before submitting.`);
         } catch { /* auto-fill is best-effort */ }
       }
@@ -577,13 +374,27 @@ export default function CaseLoggingForm() {
     finally { setLoadingRecent(false); }
   };
 
-  const handleNatureChange = (e) => {
-    const nature = natures.find(n => n.nature === e.target.value);
+  // New natures are saved to the master sheet immediately, so they appear in
+  // Settings, email parsing and reports. The inline list updates even if the
+  // sync service is unreachable.
+  const addCustomNature = async (nature) => {
+    const name = String(nature || '').trim();
+    if (!name) return;
+    setNatures(prev => prev.some(n => norm(n.nature) === norm(name))
+      ? prev
+      : [...prev, { nature: name, type: 'Repair', tatDays: null }]);
+    try {
+      await vmm.saveMasterRow('Nature', 'create', { nature: name, type: 'Repair', tatDays: null });
+    } catch { /* keep the value in the local list */ }
+  };
+
+  const handleNatureChange = (value) => {
+    const nature = natures.find(n => n.nature === value);
     setForm(f => ({
       ...f,
-      natureOfComplaint: e.target.value,
-      complaintType:     nature?.type    || '',
-      tatDays:           nature?.tatDays ?? '',
+      natureOfComplaint: value,
+      complaintType:     nature?.type || (value ? 'Repair' : ''),
+      tatDays:           nature ? (nature.tatDays ?? '') : (value ? 7 : ''),
     }));
   };
 
@@ -634,10 +445,15 @@ export default function CaseLoggingForm() {
         productName: form.productName,
         storeState: form.state,
         storeCity:  form.city,
+        manualVendorEmail: form.vendorEmail || '',
+        amcVendorEmail:    storeAmcEscalationVendor?.email || '',
+        amcVendorName:     storeAmcEscalationVendor?.name || '',
+        amcVendorSource:   storeAmcEscalationVendor?.source || '',
       });
       setResolvedTo(resolved.toAddresses || []);
       setResolvedCc(resolved.ccAddresses || []);
-    } catch { setResolvedTo([]); setResolvedCc([]); }
+      setEscalationSource(resolved.vendorSource || '');
+    } catch { setResolvedTo([]); setResolvedCc([]); setEscalationSource(''); }
     setShowConfirm(true);
   };
 
@@ -725,6 +541,10 @@ export default function CaseLoggingForm() {
           natureOfComplaint: form.natureOfComplaint || '',
           storeState:       form.state             || '',
           storeCity:        form.city              || '',
+          manualVendorEmail: form.vendorEmail      || '',
+          amcVendorEmail:    storeAmcEscalationVendor?.email  || '',
+          amcVendorName:     storeAmcEscalationVendor?.name   || '',
+          amcVendorSource:   storeAmcEscalationVendor?.source || '',
           complaints: allResults.map(r => ({
             complaintno:     r.complaintno,
             productLocation: r.productLocation,
@@ -888,8 +708,8 @@ export default function CaseLoggingForm() {
                 <div className="clf-recip-tags">
                   {resolvedTo.length > 0
                     ? resolvedTo.map((r, i) => (
-                        <span key={i} className="clf-recip-tag clf-recip-tag-to">
-                          {r.emailAddress.name || r.emailAddress.address}
+                        <span key={i} className="clf-recip-tag clf-recip-tag-to" title={r.emailAddress.address}>
+                          {r.emailAddress.name ? `${r.emailAddress.name} · ${r.emailAddress.address}` : r.emailAddress.address}
                         </span>
                       ))
                     : <span className="clf-recip-none">No recipient resolved — add one below</span>
@@ -902,12 +722,21 @@ export default function CaseLoggingForm() {
                 <div className="clf-recip-tags">
                   {resolvedCc.length > 0
                     ? resolvedCc.map((r, i) => (
-                        <span key={i} className="clf-recip-tag clf-recip-tag-cc">
-                          {r.emailAddress.name || r.emailAddress.address}
+                        <span key={i} className="clf-recip-tag clf-recip-tag-cc" title={r.emailAddress.address}>
+                          {r.emailAddress.name ? `${r.emailAddress.name} · ${r.emailAddress.address}` : r.emailAddress.address}
                         </span>
                       ))
                     : <span className="clf-recip-none">None</span>
                   }
+                </div>
+              </div>
+
+              <div className="clf-recip-row">
+                <span className="clf-recip-label">Route</span>
+                <div className="clf-recip-tags">
+                  <span className="clf-recip-tag">
+                    {escalationSource || (resolvedTo.length ? 'Manual / OEM vendor' : 'FM fallback')}
+                  </span>
                 </div>
               </div>
 
@@ -1169,15 +998,16 @@ export default function CaseLoggingForm() {
                 )}
                 {i === 1 && (
                   <>
-                    <select
+                    <AddableSelect
                       className="wf-input"
                       value={wf.category}
                       disabled={!!form.productName}
-                      onChange={e => setWf(w => ({ ...w, category: e.target.value }))}
-                    >
-                      <option value="">— Select category —</option>
-                      {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                      options={categoryOptions}
+                      placeholder="— Select category —"
+                      storageKey="categories"
+                      inputPlaceholder="New category name"
+                      onChange={value => setWf(w => ({ ...w, category: value }))}
+                    />
                     {form.productName && (
                       <p className="wf-msg ok">✓ Auto-selected from “{form.productName}” — change the product to change the category.</p>
                     )}
@@ -1185,10 +1015,17 @@ export default function CaseLoggingForm() {
                 )}
                 {i === 2 && (
                   <>
-                    <select className={`wf-input ${errors.natureOfComplaint ? 'err' : ''}`} value={form.natureOfComplaint} onChange={handleNatureChange}>
-                      <option value="">— Select Nature of Complaint —</option>
-                      {visibleNatures.map(n => <option key={n.nature} value={n.nature}>{n.nature}</option>)}
-                    </select>
+                    <AddableSelect
+                      className="wf-input"
+                      error={!!errors.natureOfComplaint}
+                      value={form.natureOfComplaint}
+                      options={visibleNatures.map(n => n.nature)}
+                      placeholder="— Select Nature of Complaint —"
+                      storageKey="natures"
+                      inputPlaceholder="New nature of complaint"
+                      onAddValue={addCustomNature}
+                      onChange={handleNatureChange}
+                    />
                     {!showsTemperatureOption(form.productName) && (
                       <p className="wf-help">Temperature complaints are shown only for AC / Server Room AC (portal rule).</p>
                     )}
@@ -1301,20 +1138,19 @@ export default function CaseLoggingForm() {
                           value={wf.vendorQuery}
                           onChange={e => setWf(w => ({ ...w, vendorQuery: e.target.value }))}
                         />
-                        <select
-                          className={`wf-input ${errors.vendor ? 'err' : ''}`}
+                        <AddableSelect
+                          className="wf-input"
+                          error={!!errors.vendor}
                           value={form.vendorName}
-                          onChange={e => {
+                          options={filteredVendors}
+                          placeholder="— Select AMC vendor —"
+                          storageKey="vendors"
+                          inputPlaceholder="New AMC vendor name"
+                          onChange={value => {
                             setWf(w => ({ ...w, vendorFreeText: '' }));
-                            setForm(f => ({ ...f, vendorName: e.target.value }));
+                            setForm(f => ({ ...f, vendorName: value }));
                           }}
-                        >
-                          <option value="">— Select AMC vendor —</option>
-                          {filteredVendors.map(v => <option key={v} value={v}>{v}</option>)}
-                          {form.vendorName && !filteredVendors.includes(form.vendorName) && (
-                            <option value={form.vendorName}>{form.vendorName}</option>
-                          )}
-                        </select>
+                        />
                         <input
                           className="wf-input"
                           type="text"
@@ -1338,22 +1174,20 @@ export default function CaseLoggingForm() {
                           value={wf.vendorQuery}
                           onChange={e => setWf(w => ({ ...w, vendorQuery: e.target.value }))}
                         />
-                        <select
-                          className={`wf-input ${errors.vendor ? 'err' : ''}`}
+                        <AddableSelect
+                          className="wf-input"
+                          error={!!errors.vendor}
                           value={form.vendorName === 'N/A — HO Direct' ? '__none__' : form.vendorName}
-                          onChange={e => {
-                            const v = e.target.value;
+                          options={filteredBrands}
+                          extraOptions={[{ value: '__none__', label: 'None of the above (HO team will handle)' }]}
+                          placeholder="— Select brand —"
+                          storageKey="vendors"
+                          inputPlaceholder="New brand name"
+                          onChange={value => {
                             setWf(w => ({ ...w, noneBrand: '' }));
-                            setForm(f => ({ ...f, vendorName: v === '__none__' ? 'N/A — HO Direct' : v }));
+                            setForm(f => ({ ...f, vendorName: value === '__none__' ? 'N/A — HO Direct' : value }));
                           }}
-                        >
-                          <option value="">— Select brand —</option>
-                          {filteredBrands.map(v => <option key={v} value={v}>{v}</option>)}
-                          <option value="__none__">None of the above (HO team will handle)</option>
-                          {form.vendorName && !filteredBrands.includes(form.vendorName) && form.vendorName !== 'N/A — HO Direct' && (
-                            <option value={form.vendorName}>{form.vendorName}</option>
-                          )}
-                        </select>
+                        />
                         {form.vendorName === 'N/A — HO Direct' && (
                           <input
                             className="wf-input"
@@ -1382,20 +1216,19 @@ export default function CaseLoggingForm() {
                           value={wf.vendorQuery}
                           onChange={e => setWf(w => ({ ...w, vendorQuery: e.target.value }))}
                         />
-                        <select
-                          className={`wf-input ${errors.vendor ? 'err' : ''}`}
+                        <AddableSelect
+                          className="wf-input"
+                          error={!!errors.vendor}
                           value={form.vendorName}
-                          onChange={e => {
+                          options={filteredVendors}
+                          placeholder="— Select vendor —"
+                          storageKey="vendors"
+                          inputPlaceholder="New vendor name"
+                          onChange={value => {
                             setWf(w => ({ ...w, vendorFreeText: '' }));
-                            setForm(f => ({ ...f, vendorName: e.target.value }));
+                            setForm(f => ({ ...f, vendorName: value }));
                           }}
-                        >
-                          <option value="">— Select vendor —</option>
-                          {filteredVendors.map(v => <option key={v} value={v}>{v}</option>)}
-                          {form.vendorName && !filteredVendors.includes(form.vendorName) && (
-                            <option value={form.vendorName}>{form.vendorName}</option>
-                          )}
-                        </select>
+                        />
                         <input
                           className="wf-input"
                           type="text"
@@ -1576,15 +1409,14 @@ export default function CaseLoggingForm() {
                     </div>
                     <div className="field" style={{ marginTop: 12 }}>
                       <label>Warranty Vendor <span style={{ color: '#64748b', fontWeight: 400 }}>(manufacturer handling the claim)</span></label>
-                      <select
+                      <AddableSelect
                         value={warrantyVendor}
-                        onChange={e => setWarrantyVendor(e.target.value)}
-                      >
-                        <option value="">— Same as AMC vendor ({form.vendorName || 'none selected'}) —</option>
-                        {[...new Set(products.map(p => p.vendor).filter(Boolean))].sort().map(v => (
-                          <option key={v} value={v}>{v}</option>
-                        ))}
-                      </select>
+                        options={[...new Set(products.map(p => p.vendor).filter(Boolean))].sort()}
+                        placeholder={`— Same as AMC vendor (${form.vendorName || 'none selected'}) —`}
+                        storageKey="vendors"
+                        inputPlaceholder="New warranty vendor name"
+                        onChange={setWarrantyVendor}
+                      />
                       <p className="hint">Select the manufacturer handling the warranty claim.</p>
                     </div>
                   </>
@@ -1625,23 +1457,23 @@ export default function CaseLoggingForm() {
                           setUnitLocations(updated);
                         }}
                       />
-                      <select
+                      <AddableSelect
                         className="unit-loc-input"
                         style={{ marginTop: 6 }}
                         value={unitNatures[i] !== undefined ? unitNatures[i] : ''}
-                        onChange={e => {
+                        options={natures.map(n => n.nature)}
+                        placeholder={`— Same as main: ${form.natureOfComplaint || 'none selected'} —`}
+                        storageKey="natures"
+                        inputPlaceholder="New nature of complaint"
+                        onAddValue={addCustomNature}
+                        onChange={value => {
                           const updated = Array.from({ length: quantity }, (_, j) =>
                             unitNatures[j] !== undefined ? unitNatures[j] : ''
                           );
-                          updated[i] = e.target.value;
+                          updated[i] = value;
                           setUnitNatures(updated);
                         }}
-                      >
-                        <option value="">— Same as main: {form.natureOfComplaint || 'none selected'} —</option>
-                        {natures.map(n => (
-                          <option key={n.nature} value={n.nature}>{n.nature}</option>
-                        ))}
-                      </select>
+                      />
                     </div>
                   ))}
                 </div>
