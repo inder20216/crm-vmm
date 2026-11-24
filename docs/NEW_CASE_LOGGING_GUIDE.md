@@ -8,6 +8,14 @@ The form has one identification block at the top, a **9-step inline workflow**, 
 natures and vendors come from live SQL reference data — wait for
 "Loading product and nature lists from SQL…" to disappear before filling the form.
 
+### Adding an option that is not in the list
+The Product, Category, Complaint nature and Vendor dropdowns include **➕ Add new…**.
+Selecting it opens an inline value box; press **Enter** or **Add** to create and select
+the value immediately. New natures are saved to the master sheet so they also appear in
+Settings, Email Inbox and reports. Products, categories and vendors are remembered in
+this browser until a master-data entry exists. The Warranty dropdown intentionally stays
+fixed to the three portal statuses (`Under Warranty`, `Under AMC`, `Not Applicable`).
+
 ---
 
 ## 0. Identify Complainant & Store (above the workflow)
@@ -136,6 +144,9 @@ Shown below the workflow card.
    - a warning if a similar complaint for the same store + product exists in the last 7 days,
    - the full detail summary (including unit split),
    - resolved escalation **To / CC** recipients, with optional extra **To** and **CC** emails.
+      The **To** address is chosen automatically: a manually entered vendor email wins,
+      then the store-wise AMC row for the product, then the OEM escalation matrix.
+      If none resolves, the email falls back to the Facility Manager (when available).
 4. Click **Confirm — Log Case** to post the complaint(s).
    - One complaint is logged per unit.
    - One consolidated escalation email is sent for all units.
@@ -143,3 +154,17 @@ Shown below the workflow card.
    Use **Log New Case** to start over.
 
 **Clear Form** resets all steps and state without submitting.
+
+## Email Inbox — automatic missing-details request
+
+When an incoming email is parsed and required details are still missing, the CRM
+automatically replies on the original thread to the client sender, keeps the
+original CC list, and marks the email **Awaiting Info** in the WIP list. No
+complaint is logged from that email until the client replies and it is re-parsed.
+
+The automatic reply lists the exact missing fields (for example store code,
+product name, nature of complaint, contact number) and is sent only once per
+conversation. A hidden `VMM-MISSING-INFO` marker in the reply and a local
+per-thread guard prevent repeated clarification emails if the email is parsed
+again. Set `AUTO_MISSING_INFO_REPLY = false` in `EmailComplaints.jsx` to return
+to the manual **Ask for Missing Info** draft flow.

@@ -14,6 +14,46 @@ export const STAGES = {
 
 const REQUIRED_FIELDS = ['storeCode', 'productName', 'natureOfProblem', 'description'];
 
+export const MISSING_INFO_MARKER = 'VMM-MISSING-INFO';
+
+const MISSING_INFO_LABELS = {
+  storeCode: 'Store code',
+  employeeCode: 'Employee code',
+  employeeName: 'Employee name',
+  contactNumber: 'Contact number',
+  productName: 'Product name',
+  natureOfProblem: 'Nature of complaint',
+  description: 'Problem description',
+};
+
+export function buildMissingInfoReply(missingFields = [], context = {}) {
+  const fields = [...new Set(missingFields.filter(Boolean))]
+    .map(f => MISSING_INFO_LABELS[f] || f.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase()));
+  return [
+    'Dear Store Team,',
+    '',
+    'Thank you for writing to us. We could not log the complaint because the following details were not available in your email:',
+    '',
+    ...(fields.length ? fields.map(f => `• ${f}`) : ['• Complaint details required by the template']),
+    '',
+    'Kindly reply to this email with the above information so we can register and assign the complaint.',
+    '',
+    ...(context.subject ? [`Reference: ${context.subject}`] : []),
+    '',
+    'Regards,',
+    'VMM Helpdesk Team',
+    'Open Mind Services Limited',
+  ].join('\n');
+}
+
+export function hasMissingInfoReply(messages = []) {
+  return (messages || []).some(m => {
+    const text = [m.uniqueBodyHtml, m.bodyHtml, m.body, m.uniqueBody, m.bodyPreview]
+      .filter(Boolean).join(' ');
+    return text.includes(MISSING_INFO_MARKER);
+  });
+}
+
 export function normalizeText(value) {
   return (value || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }

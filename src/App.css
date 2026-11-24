@@ -255,6 +255,21 @@ body {
 .wf-radio.active { border-color: #4f46e5; background: #eef2ff; color: #4338ca; }
 .wf-radio input { margin: 0; accent-color: #4f46e5; }
 .wf-stack { display: flex; flex-direction: column; gap: 8px; }
+.wf-addable { display: flex; flex-direction: column; gap: 6px; }
+.wf-add-row { display: flex; align-items: center; gap: 6px; }
+.wf-control .wf-add-input {
+  flex: 1; min-width: 0; width: auto;
+  padding: 7px 10px; font-size: 12px;
+}
+.wf-add-save,
+.wf-add-cancel {
+  padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 700;
+  cursor: pointer; white-space: nowrap;
+}
+.wf-add-save { border: none; background: #4f46e5; color: #fff; }
+.wf-add-save:hover { background: #4338ca; }
+.wf-add-cancel { border: 1px solid #d1d5db; background: #fff; color: #475569; }
+.wf-add-cancel:hover { background: #f8fafc; }
 .wf-file { padding: 8px !important; }
 .wf-review {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 20px;
@@ -481,6 +496,32 @@ body {
   white-space: nowrap;
 }
 .product-option-empty { padding: 12px 14px; font-size: 13px; color: #94a3b8; }
+.product-add { border-top: 1px solid #e2e8f0; background: #fafafa; padding: 8px 10px; }
+.product-add-toggle {
+  width: 100%; padding: 8px 6px; border: none; border-radius: 6px;
+  background: none; color: #4f46e5; font-size: 12.5px; font-weight: 700;
+  text-align: left; cursor: pointer;
+}
+.product-add-toggle:hover { background: #eef2ff; }
+.product-add-form { display: flex; flex-direction: column; gap: 6px; }
+.product-add-form input {
+  width: 100%; padding: 7px 9px; border: 1.5px solid #d1d5db; border-radius: 6px;
+  font-size: 12px; background: #fff;
+}
+.product-add-form input:focus {
+  outline: none; border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79,70,229,.12);
+}
+.product-add-actions { display: flex; gap: 6px; }
+.product-add-save,
+.product-add-cancel {
+  padding: 7px 11px; border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.product-add-save { border: none; background: #4f46e5; color: #fff; }
+.product-add-save:hover:not(:disabled) { background: #4338ca; }
+.product-add-save:disabled { opacity: .5; cursor: not-allowed; }
+.product-add-cancel { border: 1px solid #d1d5db; background: #fff; color: #475569; }
+.product-add-cancel:hover { background: #f1f5f9; }
+.product-add-hint { margin: 0; font-size: 11px; color: #94a3b8; }
 
 /* ── No Image checkbox ── */
 .no-image-check {

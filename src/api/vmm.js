@@ -20,6 +20,23 @@ async function get(base, path, params = {}) {
   return r.json();
 }
 
+// The employee endpoint only filters by `code` or `mobile`. When neither is
+// available (common for store replies signed only with a name), it returns the
+// full employee master, so cache that single response for the session.
+let employeeListPromise = null;
+
+async function getEmployeeList() {
+  if (!employeeListPromise) {
+    employeeListPromise = get(SQL, 'vmm-sp-employee')
+      .then(r => r.employees || [])
+      .catch(err => {
+        employeeListPromise = null;
+        throw err;
+      });
+  }
+  return employeeListPromise;
+}
+
 async function post(base, path, body) {
   const r = await fetch(`${base}/${path}`, {
     method: 'POST',
@@ -62,6 +79,8 @@ export const vmm = {
   lookupStore:       (code)   => get(SQL, 'vmm-sp-store',          { code }),
   lookupEmployee:         (code)   => get(SQL, 'vmm-sp-employee', { code }),
   lookupEmployeeByMobile: (mobile) => get(SQL, 'vmm-sp-employee', { mobile }),
+  // Full master used as a fallback when AI/body text has no code or mobile.
+  getEmployees:            ()       => getEmployeeList(),
   getProducts:       ()       => get(SQL, 'vmm-sp-products'),
   getNatures:        ()       => get(SQL, 'vmm-sp-natures'),
   getDelayReasons:   ()       => get(SQL, 'vmm-sp-delay-reasons'),

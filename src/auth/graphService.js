@@ -51,6 +51,16 @@ function buildRecipients(input) {
   });
 }
 
+// Only pass real addresses to Graph. AMC sheets also contain websites and
+// "a@x.com / b@x.com" style separators.
+function cleanEmailList(value) {
+  return [...new Set(String(value || '')
+    .split(/[,;/]/)
+    .map(e => e.trim())
+    .filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)))]
+    .join(', ');
+}
+
 function formatMessage(m) {
   const fromAddr = m.from?.emailAddress?.address || '';
   const fromName = m.from?.emailAddress?.name || fromAddr;
@@ -434,49 +444,86 @@ async function sendFromSharedMailbox({ subject, htmlBody, toAddresses, ccAddress
 }
 
 // ── Resolve vendor email for escalation routing ───────────────────────────────
-// Priority: store-specific AMC map → state-wise OEM escalation → pan-India fallback
-function resolveVendorEmail(storeCode, productName, vendorName, storeState, storeCity) {
+// Priority: store-specific AMC map → state/city-wise OEM escalation → product OEM.
+// Exported so the UI can preview the same address that sendEscalationEmail uses.
+export function resolveVendorEmail(storeCode, productName, vendorName, storeState, storeCity) {
   const prod = (productName || '').toLowerCase().trim();
-  const code = (storeCode || '').toUpperCase();
+  const code = (storeCode || '').toUpperCase().trim();
 
   // AC / Server Room AC → store-specific AMC vendor (most accurate)
   if (prod === 'ac' || prod === 'air conditioner' || prod === 'server room ac') {
     const entry = AC_VENDOR_MAP[code];
-    if (entry?.ve) return { email: entry.ve, name: entry.vn || vendorName };
+    const email = cleanEmailList(entry?.ve);
+    if (email) return { email, name: entry.vn || vendorName || '', source: 'AC AMC vendor map' };
   }
 
   // Lift / Escalator → store-specific vendor
   if (prod === 'lift' || prod === 'escalator' || prod === 'lift battery') {
     const entry = LIFT_VENDOR_MAP[code];
-    if (entry?.ve) return { email: entry.ve, name: entry.vn || vendorName };
+    const email = cleanEmailList(entry?.ve);
+    if (email) return { email, name: entry.vn || vendorName || '', source: 'Lift AMC vendor map' };
   }
 
   // City+state-wise OEM escalation (Carrier, BlueStar, Hitachi, Fuji, Adtech, KONE, Atandra…)
   const oemHit = getVendorEscalation(vendorName, storeState, 1, storeCity);
-  if (oemHit) return { email: oemHit.email, name: vendorName, level: 1, vendor: oemHit.vendor };
+  const oemEmail = cleanEmailList(oemHit?.email);
+  if (oemEmail) return { email: oemEmail, name: vendorName || oemHit.vendor, source: `${oemHit.vendor} escalation matrix` };
 
   // Product-name-based OEM lookup when no vendorName provided
   const oemByProd = getVendorEscalation(productName, storeState, 1, storeCity);
-  if (oemByProd) return { email: oemByProd.email, name: productName, level: 1, vendor: oemByProd.vendor };
+  const oemProdEmail = cleanEmailList(oemByProd?.email);
+  if (oemProdEmail) return { email: oemProdEmail, name: productName, source: `${oemByProd.vendor} escalation matrix` };
 
   return null;
 }
 
+// One routing decision shared by preview, content builder and sender.
+// Priority: manual entry → live store-AMC row → static AMC/OEM matrix → FM fallback.
+function resolveEscalationVendor({
+  storeCode, productName, vendorName, storeState, storeCity,
+  manualVendorEmail = '', amcVendorEmail = '', amcVendorName = '', amcVendorSource = '',
+}) {
+  const manualEmail = cleanEmailList(manualVendorEmail);
+  if (manualEmail) {
+    return { email: manualEmail, name: vendorName || '', source: 'manual' };
+  }
+  const liveAmcEmail = cleanEmailList(amcVendorEmail);
+  if (liveAmcEmail) {
+    return {
+      email: liveAmcEmail,
+      name: amcVendorName || vendorName || '',
+      source: amcVendorSource || 'Store AMC vendor',
+    };
+  }
+  return resolveVendorEmail(storeCode, productName, vendorName, storeState, storeCity);
+}
+
 // ── Resolve escalation recipients (exported so form can preview before sending) ─
-export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity, skipSM = false, skipHO = false, skipFM = false, manualVendorEmail = '' }) {
-  const smEmail        = getSmEmail(storeCode);
-  const hoPoc          = HO_POC[productName] || HO_POC['DEFAULT'];
-  const resolvedVendor = vendorName || '—';
-  const isVendorCase   = !!manualVendorEmail;
+export function resolveEscalationRecipients({
+  storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity,
+  skipSM = false, skipHO = false, skipFM = false,
+  manualVendorEmail = '', amcVendorEmail = '', amcVendorName = '', amcVendorSource = '',
+}) {
+  const smEmail = getSmEmail(storeCode);
+  const hoPoc   = HO_POC[productName] || HO_POC['DEFAULT'];
+
+  const autoVendor          = resolveEscalationVendor({
+    storeCode, productName, vendorName, storeState, storeCity,
+    manualVendorEmail, amcVendorEmail, amcVendorName, amcVendorSource,
+  });
+  const vendorEmail         = autoVendor?.email || '';
+  const vendorNameEffective = autoVendor?.name || vendorName || '';
+  const isVendorCase        = !!vendorEmail;
+  const resolvedVendor      = vendorNameEffective || '—';
 
   const makeAddr = (email, name) => ({ emailAddress: { address: email, name: name || '' } });
   const addUniq  = (list, email, name) => {
-    if (email && !list.some(x => x.emailAddress.address === email)) list.push(makeAddr(email, name));
+    if (email && !list.some(x => x.emailAddress.address.toLowerCase() === email.toLowerCase())) list.push(makeAddr(email, name));
   };
 
-  // TO = all vendor emails (comma-separated or single) entered manually / from matrix
-  const toAddresses = manualVendorEmail
-    ? manualVendorEmail.split(',').map(e => e.trim()).filter(Boolean).map(e => makeAddr(e, vendorName || ''))
+  // TO = all vendor emails (comma-separated or single), manual or auto-resolved
+  const toAddresses = vendorEmail
+    ? vendorEmail.split(',').map(e => e.trim()).filter(Boolean).map(e => makeAddr(e, vendorNameEffective))
     : [];
 
   // CC = always SM + FM + HO (auto from store lookup)
@@ -485,7 +532,14 @@ export function resolveEscalationRecipients({ storeCode, storeEmail, storeName, 
   if (!skipFM && fmEmail)      addUniq(ccAddresses, fmEmail, fmName);
   if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
 
-  return { toAddresses, ccAddresses, isVendorCase, resolvedVendor };
+  return {
+    toAddresses,
+    ccAddresses,
+    isVendorCase,
+    resolvedVendor,
+    vendorEmail,
+    vendorSource: autoVendor?.source || '',
+  };
 }
 
 // ── Build escalation email content (recipients + HTML) without sending ────────
@@ -496,7 +550,7 @@ export function buildEscalationEmailContent({
   extraToEmails = [], extraCcEmails = [],
   attachmentLinks = [],
   skipSM = false, skipHO = false, skipFM = false,
-  manualVendorEmail = '',
+  manualVendorEmail = '', amcVendorEmail = '', amcVendorName = '', amcVendorSource = '',
 }) {
   const nos = complaints.map(c => c.complaintno).join(', ');
   const isMultiple = complaints.length > 1;
@@ -506,14 +560,21 @@ export function buildEscalationEmailContent({
       list.push(makeAddr(email, name));
   };
 
-  const isVendorCase = !!manualVendorEmail;
+  const autoVendor = resolveEscalationVendor({
+    storeCode, productName, vendorName, storeState, storeCity,
+    manualVendorEmail, amcVendorEmail, amcVendorName, amcVendorSource,
+  });
+  const vendorEmail         = autoVendor?.email || '';
+  const vendorNameEffective = autoVendor?.name || vendorName || '';
+  const isVendorCase        = !!vendorEmail;
   let toAddresses = [];
   let ccAddresses = [];
 
   if (isVendorCase) {
     const resolved = resolveEscalationRecipients({
-      storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity,
-      skipSM, skipHO, skipFM, manualVendorEmail,
+      storeCode, storeEmail, storeName, fmEmail, fmName,
+      vendorName: vendorNameEffective, productName, storeState, storeCity,
+      skipSM, skipHO, skipFM, manualVendorEmail: vendorEmail,
     });
     toAddresses = resolved.toAddresses;
     ccAddresses = resolved.ccAddresses;
@@ -537,7 +598,7 @@ export function buildEscalationEmailContent({
     ? `[VMM] New Complaints — ${storeCode} | ${productName} | ${complaints.length} Units`
     : `[VMM] New Complaint — ${storeCode} | ${productName} | ${nos}`;
 
-  const resolvedVendor = isVendorCase ? (vendorName || '—') : (fmName || 'FM');
+  const resolvedVendor = isVendorCase ? (vendorNameEffective || '—') : (fmName || 'FM');
 
   const rows = complaints.map((c, i) => `
     <tr style="background:${i % 2 === 0 ? '#fff' : '#f8fafc'}">
@@ -599,7 +660,7 @@ export async function sendEscalationEmailDirect({
   extraToEmails = [], extraCcEmails = [],
   attachmentLinks = [],
   skipSM = false, skipHO = false, skipFM = false,
-  manualVendorEmail = '',
+  manualVendorEmail = '', amcVendorEmail = '', amcVendorName = '', amcVendorSource = '',
 }) {
   const nos = complaints.map(c => c.complaintno).join(', ');
   const isMultiple = complaints.length > 1;
@@ -609,15 +670,22 @@ export async function sendEscalationEmailDirect({
       list.push(makeAddr(email, name));
   };
 
-  const isVendorCase = !!manualVendorEmail;
+  const autoVendor = resolveEscalationVendor({
+    storeCode, productName, vendorName, storeState, storeCity,
+    manualVendorEmail, amcVendorEmail, amcVendorName, amcVendorSource,
+  });
+  const vendorEmail         = autoVendor?.email || '';
+  const vendorNameEffective = autoVendor?.name || vendorName || '';
+  const isVendorCase        = !!vendorEmail;
   let toAddresses = [];
   let ccAddresses = [];
 
   if (isVendorCase) {
     // Vendor-based: TO = vendor email(s), CC = SM + FM + HO
     const resolved = resolveEscalationRecipients({
-      storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity,
-      skipSM, skipHO, skipFM, manualVendorEmail,
+      storeCode, storeEmail, storeName, fmEmail, fmName,
+      vendorName: vendorNameEffective, productName, storeState, storeCity,
+      skipSM, skipHO, skipFM, manualVendorEmail: vendorEmail,
     });
     toAddresses = resolved.toAddresses;
     ccAddresses = resolved.ccAddresses;
@@ -644,7 +712,7 @@ export async function sendEscalationEmailDirect({
     ? `[VMM] New Complaints — ${storeCode} | ${productName} | ${complaints.length} Units`
     : `[VMM] New Complaint — ${storeCode} | ${productName} | ${nos}`;
 
-  const resolvedVendor = isVendorCase ? (vendorName || '—') : (fmName || 'FM');
+  const resolvedVendor = isVendorCase ? (vendorNameEffective || '—') : (fmName || 'FM');
 
   const rows = complaints.map((c, i) => `
     <tr style="background:${i % 2 === 0 ? '#fff' : '#f8fafc'}">
