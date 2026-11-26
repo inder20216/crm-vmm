@@ -132,6 +132,14 @@ export default function App() {
         <div className="app-body">
           <header className="top-bar">
             <span className="top-bar-title">VMM Facility Management CRM</span>
+            {import.meta.env.DEV && (
+              <span
+                title="Local testing: SQL writes go to demo_vmm and outbound emails are suppressed."
+                style={{ fontSize: 10, background: '#f59e0b22', color: '#b45309', borderRadius: 10, padding: '2px 8px', fontWeight: 700 }}
+              >
+                DEMO MODE
+              </span>
+            )}
             <div className="top-bar-user" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <span className="user-dot" />
               <span>{currentUser.name}</span>

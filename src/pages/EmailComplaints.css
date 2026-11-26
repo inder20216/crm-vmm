@@ -23,6 +23,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  position: relative;
 }
 .ec-tabs {
   display: flex;
@@ -45,6 +46,61 @@
 }
 .ec-refresh-btn:hover:not(:disabled) { background: #f8fafc; border-color: #7c3aed; color: #7c3aed; }
 .ec-refresh-btn:disabled { opacity: .5; cursor: default; }
+
+.ec-auto-control { position: relative; }
+.ec-auto-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .15s;
+}
+.ec-auto-btn:hover { border-color: #7c3aed; }
+.ec-auto-btn.on { border-color: #16a34a; background: #f0fdf4; color: #15803d; }
+.ec-auto-btn.off { border-color: #cbd5e1; color: #64748b; }
+.ec-auto-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94a3b8;
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, .16);
+}
+.ec-auto-btn.on .ec-auto-dot { background: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, .16); }
+.ec-auto-confirm {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 300px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .16);
+}
+.ec-auto-confirm-text { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #475569; }
+.ec-auto-confirm-text strong { color: #1e293b; font-size: 13px; }
+.ec-auto-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.ec-auto-confirm-actions button {
+  padding: 5px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
+}
+.ec-auto-confirm-actions .ec-auto-confirm-ok { background: #16a34a; border-color: #16a34a; color: #fff; }
+
 .ec-folder-label { font-size: 12px; font-weight: 700; color: #1e293b; }
 .ec-loading-dot  { font-size: 11px; color: #94a3b8; margin-left: auto; }
 .ec-tab {
@@ -195,6 +251,10 @@
 /* WIP list row items */
 .ec-wip-agent-tag {
   font-size: 10px; background: #dbeafe; color: #1e40af;
+  padding: 1px 6px; border-radius: 10px; font-weight: 700;
+}
+.ec-awaiting-info-tag {
+  font-size: 10px; background: #fef3c7; color: #92400e;
   padding: 1px 6px; border-radius: 10px; font-weight: 700;
 }
 .ec-wip-reply-count {

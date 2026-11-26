@@ -5,8 +5,13 @@
 
 The form has one identification block at the top, a **9-step inline workflow**, an optional
 **AC multi-unit** section, and a **confirm-before-submit** modal. Categories, products,
-natures and vendors come from live SQL reference data — wait for
+natures and vendors come from SQL reference data — wait for
 "Loading product and nature lists from SQL…" to disappear before filling the form.
+
+> **Testing safety:** in local dev (`npm run dev`) every SQL-backed CRM call is routed to
+> `demo_vmm` through the `/demo-api` Vite middleware. Outbound confirmation, clarification,
+> escalation, follow-up, closure and NTR emails are suppressed. A **DEMO MODE** badge in the
+> top bar confirms this. Production builds continue to use the live API.
 
 ### Adding an option that is not in the list
 The Product, Category, Complaint nature and Vendor dropdowns include **➕ Add new…**.
@@ -147,6 +152,8 @@ Shown below the workflow card.
       The **To** address is chosen automatically: a manually entered vendor email wins,
       then the store-wise AMC row for the product, then the OEM escalation matrix.
       If none resolves, the email falls back to the Facility Manager (when available).
+      The client / complainant email is always added to **CC** so the sender is
+      kept in the loop when the escalation is sent.
 4. Click **Confirm — Log Case** to post the complaint(s).
    - One complaint is logged per unit.
    - One consolidated escalation email is sent for all units.
@@ -163,8 +170,33 @@ original CC list, and marks the email **Awaiting Info** in the WIP list. No
 complaint is logged from that email until the client replies and it is re-parsed.
 
 The automatic reply lists the exact missing fields (for example store code,
-product name, nature of complaint, contact number) and is sent only once per
-conversation. A hidden `VMM-MISSING-INFO` marker in the reply and a local
+product name, nature of complaint, employee code and contact number) and is sent
+only once per case. A `VMM-MISSING-INFO` marker in the reply body and a local
 per-thread guard prevent repeated clarification emails if the email is parsed
 again. Set `AUTO_MISSING_INFO_REPLY = false` in `EmailComplaints.jsx` to return
 to the manual **Ask for Missing Info** draft flow.
+
+The client's follow-up is matched to the original WIP by conversation ID, and —
+when the client starts a fresh thread — by normalised subject and sender. Fields
+already confirmed in the WIP are locked, so only the newly supplied details are
+read. Logging the follow-up resolves the original WIP and marks both messages
+`Case Logged`; a second case is never created for the same complaint.
+
+## Email Inbox — automatic case creation (off by default)
+
+Automatic case creation is controlled by the toolbar toggle and defaults to
+**off**. The choice is persisted locally, so new inbox emails stay in the Inbox
+for an agent to open, parse and log manually unless the toggle is turned on. No
+case, confirmation reply or escalation email is created automatically while it
+is off.
+
+When enabled, the pipeline loads the full thread, parses it with the same AI +
+master-data reconciliation used by the manual wizard, logs a complete case,
+sends a confirmation reply on the client thread, and sends the escalation email
+using the resolved store AMC / OEM / FM recipient. Missing details produce the
+one-time clarification reply and an **Awaiting Info** WIP record instead of a
+partial case. Duplicate creation is guarded by per-message and per-conversation
+local-storage keys plus the `Case Logged` tag/category.
+
+Turn the toggle on only when you intentionally want automatic logging. In local
+demo mode outbound mail is suppressed and all SQL writes go to `demo_vmm`.
