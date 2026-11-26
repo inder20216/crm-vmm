@@ -58,6 +58,48 @@ export function normalizeText(value) {
   return (value || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+function threadSubject(email) {
+  return normalizeText(email?.subject || '')
+    .replace(/^(re|fw|fwd)\s+/, '')
+    .replace(/^demo for testing purpose only\s*/, '')
+    .trim();
+}
+
+function threadFrom(email) {
+  return normalizeText(email?.fromAddr || email?.from || email?.fromDisplay || '');
+}
+
+/** Identity used to connect a client's follow-up to the original WIP case. */
+export function threadIdentity(email) {
+  const conversationId = String(email?.conversationId || '').trim();
+  if (conversationId) return `conv:${conversationId}`;
+  return `sub:${threadSubject(email)}|from:${threadFrom(email)}`;
+}
+
+export function wipEmailId(wip) {
+  return String(wip?.id || wip?.emailId || '').trim();
+}
+
+/**
+ * Find the WIP that owns an email. Graph keeps replies in one conversationId,
+ * but some clients start a fresh thread with "Re:" in the subject — so also
+ * match on the normalised subject + sender before considering a new case.
+ */
+export function findWipForEmail(wips = [], email = {}) {
+  const list = (wips || []).filter(Boolean);
+  const emailId = String(email?.id || '').trim();
+  const conversationId = String(email?.conversationId || '').trim();
+  const identity = threadIdentity(email);
+  const subject = threadSubject(email);
+  const from = threadFrom(email);
+
+  return list.find(w => wipEmailId(w) && wipEmailId(w) === emailId)
+    || list.find(w => conversationId && String(w.conversationId || '') === conversationId)
+    || list.find(w => identity && threadIdentity(w) === identity)
+    || list.find(w => subject && from && threadSubject(w) === subject && threadFrom(w) === from)
+    || null;
+}
+
 export function findBestByText(items, text, fields) {
   const target = normalizeText(text);
   if (!target) return null;

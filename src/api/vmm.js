@@ -1,13 +1,54 @@
 import * as graph from '../auth/graphService';
 
-// Core CRM data is backed by SQL and exposed by the deployed self-hosted n8n
-// workflows. The old PHP host (VITE_PHP_BASE) is not deployed, so use the live
-// SQL API for all case-logging lookups and reference data.
-const SQL = import.meta.env.VITE_API_BASE || 'https://automation.openmindhelpline.com/webhook';
-const PHP = import.meta.env.VITE_PHP_BASE || SQL;
+// Core CRM data is backed by SQL. During local development it is forced to the
+// demo_vmm database through the Vite middleware; production keeps the live API.
+// Email workflows stay on their own base so they do not accidentally hit the
+// demo endpoint.
+const LIVE_SQL = import.meta.env.VITE_API_BASE || 'https://automation.openmindhelpline.com/webhook';
+const PHP = import.meta.env.VITE_PHP_BASE || LIVE_SQL;
+const APP_BASE = import.meta.env.BASE_URL || '/';
 
-// Self-hosted n8n — email workflows only
-const BASE = SQL;
+// Dev: every SQL-backed CRM call goes to the local /demo-api middleware, which
+// only accepts DB_NAME=demo_vmm. Live writes are therefore impossible locally.
+const SQL = import.meta.env.DEV
+  ? `${APP_BASE}demo-api`
+  : (import.meta.env.VITE_SQL_API_BASE || LIVE_SQL);
+
+// Self-hosted n8n — email workflows only (never redirected to the demo DB).
+const BASE = import.meta.env.VITE_EMAIL_API_BASE || LIVE_SQL;
+
+// Demo/test guard: outbound mail is suppressed while running in dev mode.
+export const DEMO_MODE = import.meta.env.DEV && import.meta.env.VITE_ALLOW_LIVE_EMAIL !== 'true';
+const demoEmailResult = (data = {}) => Promise.resolve({ success: true, demo: true, ...data });
+
+// In dev, WIP records stay in this browser. They only hold parsed email fields
+// used to continue the same case — never a live write to the email workflow.
+const DEMO_WIP_KEY = 'vmm_demo_wips';
+function readDemoWips() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DEMO_WIP_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+function writeDemoWips(wips) {
+  localStorage.setItem(DEMO_WIP_KEY, JSON.stringify(wips));
+}
+function saveDemoWip(data = {}) {
+  const id = String(data.emailId || data.id || '').trim();
+  if (!id) return Promise.resolve({ success: false, error: 'emailId required' });
+  const row = { ...data, emailId: id, id: data.id || id, updatedAt: new Date().toISOString() };
+  const wips = readDemoWips();
+  const at = wips.findIndex(w => String(w.emailId || w.id) === id);
+  if (at >= 0) wips[at] = { ...wips[at], ...row };
+  else wips.unshift(row);
+  writeDemoWips(wips);
+  return Promise.resolve({ success: true, wip: row });
+}
+function resolveDemoWip(emailId) {
+  const id = String(emailId || '').trim();
+  writeDemoWips(readDemoWips().filter(w => String(w.emailId || w.id) !== id));
+  return Promise.resolve({ success: true });
+}
 
 // Cloud n8n — non-email workflows only
 const CLOUD = import.meta.env.VITE_CLOUD_API_BASE || '/cloud-webhook';
@@ -48,7 +89,6 @@ async function post(base, path, body) {
 }
 
 // Store-wise AMC vendors: local Vite middleware in dev, PHP SQL API in production.
-const APP_BASE = import.meta.env.BASE_URL || '/';
 const AMC_READ_URL = import.meta.env.DEV
   ? `${APP_BASE}api/amc-vendors`
   : `${PHP}/vmm-amc-vendors`;
@@ -72,6 +112,41 @@ async function saveAmcVendorRow(row) {
   const data = await r.json().catch(() => ({}));
   if (!r.ok || data.success === false) throw new Error(data.error || `AMC save failed: ${r.status}`);
   return data.row || row;
+}
+
+// Build a Teams Adaptive Card payload from the same recipient resolution used
+// by the real escalation email. The card is preview-only; no mail is sent.
+function buildTeamsEscalationCard(data) {
+  const built = graph.buildEscalationEmailContent(data);
+  if (!built) throw new Error('No escalation recipients resolved');
+
+  const complaints = Array.isArray(data.complaints) ? data.complaints : [];
+  const lines = [
+    `Store: ${data.storeName || ''} (${data.storeCode || ''})`,
+    `Product: ${data.productName || ''}`,
+    `Nature: ${data.natureOfComplaint || '—'}`,
+    data.vendorName ? `Vendor: ${data.vendorName}` : `Assigned FM: ${data.fmName || '—'}`,
+    data.fmName ? `FM: ${data.fmName}${data.fmEmail ? ` <${data.fmEmail}>` : ''}` : '',
+    ...complaints.flatMap(c => [
+      `Complaint ${c.complaintno}`,
+      `  Location: ${c.productLocation || '—'}`,
+      `  Expected closure: ${c.edcDate || '—'}`,
+      c.description ? `  Remarks: ${c.description}` : '',
+    ]),
+    data.vendorName || data.manualVendorEmail || data.amcVendorEmail
+      ? 'Please attend the complaint and confirm assignment within 24 hours.'
+      : 'Please attend to this complaint and coordinate with the store within 24 hours.',
+    'DEMO PREVIEW ONLY — no email was sent.',
+  ].filter(Boolean);
+
+  return {
+    kind: 'Escalation mail',
+    to: built.toEmail,
+    cc: built.ccEmails,
+    subject: `[DEMO] for testing purpose only — ${built.subject}`,
+    lines,
+    sample: true,
+  };
 }
 
 export const vmm = {
@@ -98,6 +173,9 @@ export const vmm = {
   sendEscalationEmail:          (data) => graph.sendEscalationEmailDirect(data),
   buildEscalationEmailContent: (data) => graph.buildEscalationEmailContent(data),
   resolveEscalationRecipients: (data) => graph.resolveEscalationRecipients(data),
+  teamsStatus:                 ()     => get(SQL, 'vmm-teams-status'),
+  postTeamsPreview:            (card) => post(SQL, 'vmm-teams-preview', card),
+  previewEscalationInTeams:    (data) => post(SQL, 'vmm-teams-preview', buildTeamsEscalationCard(data)),
   sendClosureEmail:    (data)   => graph.sendClosureEmailDirect(data),
   // vmm-recent-complaints has no live workflow — the SQL search endpoint with
   // the `store` filter returns the same store complaint list.
@@ -127,7 +205,7 @@ export const vmm = {
   sendNewEmail:       (data)    => graph.sendSharedMailboxEmail(data),
   logEmailActivity:  (data)   => post(BASE,  'vmm-email-log-activity', data),
   searchSentEmail:(complaintno, date) => get(BASE, 'vmm-search-sent-email', { complaintno, ...(date ? { date } : {}) }),
-  sendFollowupEmail:(data) => post(BASE, 'vmm-send-followup-email', data),
+  sendFollowupEmail:(data) => DEMO_MODE ? demoEmailResult(data) : post(BASE, 'vmm-send-followup-email', data),
 
   // ── Cloud n8n — attachments, templates, AI ──────────
   fetchAttachments:   (msgId)   => get(CLOUD,  'vmm-fetch-attachments', { messageId: msgId }),
@@ -135,9 +213,11 @@ export const vmm = {
   parseEmail:         (data)    => post(BASE,  'vmm-parse-email',       data),
 
   // ── WIP Emails ──────────────────────────────────────
-  saveWip:        (data) => post(BASE, 'vmm-wip-save',    data),
-  getOpenWips:    ()     => get(BASE,  'vmm-wip-list'),
-  resolveWip:     (emailId) => post(BASE, 'vmm-wip-resolve', { emailId }),
+  // Dev keeps WIP locally so a follow-up can continue the same case without
+  // touching the live email workflow. Production keeps the original n8n APIs.
+  saveWip:        (data)    => DEMO_MODE ? saveDemoWip(data) : post(BASE, 'vmm-wip-save',    data),
+  getOpenWips:    ()        => DEMO_MODE ? Promise.resolve({ wips: readDemoWips() }) : get(BASE, 'vmm-wip-list'),
+  resolveWip:     (emailId) => DEMO_MODE ? resolveDemoWip(emailId) : post(BASE, 'vmm-wip-resolve', { emailId }),
 
   // ── Non-Trading Requests ─────────────────────────────
   listNtr:             ()      => get(BASE,  'vmm-ntr-list'),
@@ -145,7 +225,7 @@ export const vmm = {
   validateNtrArticles: (items) => post(BASE, 'vmm-ntr-validate', { items }),
   saveNtr:             (data)  => post(BASE, 'vmm-ntr-save',     data),
   fetchNtrMasterXlsx:  ()      => post(BASE, 'vmm-ntr-fetch-xlsx', {}),
-  sendNtrEmail:        (data)  => post(BASE, 'vmm-ntr-email', data),
+  sendNtrEmail:        (data)  => DEMO_MODE ? demoEmailResult(data) : post(BASE, 'vmm-ntr-email', data),
 
   // ── User Management ──────────────────────────────────
   listUsers:    ()       => get(BASE, 'vmm-users-list'),

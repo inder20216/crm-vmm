@@ -7,6 +7,10 @@ const GRAPH = 'https://graph.microsoft.com/v1.0';
 const TEST_MODE  = false;
 const TEST_EMAIL = 'inder@openmind.in';
 
+// Dev/testing uses demo_vmm and must never send real mail. Set
+// VITE_ALLOW_LIVE_EMAIL=true only when explicitly authorised for live testing.
+const DEMO_MODE = import.meta.env.DEV && import.meta.env.VITE_ALLOW_LIVE_EMAIL !== 'true';
+
 // Delta link persisted in sessionStorage so refresh survives page reloads within the session
 const DELTA_KEY = 'vmm_inbox_delta_link';
 
@@ -314,6 +318,7 @@ function buildThreadResult(raw) {
 
 // ── Send new email from shared mailbox ────────────────────────────────────────
 export async function sendSharedMailboxEmail({ toEmail, ccEmails, subject, htmlBody }) {
+  if (DEMO_MODE) return { messageId: 'demo-draft', conversationId: 'demo-conversation', demo: true };
   const token = await getAccessToken();
   const base = `${GRAPH}/users/${encodeURIComponent(SHARED_MAILBOX)}`;
 
@@ -341,6 +346,7 @@ export async function sendSharedMailboxEmail({ toEmail, ccEmails, subject, htmlB
 
 // ── Reply on thread ───────────────────────────────────────────────────────────
 export async function replyOnThread({ messageId, htmlBody, toEmail, ccEmails }) {
+  if (DEMO_MODE) return { success: true, demo: true };
   const token = await getAccessToken();
   const base = `${GRAPH}/users/${encodeURIComponent(SHARED_MAILBOX)}`;
 
@@ -409,6 +415,7 @@ export async function markAsRead(messageId) {
 const ESCALATION_TEAM = ['inder@openmind.in', 'deepansh@openmind.in'];
 
 async function sendFromSharedMailbox({ subject, htmlBody, toAddresses, ccAddresses = [] }) {
+  if (DEMO_MODE) return { success: true, messageId: 'demo-draft', demo: true };
   const token = await getAccessToken();
   const base = `${GRAPH}/users/${encodeURIComponent(SHARED_MAILBOX)}`;
 
@@ -501,6 +508,7 @@ function resolveEscalationVendor({
 // ── Resolve escalation recipients (exported so form can preview before sending) ─
 export function resolveEscalationRecipients({
   storeCode, storeEmail, storeName, fmEmail, fmName, vendorName, productName, storeState, storeCity,
+  clientEmail = '', clientName = '',
   skipSM = false, skipHO = false, skipFM = false,
   manualVendorEmail = '', amcVendorEmail = '', amcVendorName = '', amcVendorSource = '',
 }) {
@@ -514,23 +522,33 @@ export function resolveEscalationRecipients({
   const vendorEmail         = autoVendor?.email || '';
   const vendorNameEffective = autoVendor?.name || vendorName || '';
   const isVendorCase        = !!vendorEmail;
-  const resolvedVendor      = vendorNameEffective || '—';
+  const resolvedVendor      = isVendorCase ? (vendorNameEffective || '—') : (fmName || 'FM');
 
   const makeAddr = (email, name) => ({ emailAddress: { address: email, name: name || '' } });
   const addUniq  = (list, email, name) => {
     if (email && !list.some(x => x.emailAddress.address.toLowerCase() === email.toLowerCase())) list.push(makeAddr(email, name));
   };
 
-  // TO = all vendor emails (comma-separated or single), manual or auto-resolved
-  const toAddresses = vendorEmail
-    ? vendorEmail.split(',').map(e => e.trim()).filter(Boolean).map(e => makeAddr(e, vendorNameEffective))
-    : [];
-
-  // CC = always SM + FM + HO (auto from store lookup)
+  // Preview must match buildEscalationEmailContent/sendEscalationEmailDirect:
+  // vendor cases go to the vendor, otherwise the FM is the TO recipient.
+  const toAddresses = [];
   const ccAddresses = [];
-  if (!skipSM && smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
-  if (!skipFM && fmEmail)      addUniq(ccAddresses, fmEmail, fmName);
-  if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
+  if (isVendorCase) {
+    vendorEmail.split(',').map(e => e.trim()).filter(Boolean)
+      .forEach(e => addUniq(toAddresses, e, vendorNameEffective));
+    if (!skipSM && smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
+    if (storeEmail)              addUniq(ccAddresses, storeEmail, storeName || 'Store');
+    if (!skipFM && fmEmail)      addUniq(ccAddresses, fmEmail, fmName);
+    if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
+    // The client who raised the complaint is always kept in the loop on escalation.
+    if (clientEmail)             addUniq(ccAddresses, clientEmail, clientName || 'Client');
+  } else if (fmEmail) {
+    addUniq(toAddresses, fmEmail, fmName || '');
+    if (!skipSM && smEmail)      addUniq(ccAddresses, smEmail, `SM ${storeCode}`);
+    if (storeEmail)              addUniq(ccAddresses, storeEmail, storeName || '');
+    if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
+    if (clientEmail)             addUniq(ccAddresses, clientEmail, clientName || 'Client');
+  }
 
   return {
     toAddresses,
@@ -546,6 +564,7 @@ export function resolveEscalationRecipients({
 // Returns { toEmail, ccEmails, subject, htmlBody } for passing to n8n
 export function buildEscalationEmailContent({
   storeCode, storeName, storeEmail, fmName, fmEmail, region, zone, storeState, storeCity,
+  clientEmail = '', clientName = '',
   vendorName, productName, natureOfComplaint, complaints = [],
   extraToEmails = [], extraCcEmails = [],
   attachmentLinks = [],
@@ -573,6 +592,7 @@ export function buildEscalationEmailContent({
   if (isVendorCase) {
     const resolved = resolveEscalationRecipients({
       storeCode, storeEmail, storeName, fmEmail, fmName,
+      clientEmail, clientName,
       vendorName: vendorNameEffective, productName, storeState, storeCity,
       skipSM, skipHO, skipFM, manualVendorEmail: vendorEmail,
     });
@@ -585,6 +605,7 @@ export function buildEscalationEmailContent({
     if (!skipSM) { const smEmail = getSmEmail(storeCode); if (smEmail) addUniq(ccAddresses, smEmail, `SM ${storeCode}`); }
     if (storeEmail) addUniq(ccAddresses, storeEmail, storeName || '');
     if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
+    if (clientEmail) addUniq(ccAddresses, clientEmail, clientName || 'Client');
   }
 
   const extrasInput = v => (Array.isArray(v) ? v.join(',') : (v || ''));
@@ -656,6 +677,7 @@ export function buildEscalationEmailContent({
 // ── Escalation email ──────────────────────────────────────────────────────────
 export async function sendEscalationEmailDirect({
   storeCode, storeName, storeEmail, fmName, fmEmail, region, zone, storeState, storeCity,
+  clientEmail = '', clientName = '',
   vendorName, productName, natureOfComplaint, complaints = [],
   extraToEmails = [], extraCcEmails = [],
   attachmentLinks = [],
@@ -684,6 +706,7 @@ export async function sendEscalationEmailDirect({
     // Vendor-based: TO = vendor email(s), CC = SM + FM + HO
     const resolved = resolveEscalationRecipients({
       storeCode, storeEmail, storeName, fmEmail, fmName,
+      clientEmail, clientName,
       vendorName: vendorNameEffective, productName, storeState, storeCity,
       skipSM, skipHO, skipFM, manualVendorEmail: vendorEmail,
     });
@@ -697,6 +720,7 @@ export async function sendEscalationEmailDirect({
     if (!skipSM) { const smEmail = getSmEmail(storeCode); if (smEmail) addUniq(ccAddresses, smEmail, `SM ${storeCode}`); }
     if (storeEmail) addUniq(ccAddresses, storeEmail, storeName || '');
     if (!skipHO && hoPoc?.email) addUniq(ccAddresses, hoPoc.email, hoPoc.name);
+    if (clientEmail) addUniq(ccAddresses, clientEmail, clientName || 'Client');
   }
 
   // Merge any user-added extras
@@ -782,6 +806,7 @@ export async function sendNtrEmailDirect({
   requestNo, invalidItems = [],
   attachmentBase64 = '',
 }) {
+  if (DEMO_MODE) return { success: true, demo: true };
   const invalidBlock = invalidItems.length
     ? `<p style="margin:16px 0 6px">The following article numbers were not found in the non-trading master file:</p>
        <table style="border-collapse:collapse;margin-bottom:16px">

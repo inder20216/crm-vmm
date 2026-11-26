@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
-import { vmm } from '../api/vmm';
+import { vmm, DEMO_MODE } from '../api/vmm';
 import { useAuth } from '../context/AuthContext';
 import { HO_POC } from '../auth/escalationMatrix';
 import { searchSentEmails, replyOnThread } from '../auth/graphService';
 import { mergeNatures } from '../data/natures';
 import { useAmcVendors } from '../hooks/useAmcVendors';
 import EmailComplaintWizard from '../components/CaseLogging/EmailComplaintWizard';
-import { buildReplyPreview, buildReplyHtml, buildMissingInfoReply, hasMissingInfoReply, MISSING_INFO_MARKER } from '../workflow/emailPipeline';
+import {
+  buildReplyPreview, buildReplyHtml, buildMissingInfoReply, hasMissingInfoReply, runParse,
+  findWipForEmail, threadIdentity, wipEmailId, MISSING_INFO_MARKER,
+} from '../workflow/emailPipeline';
 import {
   ATTACHMENT_MANDATORY, WARRANTY_LABELS, getAutoWarranty, getFixedVendor,
   isHoDirectProduct, isGensetProduct, isTemperatureNature, showsTemperatureOption,
@@ -47,7 +50,7 @@ function extractEmployeeFields(res = {}, bodyText = '') {
 
   const rawContact = firstNonEmpty(
     res.contactNumber, res.contactNo, res.contact_no, res.contact,
-    res.mobile, res.phone, res.phoneNumber, employee.mobile,
+    res.mobile, res.phone, res.phoneNumber, employee.mobile, employee.mobileno,
     provided.contactNumber, provided.contact, provided.mobile
   );
 
@@ -227,8 +230,34 @@ function matchDelaySub(stored, mainCat) {
 }
 
 const REQUIRED_FIELDS = ['storeCode'];
+const OWN_ADDR = 'vmm.helpdesk@openmind.in';
 // Set false to keep the missing-details draft manual during testing/troubleshooting.
 const AUTO_MISSING_INFO_REPLY = true;
+// Default OFF. The toolbar toggle can enable automatic logging for newly fetched inbox emails.
+const AUTO_CASE_STORAGE_KEY = 'vmm_auto_case_creation';
+// Only treat emails received inside this window as "new" on a fresh load.
+const AUTO_CASE_LOOKBACK_MS = 30 * 60 * 1000;
+
+// Both the original "Awaiting Info" email and the client's follow-up belong to
+// the same case. Mark every related key done once the complaint is logged.
+function markCaseDone(email = {}) {
+  const id = String(email.id || email.emailId || '').trim();
+  if (id) localStorage.setItem(`vmm_auto_case_msg_${id}`, 'done');
+  const conversationId = String(email.conversationId || '').trim();
+  if (conversationId) localStorage.setItem(`vmm_auto_case_conv_${conversationId}`, 'done');
+}
+
+function markCaseAwaiting(email = {}) {
+  const id = String(email.id || email.emailId || '').trim();
+  if (id) localStorage.setItem(`vmm_auto_case_msg_${id}`, 'awaiting-info');
+  const conversationId = String(email.conversationId || '').trim();
+  if (conversationId) localStorage.setItem(`vmm_auto_case_conv_${conversationId}`, 'awaiting-info');
+}
+
+function wipValue(wip, field) {
+  return String(wip?.parsed?.[field] || '').trim();
+}
+
 const FIELD_LABELS = {
   storeCode: 'Store Code', employeeCode: 'Employee Code', employeeName: 'Employee Name',
   employeeEmail: 'Employee Email', contactNumber: 'Contact Number',
@@ -671,6 +700,8 @@ export default function EmailComplaints() {
   const [products,     setProducts]     = useState([]);  // raw rows: each row = { name, vendor, category, hoName, hoEmail, vendorEmail }
   const [natures,      setNatures]      = useState([]);
   const [parsedEdits,  setParsedEdits]  = useState({ storeCode: '', employeeCode: '', employeeName: '', employeeEmail: '', contactNumber: '', productLocation: '', description: '' });
+  const [storeDetails, setStoreDetails] = useState({});
+  const [teamsReady, setTeamsReady]     = useState(false);
   const [replyTo,         setReplyTo]         = useState([]);
   const [replyCc,         setReplyCc]         = useState([]);
   const [toInput,         setToInput]         = useState('');
@@ -715,6 +746,20 @@ export default function EmailComplaints() {
   }
   const agentId = agentIdRef.current;
 
+  // Auto-case guards: known inbox IDs stop historical emails being replayed,
+  // and the running set prevents overlapping poll cycles processing one email.
+  const knownInboxIdsRef = useRef(new Set(
+    (() => {
+      try { return (JSON.parse(sessionStorage.getItem('vmm_inbox_list') || '[]')).map(e => e.id).filter(Boolean); }
+      catch { return []; }
+    })()
+  ));
+  const autoRunningRef = useRef(new Set());
+  const [autoCaseCreation, setAutoCaseCreation] = useState(() => {
+    try { return localStorage.getItem(AUTO_CASE_STORAGE_KEY) === 'on'; }
+    catch { return false; }
+  });
+  const [autoConfirmOpen, setAutoConfirmOpen] = useState(false);
 
   // Load templates and products on mount
   useState(() => {
@@ -731,6 +776,18 @@ export default function EmailComplaints() {
   const showToast = (msg, type = 'ok') => {
     setToast({ msg, type });
     setTimeout(() => setToast(''), 3500);
+  };
+
+  const setAutoCaseMode = (next) => {
+    setAutoCaseCreation(next);
+    try { localStorage.setItem(AUTO_CASE_STORAGE_KEY, next ? 'on' : 'off'); } catch { /* storage optional */ }
+    setAutoConfirmOpen(false);
+    showToast(
+      next
+        ? 'Auto email case logging ON — new inbox emails will be logged automatically'
+        : 'Auto email case logging OFF — new inbox emails stay for manual review',
+      next ? 'warn' : 'info'
+    );
   };
 
   // New natures are saved to the master sheet immediately so they appear in
@@ -759,6 +816,324 @@ export default function EmailComplaints() {
     ));
   };
 
+  // Automatic clarification reply. Sends once per conversation, on the original
+  // thread, so a client's later reply re-parses without triggering another email.
+  // The WIP is always refreshed, even when the marker says we already asked.
+  const sendAutomaticMissingInfoReply = async ({ email, messages, parsedResult, missingFields, existingWip = null }) => {
+    const threadKey = existingWip?.threadKey || email.conversationId || email.id;
+    const localStorageKey = `vmm_missing_info_sent_${threadKey}`;
+    const alreadyAsked = localStorage.getItem(localStorageKey) === '1' || hasMissingInfoReply(messages);
+
+    if (!alreadyAsked) {
+      const preview = buildReplyPreview(parsedResult, email, messages);
+      const to = [...new Set([...preview.to, email.fromAddr]
+        .map(a => String(a || '').trim())
+        .filter(a => a && a.toLowerCase() !== OWN_ADDR.toLowerCase()))];
+
+      if (to.length) {
+        const rawCc = [
+          ...preview.cc,
+          ...(Array.isArray(email.cc) ? email.cc : String(email.cc || '').split(/[,;]/)),
+        ];
+        const toSet = new Set(to.map(a => a.toLowerCase()));
+        const cc = [...new Set(rawCc.map(a => String(a || '').trim()).filter(Boolean))]
+          .filter(a => a.toLowerCase() !== OWN_ADDR.toLowerCase() && !toSet.has(a.toLowerCase()));
+
+        const body = `${buildMissingInfoReply(missingFields, { subject: email.subject })}\n\n[${MISSING_INFO_MARKER}]`;
+        const htmlBody = buildReplyHtml(body).replace(
+          /<\/div>$/,
+          `<span style="display:none">${MISSING_INFO_MARKER}:${threadKey}</span></div>`
+        );
+
+        await vmm.sendEmailReply({
+          messageId: email.id,
+          conversationId: email.conversationId || '',
+          subject: preview.subject,
+          htmlBody,
+          body,
+          toRecipients: to,
+          ccRecipients: cc,
+        });
+        localStorage.setItem(localStorageKey, '1');
+      }
+    }
+
+    // One WIP per case. A follow-up updates the original WIP instead of adding
+    // a second one, and keeps the fields already confirmed by the client.
+    const wipId = wipEmailId(existingWip) || email.id;
+    const wip = {
+      id: wipId, emailId: wipId,
+      conversationId: existingWip?.conversationId || email.conversationId || '',
+      subject: existingWip?.subject || email.subject,
+      fromAddr: existingWip?.fromAddr || email.fromAddr,
+      storeCode: email.storeCode || parsedResult.storeCode || wipValue(existingWip, 'storeCode') || '',
+      receivedAt: existingWip?.receivedAt || email.receivedAt,
+      repliedAt: existingWip?.repliedAt || new Date().toISOString(),
+      parsed: parsedResult, status: 'Awaiting Info',
+      savedBy: existingWip?.savedBy || 'Auto VMM',
+      missingFields, threadKey,
+    };
+    setWipList(prev => [
+      ...prev.filter(w => wipEmailId(w) !== wipId
+        && !(wip.conversationId && w.conversationId && w.conversationId === wip.conversationId)),
+      wip,
+    ]);
+    vmm.saveWip({
+      emailId: wipId, conversationId: wip.conversationId,
+      subject: wip.subject || '', fromAddr: wip.fromAddr || '',
+      storeCode: wip.storeCode, receivedAt: wip.receivedAt || '',
+      repliedAt: wip.repliedAt, parsed: parsedResult, savedBy: wip.savedBy,
+      status: wip.status, missingFields, threadKey,
+    }).catch(() => {});
+
+    [wipId, email.id].filter(Boolean).forEach(id => {
+      patchEmailCategories(id, ['Awaiting Info', 'New CRM']);
+      tagEmail(id, 'awaiting-info', `Awaiting Info • ${missingFields.length} field${missingFields.length === 1 ? '' : 's'} missing`);
+    });
+    markCaseAwaiting(wip);
+    markCaseAwaiting(email);
+    setInboxEmails(prev => prev.filter(e => e.id !== email.id && e.id !== wipId));
+    setSelected(null); setParsed(null); setReplyBody('');
+    showToast(
+      alreadyAsked ? 'Still awaiting details — WIP updated' : 'Missing details requested — marked Awaiting Info',
+      'ok'
+    );
+    return !alreadyAsked;
+  };
+
+  // Fully automatic case creation for a newly arrived inbox email. Reuses the
+  // same parser, master-data reconciliation, missing-info reply and escalation
+  // resolver as the manual wizard, with a message/conversation duplicate guard.
+  const autoProcessEmail = async (email) => {
+    if (!autoCaseCreation || !email?.id) return;
+    const messageKey = `vmm_auto_case_msg_${email.id}`;
+    const convKey = email.conversationId ? `vmm_auto_case_conv_${email.conversationId}` : '';
+    if (localStorage.getItem(messageKey) === 'done' || (convKey && localStorage.getItem(convKey) === 'done')) return;
+    // The original "Awaiting Info" message stays in the WIP list; do not replay
+    // it on every refresh. Its later reply has a different message ID.
+    if (localStorage.getItem(messageKey) === 'awaiting-info'
+      && wipList.some(w => wipEmailId(w) === email.id)) return;
+    if ((email.fromAddr || '').toLowerCase() === OWN_ADDR) return;
+    if ((email.categories || []).includes('Case Logged') || emailTags[email.id]?.type === 'logged') return;
+    if (autoRunningRef.current.has(email.id)) return;
+
+    autoRunningRef.current.add(email.id);
+    localStorage.setItem(messageKey, 'pending');
+    if (convKey) localStorage.setItem(convKey, 'pending');
+
+    let wip = null;
+    try {
+      // A follow-up belongs to the original WIP case. Use its confirmed fields
+      // as locked values so a new case is never started for the same complaint.
+      wip = findWipForEmail(wipList, email);
+      if (!wip) {
+        try { wip = findWipForEmail((await vmm.getOpenWips()).wips || [], email); } catch { /* no stored WIP */ }
+      }
+      const locked = {
+        storeCode:       wipValue(wip, 'storeCode'),
+        employeeCode:    wipValue(wip, 'employeeCode'),
+        employeeName:    wipValue(wip, 'employeeName'),
+        employeeEmail:   wipValue(wip, 'employeeEmail'),
+        contactNumber:   wipValue(wip, 'contactNumber'),
+        productLocation: wipValue(wip, 'productLocation'),
+        productName:     wipValue(wip, 'productName'),
+        natureOfProblem: wipValue(wip, 'natureOfProblem'),
+        description:     wipValue(wip, 'description'),
+      };
+
+      const threadRes = await vmm.fetchThread(email.conversationId || email.id).catch(() => null);
+      const messages = threadRes?.messages || [];
+      const threadText = buildFullEmailThreadText(email, messages);
+      const parseSource = { ...email, body: threadText, bodyPreview: threadText };
+
+      let productRows = products.length ? products : [];
+      if (!productRows.length) {
+        try { productRows = (await vmm.getProducts()).products || []; } catch { /* keep empty */ }
+      }
+      let natureRows = natures.length ? natures : [];
+      if (!natureRows.length) {
+        try { natureRows = mergeNatures((await vmm.getNatures()).natures || []); } catch { /* keep empty */ }
+      }
+
+      const rawParsed = await runParse(parseSource, messages, {
+        products: productRows, natures: natureRows, templates, lockedFields: locked,
+      });
+      const bodyStoreCode = detectStoreCode(threadText, messages);
+      const parsed = reconcileParsedResult({
+        res: rawParsed, fullText: threadText, fullMessages: messages, selected: email,
+        products: productRows, natures: natureRows, locked, bodyStoreCode,
+      });
+      // Confirmed WIP values win over a weaker re-parse of the follow-up.
+      Object.entries(locked).forEach(([key, value]) => { if (value) parsed[key] = value; });
+
+      const hints = extractEmployeeFields(parsed, threadText);
+      let employee = {};
+      let employeeCode = locked.employeeCode || parsed.employeeCode || hints.employeeCode || '';
+      let contactNumber = locked.contactNumber || parsed.contactNumber || hints.contactNumber || '';
+      if (employeeCode) {
+        try { employee = (await vmm.lookupEmployee(employeeCode)).employee || {}; } catch { /* keep hint values */ }
+      }
+      if (!employee.code && contactNumber) {
+        try {
+          const byMobile = await vmm.lookupEmployeeByMobile(String(contactNumber).replace(/\D/g, ''));
+          if (byMobile?.employee?.code) employee = byMobile.employee;
+        } catch { /* best effort */ }
+      }
+      if (!employee.code) {
+        try {
+          const employees = (await vmm.getEmployees()) || [];
+          const matched = pickEmployeeForStore(employees, {
+            storeCode: parsed.storeCode || bodyStoreCode || '',
+            emails: hints.emailHints, names: hints.nameHints, mobiles: [contactNumber].filter(Boolean),
+          });
+          if (matched) employee = matched;
+        } catch { /* best effort */ }
+      }
+      employeeCode = employee.code || employeeCode || '';
+      contactNumber = employee.mobile || employee.mobileno || contactNumber || '';
+
+      const storeCode = parsed.storeCode || bodyStoreCode || employee.storeCode || '';
+      const product = matchProductMaster(productRows, parsed.productName) || findProductInThread(productRows, threadText);
+      const nature = matchNatureMaster(natureRows, parsed.natureOfProblem) || findNatureInThread(natureRows, threadText);
+      const missingFields = [];
+      if (!storeCode) missingFields.push('storeCode');
+      if (!product) missingFields.push('productName');
+      if (!nature) missingFields.push('natureOfProblem');
+      if (!(parsed.description || '').trim()) missingFields.push('description');
+      // Employee Code is mandatory for logging — ask for it even when a mobile
+      // number is present but cannot be resolved to a valid employee record.
+      if (!employeeCode) missingFields.push('employeeCode');
+      if (!contactNumber) missingFields.push('contactNumber');
+
+      const parsedForWip = {
+        ...parsed, storeCode, productName: product?.name || '', natureOfProblem: nature?.nature || '',
+        employeeCode, contactNumber, missingFromTemplate: missingFields,
+      };
+      if (missingFields.length) {
+        await sendAutomaticMissingInfoReply({
+          email, messages, parsedResult: parsedForWip, missingFields, existingWip: wip,
+        });
+        markCaseAwaiting(wip || email);
+        return;
+      }
+
+      const store = (await vmm.lookupStore(storeCode).catch(() => null))?.store || {};
+      const description = String(parsed.description || '').replace(/\n+/g, ' ').trim();
+      const warrantyLabel = getAutoWarranty(product.name) || toWarrantyLabel(parsed.contractType || '');
+      const amcVendor = resolveStoreAmcVendor(
+        amcRows, storeCode, product.name, parsed.vendorName || product.vendor || ''
+      );
+      const payload = {
+        storeCode,
+        storeName: store.name || '', city: store.city || '', region: store.region || '',
+        state: store.state || '', zone: store.zone || '',
+        storeEmail: store.email || '', smEmail: store.smEmail || store.email || '',
+        fmName: store.fmName || employee.fmName || '', fmEmail: store.fmEmail || '',
+        fmMobile: store.fmMobile || '',
+        managerName: store.managerName || employee.managerName || '', managerMobile: store.managerMobile || '',
+        asmName: store.asmName || employee.asmName || '', asmMobile: store.asmMobile || '',
+        employeeCode, employeeName: employee.name || parsed.employeeName || '',
+        employeeEmail: employee.email || parsed.employeeEmail || '', contactNumber,
+        designation: employee.designation || '',
+        productLocation: parsed.productLocation || 'See email',
+        source: 'E-mail', emailSubject: email.subject || '', callTxnId: '',
+        emailMessageId: email.id, emailConversationId: email.conversationId || '',
+        emailFrom: email.fromAddr || '', emailTo: email.toDisplay || '',
+        uid: currentUser?.id ?? 1,
+        productName: product.name,
+        vendorName: parsed.vendorName || product.vendor || '',
+        productType: product.category || '',
+        natureOfComplaint: nature.nature,
+        complaintType: nature.type || parsed.complaintType || 'Repair',
+        contractType: warrantyLabel ? toContractType(warrantyLabel) : '',
+        warrantyStatus: warrantyLabel, tatDays: nature.tatDays || 7,
+        description, vendorEmail: amcVendor?.email || '', remarks: description, attachmentLinks: [],
+      };
+
+      const logRes = await vmm.logComplaint(payload);
+      if (!logRes.success) throw new Error(logRes.message || 'Complaint log failed');
+
+      // Confirmation reply on the client's original thread.
+      const confirmBody = [
+        'Dear Store Team,', '', 'Your complaint has been registered successfully.', '',
+        `Complaint No: ${logRes.complaintno}`, `Product: ${product.name}`,
+        `Expected Closure: ${logRes.edcDate || '—'}`, '',
+        'Our team will follow up within the expected closure date.', '',
+        'Regards,', 'Open Mind Services',
+      ].join('\n');
+      const originalMsg = [...messages].sort((a, b) => new Date(a.receivedDateTime) - new Date(b.receivedDateTime))[0];
+      const threadCCs = (originalMsg?.cc || '').split(',').map(c => String(c).trim()).filter(Boolean)
+        .filter(cc => cc.toLowerCase() !== OWN_ADDR.toLowerCase());
+      const hoCC = (HO_POC[product.name] || HO_POC['DEFAULT'])?.email;
+      const allCCs = [...new Set([...threadCCs, hoCC].filter(Boolean))].join(';');
+      await vmm.sendEmailReply({
+        messageId: email.id, htmlBody: buildReplyHtml(confirmBody), body: confirmBody,
+        toRecipients: email.fromAddr || store.email || '', ccRecipients: allCCs,
+      }).catch(err => console.warn('Auto confirmation reply failed:', err));
+
+      // Escalation mail with the resolved store AMC/OEM/FM recipient.
+      let escalationFailed = false;
+      await vmm.sendEscalationEmail({
+        storeCode, storeName: store.name || '', storeEmail: store.email || '',
+        fmName: payload.fmName, fmEmail: payload.fmEmail,
+        vendorName: payload.vendorName, productName: product.name,
+        natureOfComplaint: nature.nature, storeState: store.state || '', storeCity: store.city || '',
+        manualVendorEmail: '', amcVendorEmail: amcVendor?.email || '',
+        amcVendorName: amcVendor?.name || '', amcVendorSource: amcVendor?.source || '',
+        complaints: [{
+          complaintno: logRes.complaintno, productLocation: payload.productLocation,
+          natureOfProblem: nature.nature, edcDate: logRes.edcDate, description,
+        }],
+        attachmentLinks: [], extraToEmails: [], extraCcEmails: [],
+        skipSM: false, skipHO: false, skipFM: false,
+      }).catch(err => {
+        escalationFailed = true;
+        console.warn('Auto escalation failed:', err);
+      });
+
+      markCaseDone(email);
+      vmm.categorizeEmail(email.id, ['Case Logged', 'New CRM']).catch(() => {});
+      tagEmail(email.id, 'logged', `Logged • ${logRes.complaintno} • Auto VMM`);
+      if (wip && wipEmailId(wip) !== email.id) {
+        const originalId = wipEmailId(wip);
+        markCaseDone(wip);
+        vmm.categorizeEmail(originalId, ['Case Logged', 'New CRM']).catch(() => {});
+        tagEmail(originalId, 'logged', `Logged • ${logRes.complaintno} • Auto VMM`);
+      }
+      if (wip) {
+        const originalId = wipEmailId(wip);
+        setWipList(prev => prev.filter(x =>
+          wipEmailId(x) !== originalId &&
+          !(wip.conversationId && x.conversationId && x.conversationId === wip.conversationId)
+        ));
+        vmm.resolveWip(originalId).catch(() => {});
+      }
+      setInboxEmails(prev => prev.map(e =>
+        e.id === email.id || (wip && e.id === wipEmailId(wip))
+          ? { ...e, hasStoreCode: true }
+          : e
+      ));
+      showToast(
+        escalationFailed
+          ? `Auto case ${logRes.complaintno} created — escalation email failed, use Resend`
+          : `Auto case ${logRes.complaintno} created`,
+        escalationFailed ? 'warn' : 'ok'
+      );
+    } catch (err) {
+      if (wip) {
+        // Keep the same case in Awaiting Info so the next reply continues it.
+        markCaseAwaiting(wip);
+        markCaseAwaiting(email);
+      } else {
+        localStorage.removeItem(messageKey);
+        if (convKey) localStorage.removeItem(convKey);
+      }
+      showToast(`Auto case failed — left for manual review (${err?.message || 'unknown error'})`, 'warn');
+    } finally {
+      autoRunningRef.current.delete(email.id);
+    }
+  };
+
   const POLL_MS = 30000;
   const pollRef = useRef(null);
 
@@ -780,6 +1155,16 @@ export default function EmailComplaints() {
       const fetched = res.emails || [];
       const isIncremental = !!res.isIncremental;
 
+      let freshForAuto = [];
+      if (folder !== 'sent') {
+        const cutoff = Date.now() - AUTO_CASE_LOOKBACK_MS;
+        freshForAuto = fetched.filter(e => {
+          const received = new Date(e.receivedAt || e.receivedDateTime || 0).getTime();
+          return e.id && !knownInboxIdsRef.current.has(e.id) && received >= cutoff;
+        });
+        fetched.forEach(e => { if (e.id) knownInboxIdsRef.current.add(e.id); });
+      }
+
       if (folder === 'sent') {
         setSentEmails(fetched);
       } else {
@@ -789,6 +1174,10 @@ export default function EmailComplaints() {
           try { sessionStorage.setItem('vmm_inbox_list', JSON.stringify(merged)); } catch {}
           return merged;
         });
+      }
+
+      if (freshForAuto.length) {
+        freshForAuto.forEach(e => { autoProcessEmail(e).catch(() => {}); });
       }
 
       if (!silent) {
@@ -918,7 +1307,7 @@ export default function EmailComplaints() {
             ...prev,
             employeeName: empRes.employee.name,
             employeeEmail: empRes.employee.email || '',
-            contactNumber: prev.contactNumber || empRes.employee.mobile || '',
+            contactNumber: prev.contactNumber || empRes.employee.mobile || empRes.employee.mobileno || '',
           }));
         } else {
           setResolvedEmpName('');
@@ -973,20 +1362,18 @@ export default function EmailComplaints() {
     if (tab === 'sent') fetchEmails('sent');
     if (tab === 'matrix' && !escalationMatrix.length && !emLoading) {
       setEmLoading(true);
-      vmm.getEscalationMatrix().then(r => setEscalationMatrix(r.contacts || [])).catch(() => {}).finally(() => setEmLoading(false));
+      vmm.getEscalationMatrix().then(r => setEscalationMatrix(r.contacts || r.matrix || [])).catch(() => {}).finally(() => setEmLoading(false));
     }
   };
 
   // Reply counts: inbox emails with the same conversationId as a WIP, but NOT the original email and NOT our own sent messages
-  const OWN_ADDR = 'vmm.helpdesk@openmind.in';
   const wipReplyCounts = {};
   inboxEmails.forEach(e => {
-    if (!e.conversationId) return;
+    if (!e.id && !e.conversationId) return;
     if ((e.fromAddr || '').toLowerCase() === OWN_ADDR) return; // skip our own sent messages appearing in inbox
-    const match = wipList.find(w =>
-      w.conversationId && w.conversationId === e.conversationId && w.id !== e.id // exclude the original WIP email itself
-    );
-    if (match) wipReplyCounts[match.id] = (wipReplyCounts[match.id] || 0) + 1;
+    const match = findWipForEmail(wipList, e);
+    const matchId = wipEmailId(match);
+    if (match && matchId !== e.id) wipReplyCounts[matchId] = (wipReplyCounts[matchId] || 0) + 1;
   });
   const totalWipReplies = Object.values(wipReplyCounts).reduce((s, n) => s + n, 0);
 
@@ -1064,66 +1451,6 @@ export default function EmailComplaints() {
       .catch(() => {});
   };
 
-  // Automatic clarification reply. Sends once per conversation, on the original
-  // thread, so a client's later reply re-parses without triggering another email.
-  const sendAutomaticMissingInfoReply = async ({ email, messages, parsedResult, missingFields }) => {
-    const threadKey = email.conversationId || email.id;
-    const localStorageKey = `vmm_missing_info_sent_${threadKey}`;
-    if (localStorage.getItem(localStorageKey) === '1' || hasMissingInfoReply(messages)) return false;
-
-    const preview = buildReplyPreview(parsedResult, email, messages);
-    const to = [...new Set([...preview.to, email.fromAddr]
-      .map(a => String(a || '').trim())
-      .filter(a => a && a.toLowerCase() !== OWN_ADDR.toLowerCase()))];
-    if (!to.length) return false;
-
-    const rawCc = [
-      ...preview.cc,
-      ...(Array.isArray(email.cc) ? email.cc : String(email.cc || '').split(/[,;]/)),
-    ];
-    const toSet = new Set(to.map(a => a.toLowerCase()));
-    const cc = [...new Set(rawCc.map(a => String(a || '').trim()).filter(Boolean))]
-      .filter(a => a.toLowerCase() !== OWN_ADDR.toLowerCase() && !toSet.has(a.toLowerCase()));
-
-    const body = buildMissingInfoReply(missingFields, { subject: email.subject });
-    const htmlBody = buildReplyHtml(body).replace(
-      /<\/div>$/,
-      `<span style="display:none">${MISSING_INFO_MARKER}:${threadKey}</span></div>`
-    );
-
-    await vmm.sendEmailReply({
-      messageId: email.id,
-      conversationId: email.conversationId || '',
-      subject: preview.subject,
-      htmlBody,
-      body,
-      toRecipients: to,
-      ccRecipients: cc,
-    });
-
-    localStorage.setItem(localStorageKey, '1');
-    const wip = {
-      id: email.id, conversationId: email.conversationId || '', subject: email.subject,
-      fromAddr: email.fromAddr, storeCode: email.storeCode || parsedResult.storeCode || '',
-      receivedAt: email.receivedAt, repliedAt: new Date().toISOString(),
-      parsed: parsedResult, status: 'Awaiting Info', savedBy: 'Auto VMM',
-    };
-    setWipList(prev => [...prev.filter(w => w.id !== email.id), wip]);
-    vmm.saveWip({
-      emailId: email.id, conversationId: email.conversationId || '',
-      subject: email.subject || '', fromAddr: email.fromAddr || '',
-      storeCode: wip.storeCode, receivedAt: email.receivedAt || '',
-      repliedAt: wip.repliedAt, parsed: parsedResult, savedBy: wip.savedBy,
-      status: wip.status,
-    }).catch(() => {});
-    patchEmailCategories(email.id, ['Awaiting Info', 'New CRM']);
-    tagEmail(email.id, 'awaiting-info', `Awaiting Info • ${missingFields.length} field${missingFields.length === 1 ? '' : 's'} missing`);
-    setInboxEmails(prev => prev.filter(e => e.id !== email.id));
-    setSelected(null); setParsed(null); setReplyBody('');
-    showToast('Missing details requested — marked Awaiting Info', 'ok');
-    return true;
-  };
-
   const lookupResendComplaint = async () => {
     if (!resendNo.trim()) return;
     setResendLoading(true); setResendData(null); setResendVendorEmail(''); setResendDescription('');
@@ -1152,6 +1479,8 @@ export default function EmailComplaints() {
         storeCode:         resendData.storecode   || '',
         storeName:         resendData.storename   || '',
         storeEmail:        resendData.storeemail  || '',
+        clientEmail:       resendData.storeemail  || '',
+        clientName:        resendData.storename   || '',
         fmName:            resendData.fmname      || '',
         fmEmail:           resendData.fmemail     || '',
         region:            resendData.storeregion || '',
@@ -1227,19 +1556,21 @@ export default function EmailComplaints() {
         }
       }
 
-      // Confirmed values are locked for re-parses. Employee code is only locked
-      // when it passes the known format (VMM+3 digits OR 5-7 digits).
-      const lockedFields = parsedEdits ? {
-        storeCode:       parsedEdits.storeCode       || '',
-        employeeCode:    (/^VMM\d{3}$|^\d{5,7}$/.test(parsedEdits.employeeCode || '')) ? parsedEdits.employeeCode : '',
-        employeeName:    parsedEdits.employeeName     || resolvedEmpName || '',
-        employeeEmail:   parsedEdits.employeeEmail    || '',
-        contactNumber:   parsedEdits.contactNumber    || '',
-        productLocation: parsedEdits.productLocation  || '',
-        productName:     parsedEdits.productName      || '',
-        natureOfProblem: parsedEdits.natureOfProblem  || '',
-        description:     parsedEdits.description      || '',
-      } : {};
+      // A follow-up to an "Awaiting Info" email must continue that same case.
+      // Its confirmed WIP fields are locked before parsing the new details.
+      const wip = findWipForEmail(wipList, selected);
+      const empCode = parsedEdits.employeeCode || wipValue(wip, 'employeeCode');
+      const lockedFields = {
+        storeCode:       parsedEdits.storeCode       || wipValue(wip, 'storeCode')       || '',
+        employeeCode:    (/^VMM\d{3}$|^\d{5,7}$/.test(empCode)) ? empCode : '',
+        employeeName:    parsedEdits.employeeName     || wipValue(wip, 'employeeName')   || resolvedEmpName || '',
+        employeeEmail:   parsedEdits.employeeEmail    || wipValue(wip, 'employeeEmail')  || '',
+        contactNumber:   parsedEdits.contactNumber    || wipValue(wip, 'contactNumber')  || '',
+        productLocation: parsedEdits.productLocation  || wipValue(wip, 'productLocation')|| '',
+        productName:     parsedEdits.productName      || wipValue(wip, 'productName')    || '',
+        natureOfProblem: parsedEdits.natureOfProblem  || wipValue(wip, 'natureOfProblem')|| '',
+        description:     parsedEdits.description      || wipValue(wip, 'description')    || '',
+      };
 
       let res = await vmm.parseEmail({
         fromEmail:  selected.fromAddr,
@@ -1359,7 +1690,7 @@ export default function EmailComplaints() {
         try {
           const empRes = await vmm.lookupEmployee(effectiveEmpCode);
           const lookupName = empRes.found && empRes.employee?.name ? empRes.employee.name : '';
-          const lookupMobile = empRes.employee?.mobile || '';
+          const lookupMobile = empRes.employee?.mobile || empRes.employee?.mobileno || '';
           res.employeeName = lookupName || effectiveName;
           res.employeeEmail = empRes.employee?.email || effectiveEmail;
           if (!effectiveContact && lookupMobile) effectiveContact = lookupMobile;
@@ -1406,13 +1737,22 @@ export default function EmailComplaints() {
       if (!matchedProduct) missingFields.push('productName');
       if (!matchedNature) missingFields.push('natureOfProblem');
       if (!(res.description || '').trim()) missingFields.push('description');
-      if (!res.employeeCode && !res.contactNumber) missingFields.push('contactNumber');
+      if (!res.employeeCode) missingFields.push('employeeCode');
+      if (!res.contactNumber) missingFields.push('contactNumber');
       for (const field of res.missingFromTemplate || []) {
         if (field === 'storeCode' && (res.storeCode || bodyStoreCode || selected.storeCode)) continue;
         if (field === 'productName' && matchedProduct) continue;
         if (field === 'natureOfProblem' && matchedNature) continue;
         if (field === 'description' && res.description) continue;
         if (!missingFields.includes(field)) missingFields.push(field);
+      }
+
+      // Keep the parsed state, manual draft and WIP record in sync with the
+      // deterministic scan. The AI webhook can omit missingFromTemplate even
+      // when the thread is incomplete, which previously hid "Still missing".
+      if (missingFields.length) {
+        res.missingFromTemplate = missingFields;
+        res.suggestedReply = buildMissingInfoReply(missingFields, { subject: selected?.subject });
       }
 
       setParsedEdits(prev => ({
@@ -1448,6 +1788,7 @@ export default function EmailComplaints() {
             messages: fullMessages,
             parsedResult: res,
             missingFields,
+            existingWip: wip,
           });
         } catch (err) {
           showToast('Could not send missing-details request — please reply manually', 'warn');
@@ -1570,15 +1911,15 @@ export default function EmailComplaints() {
         : '';
       const sharedPayload = {
         storeCode,
-        storeName:           store.name || parsed.storeName || '',
-        city:                store.city || '',
-        region:              store.region || '',
-        state:               store.state || '',
-        zone:                store.zone || '',
-        storeEmail:          store.email || '',
-        smEmail:             store.smEmail || store.email || '',
-        fmName:              store.fmName || employee.fmName || '',
-        fmEmail:             store.fmEmail || '',
+        storeName:           store.name || storeDetails.name || parsed.storeName || '',
+        city:                store.city || storeDetails.city || '',
+        region:              store.region || storeDetails.region || '',
+        state:               store.state || storeDetails.state || '',
+        zone:                store.zone || storeDetails.zone || '',
+        storeEmail:          store.email || storeDetails.email || '',
+        smEmail:             store.smEmail || store.email || storeDetails.smEmail || storeDetails.email || '',
+        fmName:              store.fmName || storeDetails.fmName || employee.fmName || '',
+        fmEmail:             store.fmEmail || storeDetails.fmEmail || '',
         fmMobile:            store.fmMobile || '',
         managerName:         store.managerName || employee.managerName || '',
         managerMobile:       store.managerMobile || '',
@@ -1587,7 +1928,7 @@ export default function EmailComplaints() {
         employeeCode:        parsedEdits.employeeCode || parsed.employeeCode || employee.code || '',
         employeeName:        resolvedEmpName || parsedEdits.employeeName || parsed.employeeName || employee.name || '',
         employeeEmail:       parsedEdits.employeeEmail || parsed.employeeEmail || employee.email || '',
-        contactNumber:       parsedEdits.contactNumber || parsed.contactNumber || employee.mobile || '',
+        contactNumber:       parsedEdits.contactNumber || parsed.contactNumber || employee.mobile || employee.mobileno || '',
         designation:         employee.designation || '',
         productLocation:     parsedEdits.productLocation || parsed.productLocation || 'See email',
         source:              'E-mail',
@@ -1597,6 +1938,10 @@ export default function EmailComplaints() {
         emailConversationId: selected.conversationId || '',
         emailFrom:           selected.fromAddr || '',
         emailTo:             selected.toDisplay || '',
+        // The original sender is the client for email complaints. Keep them in
+        // the CC list when the escalation email goes to the vendor/FM.
+        clientEmail:         selected.fromAddr || parsedEdits.employeeEmail || parsed.employeeEmail || store.email || '',
+        clientName:          selected.fromName || selected.fromAddr || '',
         uid: currentUser?.id ?? 1,
       };
 
@@ -1691,12 +2036,14 @@ export default function EmailComplaints() {
         await vmm.sendEmailReply({ messageId: replyMsgId, htmlBody: confirmHtml, body: confirmBody, toRecipients: selected.fromAddr || sharedPayload.storeEmail, ccRecipients: allCCs })
           .catch(err => { console.warn('Confirmation reply failed:', err); showToast('Complaint logged but confirmation email could not be sent', 'warn'); });
         vmm.categorizeEmail(replyMsgId, ['Case Logged', 'New CRM']).catch(() => {});
-        const wipMatch = wipList.find(w =>
-          w.id === selected.id ||
-          (w.conversationId && selected.conversationId && w.conversationId === selected.conversationId)
-        ) || (selected.status === 'WIP' ? selected : null);
-        if (wipMatch && wipMatch.id !== replyMsgId) {
-          vmm.categorizeEmail(wipMatch.id, ['Case Logged', 'New CRM']).catch(() => {});
+        markCaseDone(selected);
+        const wipMatch = findWipForEmail(wipList, selected)
+          || (['WIP', 'Awaiting Info'].includes(selected.status) ? selected : null);
+        const wipMatchId = wipEmailId(wipMatch);
+        if (wipMatch && wipMatchId !== replyMsgId) {
+          markCaseDone(wipMatch);
+          vmm.categorizeEmail(wipMatchId, ['Case Logged', 'New CRM']).catch(() => {});
+          tagEmail(wipMatchId, 'logged', `Logged • ${nos} • Agent ${agentId.slice(-4)}`);
         }
         // One escalation email per complaint item (different product/vendor each)
         for (const { res, item, payload: iPayload, itemAttachments, amcVendor } of allResults) {
@@ -1704,6 +2051,8 @@ export default function EmailComplaints() {
             storeCode:         sharedPayload.storeCode  || '',
             storeName:         sharedPayload.storeName  || '',
             storeEmail:        sharedPayload.storeEmail || '',
+            clientEmail:       sharedPayload.clientEmail || '',
+            clientName:        sharedPayload.clientName  || '',
             fmName:            sharedPayload.fmName     || '',
             fmEmail:           sharedPayload.fmEmail    || '',
             vendorName:        item.vendorName          || '',
@@ -1729,12 +2078,12 @@ export default function EmailComplaints() {
         }
         claimEmail(selected.id, 'release');
         tagEmail(selected.id, 'logged', `Logged • ${nos} • Agent ${agentId.slice(-4)}`);
-        if (wipMatch) {
+        if (wipMatch && wipMatchId) {
           setWipList(prev => prev.filter(w =>
-            w.id !== wipMatch.id &&
+            wipEmailId(w) !== wipMatchId &&
             !(selected.conversationId && w.conversationId && w.conversationId === selected.conversationId)
           ));
-          vmm.resolveWip(wipMatch.id)
+          vmm.resolveWip(wipMatchId)
             .then(res => { if (!res?.success) showToast('WIP may reappear on reload — dismiss it manually if needed', 'warn'); })
             .catch(() => { showToast('WIP may reappear on reload — dismiss it manually if needed', 'warn'); });
         }
@@ -1745,8 +2094,9 @@ export default function EmailComplaints() {
         });
         setSelected(null); setParsed(null); setReplyBody('');
       }
-    } catch {
-      showToast('Could not log complaint — server error', 'err');
+    } catch (err) {
+      console.error('Log complaint failed:', err);
+      showToast(`Could not log complaint — ${err?.message || 'server error'}`, 'err');
     } finally { setLogging(false); }
   };
 
@@ -1804,11 +2154,36 @@ export default function EmailComplaints() {
 
   const itemErrors = complaintItems.map(getItemErrors);
   const storeOk    = !!(parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode);
-  const employeeOk = !parsed?.employeeCode || empLookupStatus === 'found';
-  const canLog     = !!parsed && storeOk && employeeOk && complaintItems.length > 0
+  // SQL logging requires a real employee record. An email with no employee code
+  // (or a code that fails lookup) must go through Ask for Missing Info, not
+  // create a partial case and then fail at the API with "Employee or store not found".
+  const employeeCode = String(parsedEdits.employeeCode || parsed?.employeeCode || '').trim();
+  const employeeOk   = !!employeeCode && empLookupStatus === 'found';
+  const canLog       = !!parsed && storeOk && employeeOk && complaintItems.length > 0
     && itemErrors.every(errs => Object.keys(errs).length === 0);
   const activeItem = complaintItems.find(x => x.id === activeComplaintId) || complaintItems[0] || null;
   const activeStoreCode = parsedEdits.storeCode || parsed?.storeCode || selected?.storeCode || '';
+  // Keep the store master record available for the escalation preview. This is
+  // the authoritative source for the store email / FM email, not the email body.
+  useEffect(() => {
+    if (!activeStoreCode) { setStoreDetails({}); return; }
+    let alive = true;
+    vmm.lookupStore(activeStoreCode)
+      .then(r => { if (alive) setStoreDetails(r?.store || {}); })
+      .catch(() => { if (alive) setStoreDetails({}); });
+    return () => { alive = false; };
+  }, [activeStoreCode]);
+  // Teams preview is available only when a private webhook has been configured.
+  useEffect(() => {
+    if (!DEMO_MODE) return;
+    let alive = true;
+    vmm.teamsStatus()
+      .then(r => { if (alive) setTeamsReady(!!r?.configured); })
+      .catch(() => { if (alive) setTeamsReady(false); });
+    return () => { alive = false; };
+  }, []);
+  const activeStoreEmail = String(storeDetails.email || storeDetails.storeemail || '').trim();
+  const activeClientEmail = String(selected?.fromAddr || parsedEdits.employeeEmail || parsed?.employeeEmail || activeStoreEmail || '').trim();
   const activeAmcVendor = activeItem
     ? resolveStoreAmcVendor(amcRows, activeStoreCode, activeItem.productName, activeItem.vendorName)
     : null;
@@ -1825,8 +2200,44 @@ export default function EmailComplaints() {
 
   const attemptLog = () => {
     setShowValidation(true);
-    if (canLog) setConfirmModal(true);
-    else showToast('Complete the highlighted fields before logging', 'err');
+    if (canLog) { setConfirmModal(true); return; }
+    if (!employeeOk)
+      showToast('Employee Code is missing or not found — enter a valid code or ask for missing info before logging', 'err');
+    else
+      showToast('Complete the highlighted fields before logging', 'err');
+  };
+
+  // Post the escalation email as a Teams Adaptive Card instead of sending mail.
+  // Uses the same recipient resolution as the real escalation.
+  const sendTeamsPreview = async () => {
+    try {
+      const code = activeStoreCode || 'HO01';
+      const store = (await vmm.lookupStore(code).catch(() => null))?.store || storeDetails || {};
+      const product = activeItem?.productName || 'AC';
+      const amc = resolveStoreAmcVendor(amcRows, code, product, activeItem?.vendorName || '');
+      await vmm.previewEscalationInTeams({
+        storeCode: code,
+        storeName: store.name || store.storename || 'CUTTACK',
+        storeEmail: store.email || store.storeemail || '',
+        fmName: store.fmName || store.fmname || '',
+        fmEmail: store.fmEmail || store.fmemail || '',
+        clientEmail: activeClientEmail || 'intern@openmind.in',
+        clientName: selected?.fromName || 'Client',
+        vendorName: amc?.name || 'INDIAN AIR COOLING SYSTEM',
+        productName: product,
+        natureOfComplaint: activeItem?.natureOfProblem || 'Not Maintaining  Proper Temperature',
+        complaints: [{
+          complaintno: activeItem?.complaintNo || '2611266081',
+          productLocation: activeItem?.productLocation || store.name || 'CUTTACK',
+          edcDate: activeItem?.edcDate || '28 Nov 2026',
+          description: activeItem?.description || 'DEMO test - for testing purpose only',
+        }],
+        manualVendorEmail: activeManualVendorEmails || amc?.email || 'indianaircoolingsystem2017@rediffmail.com',
+      });
+      showToast('Escalation preview posted to Teams — no email sent');
+    } catch (err) {
+      showToast(`Teams preview failed — ${err?.message || 'unknown error'}`, 'err');
+    }
   };
 
   const handleTemplateChange = (newId) => {
@@ -1892,6 +2303,7 @@ export default function EmailComplaints() {
                 );
                 const { toAddresses, ccAddresses } = vmm.resolveEscalationRecipients({
                   storeCode: resendData.storecode, storeEmail: resendData.storeemail, storeName: resendData.storename,
+                  clientEmail: resendData.storeemail || '', clientName: resendData.storename || '',
                   fmEmail: resendData.fmemail, fmName: resendData.fmname,
                   vendorName: resendData.vendorname, productName: resendData.productname,
                   storeState: resendData.statename, storeCity: resendData.storecity,
@@ -2170,6 +2582,40 @@ export default function EmailComplaints() {
               )}
             </button>
           </div>
+          <div className="ec-auto-control">
+            <button
+              className={`ec-auto-btn ${autoCaseCreation ? 'on' : 'off'}`}
+              onClick={() => autoCaseCreation ? setAutoCaseMode(false) : setAutoConfirmOpen(true)}
+              title={autoCaseCreation
+                ? 'ON — new inbox emails are logged automatically. Click to turn off.'
+                : 'OFF — new inbox emails stay for manual review. Click to turn on.'}
+            >
+              <span className="ec-auto-dot" />
+              Auto log: {autoCaseCreation ? 'ON' : 'OFF'}
+            </button>
+            {autoConfirmOpen && (
+              <div className="ec-auto-confirm" role="alertdialog">
+                <div className="ec-auto-confirm-text">
+                  <strong>Turn on automatic case logging?</strong>
+                  <span>New inbox emails will be parsed and logged without manual review. In live mode this can also send emails.</span>
+                </div>
+                <div className="ec-auto-confirm-actions">
+                  <button className="ec-auto-confirm-cancel" onClick={() => setAutoConfirmOpen(false)}>Cancel</button>
+                  <button className="ec-auto-confirm-ok" onClick={() => setAutoCaseMode(true)}>Turn on</button>
+                </div>
+              </div>
+            )}
+          </div>
+          {DEMO_MODE && teamsReady && (
+            <button
+              className="ec-refresh-btn"
+              style={{ marginRight: 6 }}
+              onClick={sendTeamsPreview}
+              title="Post the escalation email as a Teams preview card — nothing is emailed"
+            >
+              ⇧ Teams Test
+            </button>
+          )}
           <button
             className="ec-refresh-btn"
             style={{ marginRight: 6 }}
@@ -2316,7 +2762,7 @@ export default function EmailComplaints() {
 
             {/* ── ESCALATION MATRIX TAB: contact list with multi-select ── */}
             {activeTab === 'matrix' && (() => {
-              const first = complaintItems[0];
+              const first = activeItem;
               const selectedEmailSet = new Set((first?.vendorEmail || '').split(',').map(e => e.trim()).filter(Boolean));
               if (emLoading) return <div className="ec-empty">Loading escalation matrix…</div>;
               const rows = escalationMatrix.filter(c =>
@@ -2363,13 +2809,15 @@ export default function EmailComplaints() {
                   <div className="ec-empty">No WIP cases — all caught up!</div>
                 )}
                 {wipList.map(w => {
-                  const replyCount = wipReplyCounts[w.id] || 0;
+                  const wipId = wipEmailId(w);
+                  const replyCount = wipReplyCounts[wipId] || 0;
                   return (
-                    <div key={w.id} className={`ec-email-row wip ${selected?.id === w.id ? 'active' : ''} ${replyCount > 0 ? 'has-reply' : ''}`}
-                      onClick={() => selectEmail({ ...w, body: '' })}>
+                    <div key={wipId} className={`ec-email-row wip ${selected?.id === wipId ? 'active' : ''} ${replyCount > 0 ? 'has-reply' : ''}`}
+                      onClick={() => selectEmail({ ...w, id: w.id || wipId, body: '' })}>
                       <div className="ec-email-store">
                         {w.storeCode ? <span className="ec-store-code">{w.storeCode}</span> : <span className="ec-unknown">?</span>}
                         <span className="ec-wip-tag">WIP</span>
+                        {w.status === 'Awaiting Info' && <span className="ec-awaiting-info-tag">Awaiting Info</span>}
                         {w.savedBy && <span className="ec-wip-agent-tag">{w.savedBy}</span>}
                         {replyCount > 0 && <span className="ec-wip-reply-count">↩ {replyCount} {replyCount === 1 ? 'reply' : 'replies'}</span>}
                         <span className="ec-email-time">{fmtTime(w.repliedAt)}</span>
@@ -2378,9 +2826,9 @@ export default function EmailComplaints() {
                           onClick={e => {
                             e.stopPropagation();
                             if (!window.confirm(`Dismiss WIP for "${w.subject}"?\n\nOnly confirm if this case is no longer pending.`)) return;
-                            setWipList(prev => prev.filter(x => x.id !== w.id));
-                            vmm.resolveWip(w.id).catch(() => {});
-                            if (selected?.id === w.id) { setSelected(null); setParsed(null); }
+                            setWipList(prev => prev.filter(x => wipEmailId(x) !== wipId));
+                            vmm.resolveWip(wipId).catch(() => {});
+                            if (selected?.id === wipId) { setSelected(null); setParsed(null); }
                             showToast('WIP dismissed', 'info');
                           }}>×</button>
                       </div>
@@ -2431,9 +2879,7 @@ export default function EmailComplaints() {
               const claim          = activeClaims[e.id];
               const claimedByOther = claim && claim.agentId !== agentId;
               const tag            = emailTags[e.id] || inferTagFromCategories(e.categories);
-              const wipReplyFor    = wipList.find(w =>
-                w.conversationId && e.conversationId && w.conversationId === e.conversationId
-              );
+              const wipReplyFor    = findWipForEmail(wipList, e);
               return (
                 <div key={e.id} className={`ec-email-row ${selected?.id === e.id ? 'active' : ''} ${!e.hasStoreCode ? 'no-store' : ''} ${claimedByOther ? 'claimed' : ''} ${tag ? `tagged-${tag.type}` : ''} ${wipReplyFor ? 'wip-reply' : ''}`}
                   onClick={() => selectEmail(e)}>
@@ -2645,12 +3091,9 @@ export default function EmailComplaints() {
 
               {/* ── Action Buttons ── */}
               {(() => {
-                const wipMatch = wipList.find(w =>
-                  w.id === selected.id ||
-                  (selected.conversationId && w.conversationId && selected.conversationId === w.conversationId) ||
-                  w.subject === selected.subject ||
-                  (selected.complaintId && w.subject?.includes(selected.complaintId))
-                );
+                const wipMatch = findWipForEmail(wipList, selected)
+                  || wipList.find(w => selected.complaintId && w.subject?.includes(selected.complaintId))
+                  || null;
                 const detectedId = selected.complaintId || (wipMatch?.complaintNo) || '';
 
                 return (
@@ -2690,7 +3133,6 @@ export default function EmailComplaints() {
                           if (next === 'update-case') {
                             const from = selected?.fromDisplay || selected?.fromAddr || '';
                             const to   = selected?.toDisplay   || '';
-                            const OWN_ADDR = 'vmm.helpdesk@openmind.in';
                             const latestInbound = [...threadMessages]
                               .sort((a, b) => new Date(b.receivedDateTime) - new Date(a.receivedDateTime))
                               .find(m => (m.from || '').toLowerCase() !== OWN_ADDR);
@@ -3411,7 +3853,7 @@ export default function EmailComplaints() {
                           setEmTab(key);
                           if (key === 'matrix' && !escalationMatrix.length && !emLoading) {
                             setEmLoading(true);
-                            vmm.getEscalationMatrix().then(r => setEscalationMatrix(r.contacts || [])).catch(() => {}).finally(() => setEmLoading(false));
+                            vmm.getEscalationMatrix().then(r => setEscalationMatrix(r.contacts || r.matrix || [])).catch(() => {}).finally(() => setEmLoading(false));
                           }
                         }}
                         style={{
@@ -3623,15 +4065,19 @@ export default function EmailComplaints() {
                               <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>CC <span style={{ color: '#9ca3af', fontWeight: 400 }}>(auto)</span></div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                 {[
-                                  ['SM', '#dbeafe', '#1d4ed8', 'Store Manager (auto)'],
-                                  ['FM', '#dcfce7', '#166534', 'Facility Manager (auto)'],
-                                  ['HO', '#fef3c7', '#92400e', getItemHoEmail(activeItem.productName)],
-                                ].map(([tag, bg, fg, txt]) => (
+                                  ['SM', '#dbeafe', '#1d4ed8', 'Store Manager (auto)', false],
+                                  ['FM', '#dcfce7', '#166534', 'Facility Manager (auto)', false],
+                                  ['HO', '#fef3c7', '#92400e', getItemHoEmail(activeItem.productName), false],
+                                  ['STORE', '#fce7f3', '#9d174d', activeStoreEmail ? `Store (auto) — ${activeStoreEmail}` : '', true],
+                                  ['CLIENT', '#e0e7ff', '#3730a3', activeClientEmail ? `Client (auto) — ${activeClientEmail}` : '', true],
+                                ].map(([tag, bg, fg, txt, fixed]) => (
                                   !(activeItem.removedAutoCC || []).includes(tag) && txt && (
                                     <div key={tag} style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
                                       <span style={{ background: bg, color: fg, borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>{tag}</span>
                                       {txt}
-                                      <button onClick={() => updateActiveItem({ removedAutoCC: [...(activeItem.removedAutoCC || []), tag] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title={`Remove ${tag}`}>✕</button>
+                                      {!fixed && (
+                                        <button onClick={() => updateActiveItem({ removedAutoCC: [...(activeItem.removedAutoCC || []), tag] })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13, lineHeight: 1 }} title={`Remove ${tag}`}>✕</button>
+                                      )}
                                     </div>
                                   )
                                 ))}
@@ -3720,10 +4166,10 @@ export default function EmailComplaints() {
                         </select>
                       </div>
 
-                      {complaintItems[0]?.vendorEmail && (
+                      {activeItem?.vendorEmail && (
                         <div style={{ marginBottom: 8, fontSize: 11, color: '#16a34a', background: '#dcfce7', borderRadius: 6, padding: '6px 10px', fontWeight: 600 }}>
-                          ✓ TO ({complaintItems[0].vendorEmail.split(',').map(e => e.trim()).filter(Boolean).length}): {complaintItems[0].vendorEmail}
-                          <button onClick={() => updateItem(complaintItems[0].id, { vendorEmail: '' })} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>× Clear all</button>
+                          ✓ TO ({activeItem.vendorEmail.split(',').map(e => e.trim()).filter(Boolean).length}): {activeItem.vendorEmail}
+                          <button onClick={() => updateItem(activeItem.id, { vendorEmail: '' })} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>× Clear all</button>
                         </div>
                       )}
 
@@ -3761,10 +4207,10 @@ export default function EmailComplaints() {
                                     <td style={{ padding: '7px 10px', color: '#0369a1', wordBreak: 'break-all' }}>{c.email || '—'}</td>
                                     <td style={{ padding: '7px 10px' }}>
                                       {c.email && (() => {
-                                        const isAdded = (complaintItems[0]?.vendorEmail || '').split(',').map(e => e.trim()).includes(c.email);
+                                        const isAdded = (activeItem?.vendorEmail || '').split(',').map(e => e.trim()).includes(c.email);
                                         return (
                                           <button
-                                            onClick={() => complaintItems[0] && toggleVendorEmail(complaintItems[0].id, c.email)}
+                                            onClick={() => activeItem && toggleVendorEmail(activeItem.id, c.email)}
                                             style={{ padding: '3px 10px', fontSize: 11, background: isAdded ? '#dcfce7' : '#4f46e5', color: isAdded ? '#16a34a' : '#fff', border: `1px solid ${isAdded ? '#86efac' : '#4f46e5'}`, borderRadius: 5, cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}
                                           >{isAdded ? '✓ Added' : 'Add →'}</button>
                                         );

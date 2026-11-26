@@ -62,6 +62,7 @@ export default function CaseLoggingForm() {
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState('');
+  const [escalationErr, setEscalationErr] = useState('');
   const [result, setResult]       = useState(null);
   const [noImage,   setNoImage]   = useState(false);
   const [quantity,  setQuantity]  = useState(1);
@@ -439,6 +440,8 @@ export default function CaseLoggingForm() {
         storeCode:  form.storeCode,
         storeEmail: form.storeEmail,
         storeName:  form.storeName,
+        clientEmail: form.smEmail || form.storeEmail || '',
+        clientName:  form.employeeName  || form.storeName  || '',
         fmEmail:    form.fmEmail,
         fmName:     form.fmName,
         vendorName: form.vendorName,
@@ -460,6 +463,7 @@ export default function CaseLoggingForm() {
   const doSubmit = async () => {
     setShowConfirm(false);
     setSubmitErr('');
+    setEscalationErr('');
     setSubmitting(true);
     const payload = {
       storeCode:         form.storeCode,
@@ -534,6 +538,8 @@ export default function CaseLoggingForm() {
           storeCode:        form.storeCode,
           storeName:        form.storeName,
           storeEmail:       form.storeEmail       || '',
+          clientEmail:      form.smEmail || form.storeEmail || '',
+          clientName:       form.employeeName  || form.storeName  || '',
           fmName:           form.fmName           || '',
           fmEmail:          form.fmEmail          || '',
           vendorName:       form.vendorName        || '',
@@ -554,7 +560,10 @@ export default function CaseLoggingForm() {
           })),
           extraToEmails: extraTo.split(/[;,]/).map(s => s.trim()).filter(Boolean),
           extraCcEmails: extraCc.split(/[;,]/).map(s => s.trim()).filter(Boolean),
-        }).catch(() => {});
+        }).catch(err => {
+          console.error('Escalation email failed:', err);
+          setEscalationErr(err?.message || 'Escalation email could not be sent');
+        });
         setResults(allResults);
         setResult(allResults[0]);
         setSubmitted(true);
@@ -575,6 +584,7 @@ export default function CaseLoggingForm() {
     setResult(null);
     setResults([]);
     setSubmitErr('');
+    setEscalationErr('');
     setNoImage(false);
     setQuantity(1);
     setWarrantyQty(0);
@@ -642,11 +652,17 @@ export default function CaseLoggingForm() {
             <div><span>TAT</span><strong>{form.tatDays} day{form.tatDays > 1 ? 's' : ''}</strong></div>
             <div><span>Expected Closure</span><strong>{result.edcDate || (edc ? formatDate(edc) : '-')}</strong></div>
           </div>
-          <p className="escalation-note">
-            {results.length > 1
-              ? `1 escalation email sent with all ${results.length} units.`
-              : 'Escalation email has been triggered automatically.'}
-          </p>
+          {escalationErr ? (
+            <div className="alert-banner" style={{ marginBottom: 8 }}>
+              ⚠ Cases logged, but the escalation email failed: {escalationErr}. Use Resend Escalation from the Email Inbox.
+            </div>
+          ) : (
+            <p className="escalation-note">
+              {results.length > 1
+                ? `1 escalation email sent with all ${results.length} units.`
+                : 'Escalation email has been triggered automatically.'}
+            </p>
+          )}
           <button className="btn-primary" onClick={handleReset}>Log New Case</button>
         </div>
       </div>
